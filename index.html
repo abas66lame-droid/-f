@@ -4962,7 +4962,12 @@ async function renderHallMissingList(){
           if (missing === 0){ el.style.cssText += 'background:#17402a; color:#3ecf6b;'; el.textContent = '✅ مكتمل'; }
           else el.textContent = missing + ' ناقص';
         }
-      }catch(e){}
+      }catch(e){
+        /* لا نترك الشارة عالقة على "…" للأبد — نظهر الخطأ بدل الإيحاء بأنه لا يزال يُحسَب */
+        const el = document.getElementById('hmb_' + dept.id);
+        if (el){ el.style.opacity = '1'; el.style.cssText += 'background:#4a2020; color:#ff9a9a;'; el.textContent = '⚠️ تعذّر الحساب'; }
+        try{ console.error('hall dept badge failed:', dept?.name, dept?.id, e); }catch(e2){}
+      }
     }
   }, 0);
   const refreshBtn = '<button class="secondary" onclick="loadHallMissing()" style="width:100%;margin-bottom:12px;font-size:13px;padding:11px;color:#38d9b9;border-color:rgba(56,217,185,0.45);">🔄 تحديث</button>';
@@ -5536,7 +5541,12 @@ async function renderHallAuditList(){
         el.style.opacity = '1';
         el.style.cssText += audit.isComplete ? 'background:#17402a; color:#3ecf6b;' : '';
         el.textContent = (audit.isComplete ? '✅ ' : '') + audit.verified + '/' + audit.total;
-      }catch(e){}
+      }catch(e){
+        /* لا نترك الشارة عالقة على "…" للأبد — نظهر الخطأ بدل الإيحاء بأنه لا يزال يُحسَب */
+        const el = document.getElementById('hab_' + dept.id);
+        if (el){ el.style.opacity = '1'; el.style.cssText += 'background:#4a2020; color:#ff9a9a;'; el.textContent = '⚠️ تعذّر الحساب'; }
+        try{ console.error('hall dept badge failed:', dept?.name, dept?.id, e); }catch(e2){}
+      }
     }
   }, 0);
 
@@ -10773,7 +10783,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.08.19.2";
+const APP_VERSION = "2026.08.19.3";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
