@@ -5532,23 +5532,30 @@ async function renderHallAuditList(){
         </div>
       </div>`;
   }
-  setTimeout(async () => {
-    for (const dept of d.depts){
-      try{
-        const audit = await computeHallAuditCompletionForDept(dept, d);
-        const el = document.getElementById('hab_' + dept.id);
-        if (!el) continue;
-        el.style.opacity = '1';
-        el.style.cssText += audit.isComplete ? 'background:#17402a; color:#3ecf6b;' : '';
-        el.textContent = (audit.isComplete ? '✅ ' : '') + audit.verified + '/' + audit.total;
-      }catch(e){
-        /* لا نترك الشارة عالقة على "…" للأبد — نظهر الخطأ بدل الإيحاء بأنه لا يزال يُحسَب */
-        const el = document.getElementById('hab_' + dept.id);
-        if (el){ el.style.opacity = '1'; el.style.cssText += 'background:#4a2020; color:#ff9a9a;'; el.textContent = '⚠️ تعذّر الحساب'; }
-        try{ console.error('hall dept badge failed:', dept?.name, dept?.id, e); }catch(e2){}
+  /* ⚠️ سبب جذري وُجد هنا: كنا نجدول حلقة الشارات بـ setTimeout قبل أن يُكتب cardsHtml
+     فعلياً في الـ DOM (ذلك يحصل لاحقاً بعد await neoComputeHallTotal() بالأسفل). فمهما
+     طالت مهلة setTimeout، عنصر hab_X ما يكون موجوداً بعد فتفشل getElementById صامتاً
+     (if (!el) continue) ولا تُعاد المحاولة أبداً — فتبقى الشارة عالقة على "…" للأبد.
+     الحل: لا نُجدول الحلقة إلا بعد أن تُكتب البطاقات فعلياً بالصفحة، بالأسفل. */
+  function scheduleHallAuditBadges(){
+    setTimeout(async () => {
+      for (const dept of d.depts){
+        try{
+          const audit = await computeHallAuditCompletionForDept(dept, d);
+          const el = document.getElementById('hab_' + dept.id);
+          if (!el) continue;
+          el.style.opacity = '1';
+          el.style.cssText += audit.isComplete ? 'background:#17402a; color:#3ecf6b;' : '';
+          el.textContent = (audit.isComplete ? '✅ ' : '') + audit.verified + '/' + audit.total;
+        }catch(e){
+          /* لا نترك الشارة عالقة على "…" للأبد — نظهر الخطأ بدل الإيحاء بأنه لا يزال يُحسَب */
+          const el = document.getElementById('hab_' + dept.id);
+          if (el){ el.style.opacity = '1'; el.style.cssText += 'background:#4a2020; color:#ff9a9a;'; el.textContent = '⚠️ تعذّر الحساب'; }
+          try{ console.error('hall dept badge failed:', dept?.name, dept?.id, e); }catch(e2){}
+        }
       }
-    }
-  }, 0);
+    }, 0);
+  }
 
   const refreshBtn = '<button class="secondary" onclick="loadHallAudit()" style="width:100%;margin-bottom:12px;font-size:13px;padding:11px;color:#38d9b9;border-color:rgba(56,217,185,0.45);">🔄 تحديث النسب</button>';
 
@@ -5587,6 +5594,7 @@ async function renderHallAuditList(){
 
   wrap.innerHTML = (typeof hallDateBar === 'function' ? hallDateBar() : '') + myBox + refreshBtn
     + (cardsHtml || '<div class="card">لا توجد أقسام مسجلة</div>');
+  if (d.depts.length) scheduleHallAuditBadges();
 }
 
 let hallAuditCurrentDeptId = null;
@@ -10783,7 +10791,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.08.19.3";
+const APP_VERSION = "2026.08.19.4";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
