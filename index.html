@@ -900,7 +900,7 @@ button{
   background:linear-gradient(180deg, rgba(56,217,185,0.13), rgba(56,217,185,0.05)) !important;
   text-shadow:0 0 6px rgba(56,217,185,0.35) !important;
   box-shadow:0 2px 10px rgba(0,0,0,0.3), 0 0 10px rgba(56,217,185,0.12) !important;
-  transition:box-shadow .15s, background .15s !important;
+  transition:box-shadow .15s, background .15s, transform .1s !important;
   animation:breath 3s ease-in-out infinite;
 }
 button::before{ content:''; position:absolute; inset:0 60% 0 0; pointer-events:none;
@@ -908,7 +908,7 @@ button::before{ content:''; position:absolute; inset:0 60% 0 0; pointer-events:n
   animation:sweep 3.8s ease-in-out infinite; }
 button:hover{ background:linear-gradient(180deg, rgba(56,217,185,0.2), rgba(56,217,185,0.08)) !important;
   box-shadow:0 0 16px rgba(56,217,185,0.3) !important; }
-button:active{ filter:brightness(1.15); }
+button:active{ filter:brightness(1.15); transform:scale(0.96); }
 button.secondary{
   color:#c3d4f2 !important; border-color:rgba(122,167,255,0.45) !important;
   background:linear-gradient(180deg, rgba(122,167,255,0.1), rgba(122,167,255,0.03)) !important;
@@ -3390,7 +3390,8 @@ function neoRefreshShiftPctBox(deptId, date){
         document.getElementById('neoSaveBar')?.remove();
       }
     }catch(e){}
-    el.textContent = r.pct + '٪';
+    /* عدّ تصاعدي بدل قفزة جافة للرقم — لمسة فقط، الحساب والحفظ لم يتغيّرا */
+    try{ neoCountUp(el, r.pct, '٪', 450); }catch(e){ el.textContent = r.pct + '٪'; }
     el.style.color = r.pct >= 90 ? '#38d9b9' : r.pct >= 60 ? '#d3a04f' : '#e15b64';
     const sv = document.getElementById('shiftPctSaved');
     if (sv){
@@ -3656,6 +3657,32 @@ function neoSlide(f1, f2, dur, vol, delay){
 function neoBuzz(ms){ try{ if (navigator.vibrate) navigator.vibrate(ms); }catch(e){} }
 
 /* ══ مكتبة الأصوات ══ */
+/* ── عدّ تصاعدي للأرقام — إضافة صرفة، لا تُستدعى إلا حيث نطلبها صراحة ──
+   تحوّل ظهور نسبة من قفزة جافة إلى حركة سلسة، بدون أي تأثير على منطق الحساب.
+   استخدام اختياري: neoCountUp(el, targetValue, suffix) بدل el.textContent = targetValue+'%'. */
+window.neoCountUp = function(el, target, suffix, ms){
+  if (!el) return;
+  try{
+    var from = parseInt(String(el.textContent||'0').replace(/[^\d-]/g,''), 10);
+    if (isNaN(from)) from = 0;
+    target = Number(target) || 0;
+    suffix = suffix || '';
+    var dur = ms || 650;
+    var t0 = null;
+    if (el.__countRaf) cancelAnimationFrame(el.__countRaf);
+    function step(ts){
+      if (!t0) t0 = ts;
+      var p = Math.min(1, (ts - t0) / dur);
+      var eased = 1 - Math.pow(1 - p, 3);   /* تباطؤ طبيعي قرب النهاية */
+      var v = Math.round(from + (target - from) * eased);
+      el.textContent = v + suffix;
+      if (p < 1) el.__countRaf = requestAnimationFrame(step);
+      else { el.textContent = target + suffix; el.__countRaf = null; }
+    }
+    el.__countRaf = requestAnimationFrame(step);
+  }catch(e){ el.textContent = target + (suffix||''); }
+};
+
 const NEO_SFX = {
   /* ✓ نقرة صاعدة مشرقة */
   ok(){ neoTone(880, 0.07, 'sine', 0.13); neoTone(1320, 0.10, 'sine', 0.10, 0.045); neoBuzz(12); },
@@ -3703,7 +3730,24 @@ const NEO_SFX = {
   copy(){ neoTone(1000, 0.05, 'sine', 0.08); neoTone(1400, 0.06, 'sine', 0.07, 0.04); }
 };
 
+/* أنماط اهتزاز — مستقلة عن مفتاح الصوت عمداً، لأن اللمس الحسي شعور مختلف عن السمع.
+   مربوطة بنفس أحداث neoPlay الموجودة أصلاً، فتعمل بكل مكان يُستخدم فيه صوت
+   بدون أي تعديل إضافي بأي شاشة. */
+const NEO_HAPTIC = {
+  tab:[8], drill:[8], sent:[10,30,10], copy:[6],
+  done:[12,40,12], up:[12,40,12], report:[8],
+  err:[18,60,18], down:[18,60,18]
+};
+function neoBuzz(name){
+  try{
+    if (!('vibrate' in navigator)) return;
+    const pat = NEO_HAPTIC[name];
+    if (pat) navigator.vibrate(pat);
+  }catch(e){}
+}
+
 function neoPlay(name){
+  neoBuzz(name);
   if (!neoSoundOn()) return;
   try{ const f = NEO_SFX[name]; if (f) f(); }catch(e){}
 }
@@ -3743,7 +3787,7 @@ async function renderShiftView(profile){
   try{ await neoLoadSavedStats(date); }catch(e){}
   el.innerHTML = `
     <div class="card">
-      <h2>📋 ${deptName} — ${date} <span style="font-size:10px;color:#38d9b9;opacity:0.8;">v164</span></h2>
+      <h2>📋 ${deptName} — ${date} <span style="font-size:10px;color:#38d9b9;opacity:0.8;">v169</span></h2>
       <div style="color:#999; font-size:11px; margin-bottom:8px;">اضغط الخانة للتبديل: فارغ ← ✓ ← ✗ . عند ✗ لازم تكتب ملاحظة، وما يظهر الصف التالي إلا بعد إكمال الصف الحالي.</div>
       <div id="shiftPctBox" style="background:#0c1524;border:1px solid rgba(56,217,185,0.3);border-radius:10px;padding:11px;margin-bottom:10px;">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
@@ -5967,7 +6011,9 @@ async function neoComputeHallTotal(){
     const uid = (await supabaseClient.auth.getUser()).data.user.id;
     const d = (typeof hallDate === 'function') ? hallDate() : todayStr();
     const { data: dps } = await supabaseClient.from('departments').select('id,name');
-    const r = await computeHallAuditProgressForUser(uid, dps||[], d, true);
+    let depts = dps || [];
+    try{ if (typeof neoHallFilter === 'function') depts = await neoHallFilter(depts); }catch(e){}
+    const r = await computeHallAuditProgressForUser(uid, depts, d, true);
     return { pct: (r && r.pct !== null) ? r.pct : 0, total: (r&&r.total)||0, verified: (r&&r.verified)||0 };
   }catch(e){ return { pct:0, total:0, verified:0 }; }
 }
@@ -6280,6 +6326,7 @@ window.neoBillingMonth = neoBillingMonth;
 
 let trendDept = 'all';
 let trendMode = 'dept';   /* dept | hall */
+/* لا حاجة لمتغيّر تبديل — الجدول الحراري يظهر دائماً في وضع الأقسام */
 
 async function renderSalesTrend(){
   mountSalesShell('trend', '<div class="card"><div class="neoLoadBox">جاري بناء الاتجاه…<div class="neoBarLoad"></div></div></div>');
@@ -6322,6 +6369,21 @@ async function renderSalesTrend(){
         (trendDept === 'all' || String(r.department_id) === String(trendDept)));
       return sel.length ? Math.round(sel.reduce((s,r)=>s+r.pct,0) / sel.length) : null;
     });
+
+    /* سلسلة كل قسم لوضع التراكب — من نفس rows المحمّلة أصلاً، بلا أي استعلام إضافي */
+    let deptSeries = [];
+    if (trendMode === 'dept'){
+      const palette = (n) => { const h = Math.round((n * 137.508) % 360); return `hsl(${h},70%,58%)`; };
+      deptSeries = depts.map((dep, idx) => {
+        const s = days.map(day => {
+          const sel = rows.filter(r => r.log_date === day && String(r.department_id) === String(dep.id));
+          return sel.length ? Math.round(sel.reduce((a,r)=>a+r.pct,0) / sel.length) : null;
+        });
+        const vv = s.filter(v => v !== null);
+        const dAvg = vv.length ? Math.round(vv.reduce((a,b)=>a+b,0)/vv.length) : null;
+        return { id: dep.id, name: dep.name, color: palette(idx), series: s, avg: dAvg };
+      }).filter(d => d.avg !== null).sort((a,b) => b.avg - a.avg);
+    }
 
     const vals = series.filter(v => v !== null);
     const avg = vals.length ? Math.round(vals.reduce((a,b)=>a+b,0)/vals.length) : 0;
@@ -6379,6 +6441,69 @@ async function renderSalesTrend(){
         </select>
       </div>
 
+      ${trendMode==='dept' && deptSeries.length ? (function(){
+        /* إحصاءات الشهر: أضعف/أفضل يوم من متوسط كل الأقسام يومياً، وأفضل/أضعف قسم من deptSeries */
+        const dayAvg = days.map((day,i) => {
+          const vv = deptSeries.map(d => d.series[i]).filter(v => v !== null);
+          return vv.length ? Math.round(vv.reduce((a,b)=>a+b,0)/vv.length) : null;
+        });
+        let worstDay = null, bestDay = null;
+        dayAvg.forEach((v,i) => {
+          if (v === null) return;
+          if (!worstDay || v < worstDay.v) worstDay = { v, day: days[i] };
+          if (!bestDay  || v > bestDay.v)  bestDay  = { v, day: days[i] };
+        });
+        const bestDept = deptSeries[0], worstDept = deptSeries[deptSeries.length-1];
+        const monthAvg = dayAvg.filter(v=>v!==null);
+        const mAvg = monthAvg.length ? Math.round(monthAvg.reduce((a,b)=>a+b,0)/monthAvg.length) : 0;
+        const dLabel = ds => ds ? (new Date(ds+'T12:00:00')).getDate() : '—';
+        const bucket = v => v>=90?'#3ecf6b':v>=80?'#c9d34f':v>=70?'#e0993d':v>=60?'#e0653d':'#7487a0';
+
+        return `
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <h3 style="margin:0;">🗓 لوحة الأقسام — دورة ${cycle.label}</h3>
+          <button onclick="exportTrendOverlay()" class="secondary" style="font-size:11px;padding:8px 12px;color:#38d9b9;border-color:rgba(56,217,185,0.4);">⬇️ تصدير</button>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:7px;margin-bottom:12px;">
+          <div style="background:rgba(225,91,100,0.10);border-radius:9px;padding:9px;text-align:center;">
+            <div style="color:#7487a0;font-size:10px;">أضعف يوم</div>
+            <div style="color:#e8a0a4;font-size:16px;font-weight:800;">${worstDay?dLabel(worstDay.day):'—'} — ${worstDay?worstDay.v:0}٪</div></div>
+          <div style="background:rgba(56,217,185,0.10);border-radius:9px;padding:9px;text-align:center;">
+            <div style="color:#7487a0;font-size:10px;">أفضل يوم</div>
+            <div style="color:#38d9b9;font-size:16px;font-weight:800;">${bestDay?dLabel(bestDay.day):'—'} — ${bestDay?bestDay.v:0}٪</div></div>
+          <div style="background:rgba(225,91,100,0.10);border-radius:9px;padding:9px;text-align:center;">
+            <div style="color:#7487a0;font-size:10px;">أضعف قسم</div>
+            <div style="color:#e8a0a4;font-size:14px;font-weight:800;">${worstDept.name} — ${worstDept.avg}٪</div></div>
+          <div style="background:rgba(240,179,35,0.10);border-radius:9px;padding:9px;text-align:center;">
+            <div style="color:#7487a0;font-size:10px;">أفضل قسم</div>
+            <div style="color:#f0b323;font-size:14px;font-weight:800;">${bestDept.name} — ${bestDept.avg}٪</div></div>
+        </div>
+        <div style="text-align:center;color:#8fa3b8;font-size:11px;margin-bottom:10px;">متوسط الدورة: <b style="color:#c8d4e2;">${mAvg}٪</b></div>
+
+        <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:9px;background:#0a121e;">
+          <table style="border-collapse:collapse;font-size:10px;width:max-content;min-width:100%;">
+            <tr>
+              <th style="position:sticky;inset-inline-end:0;background:#0a121e;color:#8fa3b8;padding:6px 10px;text-align:start;z-index:1;">القسم</th>
+              ${days.map(day => `<th style="color:#5d6d80;padding:5px 3px;min-width:26px;font-weight:600;">${dLabel(day)}</th>`).join('')}
+            </tr>
+            ${deptSeries.map(d => `
+            <tr onclick="trendDept='${d.id}'; renderSalesTrend();" style="cursor:pointer;">
+              <td style="position:sticky;inset-inline-end:0;background:#0a121e;color:#c8d4e2;padding:6px 10px;white-space:nowrap;
+                border-inline-end:2px solid ${d.color};">${d.name}</td>
+              ${d.series.map(v => v===null
+                ? `<td style="background:rgba(122,167,255,0.05);color:#3a4757;text-align:center;padding:5px 2px;">·</td>`
+                : `<td style="background:${bucket(v)}22;color:${bucket(v)};text-align:center;padding:5px 2px;font-weight:700;">${v}</td>`
+              ).join('')}
+            </tr>`).join('')}
+          </table>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:9px;font-size:10px;color:#7487a0;">
+          <span>🟩 ٩٠+</span><span>🟨 ٨٠-٨٩</span><span>🟧 ٧٠-٧٩</span><span>🟥 ٦٠-٦٩</span><span>· لا بيانات</span>
+        </div>
+        <div style="color:#5d6d80;font-size:10px;margin-top:6px;">اضغط اسم القسم لعرض مخططه المفصّل بالأسفل</div>
+      </div>`; })() : ''}
+
       <div class="card">
         <div style="display:flex;justify-content:space-around;text-align:center;margin-bottom:12px;">
           <div><div style="color:#8fa3b8;font-size:11px;">المتوسط</div>
@@ -6424,6 +6549,9 @@ async function renderSalesTrend(){
       </div>` : ''}
       <div style="height:70px;"></div>`;
 
+    /* بيانات التصدير — تُحفَظ عالمياً حتى يقرأها زر «تصدير كملف كبير» بلا إعادة استعلام */
+    window.__trendExportData = { deptSeries, days, cycle, W, H, PAD };
+
     mountSalesShell('trend', html);
     try{ neoPlay(trend === null ? 'report' : trend > 2 ? 'up' : trend < -2 ? 'down' : 'report'); }catch(e){}
   }catch(err){
@@ -6431,6 +6559,89 @@ async function renderSalesTrend(){
   }
 }
 window.renderSalesTrend = renderSalesTrend;
+
+/* ── تصدير الجدول الحراري كملف صورة كبير الدقة ──
+   إعادة كتابة كاملة بعد اكتشاف خلل في النسخة السابقة (تسميات محاور معكوسة
+   ومخطط خطوط متشابك يصعب قراءته مع أكثر من ٤-٥ أقسام). الجدول الحراري أوضح
+   ولا يعاني من نفس مشكلة تراكب الخطوط. */
+window.exportTrendOverlay = function(){
+  var D = window.__trendExportData;
+  if (!D || !D.deptSeries || !D.deptSeries.length){ try{ neoToast('لا توجد بيانات للتصدير'); }catch(e){} return; }
+  try{
+    var SCALE = 3;
+    var nDays = D.days.length, nDeps = D.deptSeries.length;
+    var cellW = 34, cellH = 30, labelW = 150, top = 130, left = 40;
+    var W = left*2 + labelW + cellW*nDays;
+    var H = top + cellH*(nDeps+1) + 130;
+    var cv = document.createElement('canvas');
+    cv.width = W*SCALE; cv.height = H*SCALE;
+    var ctx = cv.getContext('2d');
+    ctx.scale(SCALE, SCALE);
+
+    ctx.fillStyle = '#0a121e'; ctx.fillRect(0,0,W,H);
+    ctx.fillStyle = '#e8eef6'; ctx.font = 'bold 26px Tajawal, Arial'; ctx.textAlign = 'right';
+    ctx.fillText('لوحة الأقسام — دورة ' + D.cycle.label, W - left, 44);
+    ctx.fillStyle = '#8fa3b8'; ctx.font = '14px Tajawal, Arial';
+    ctx.fillText(D.cycle.from + ' إلى ' + D.cycle.to, W - left, 66);
+
+    function dLabel(ds){ try{ return new Date(ds+'T12:00:00').getDate(); }catch(e){ return '—'; } }
+    function bucket(v){ return v>=90?'#3ecf6b':v>=80?'#c9d34f':v>=70?'#e0993d':v>=60?'#e0653d':'#7487a0'; }
+
+    /* رؤوس الأعمدة (الأيام) — من اليمين لليسار، الأحدث أقرب لعمود الاسم */
+    ctx.font = '12px Tajawal, Arial'; ctx.textAlign = 'center'; ctx.fillStyle = '#5d6d80';
+    for (var c = 0; c < nDays; c++){
+      var cx = W - left - labelW - c*cellW - cellW/2;
+      ctx.fillText(String(dLabel(D.days[c])), cx, top - 8);
+    }
+    ctx.textAlign = 'right'; ctx.fillStyle = '#8fa3b8'; ctx.font = 'bold 13px Tajawal, Arial';
+    ctx.fillText('القسم', W - left, top - 8);
+
+    /* صفوف الأقسام */
+    D.deptSeries.forEach(function(d, r){
+      var ry = top + r*cellH;
+      ctx.fillStyle = '#c8d4e2'; ctx.font = '13px Tajawal, Arial'; ctx.textAlign = 'right';
+      ctx.fillText(d.name, W - left, ry + cellH/2 + 5);
+      ctx.fillStyle = d.color; ctx.fillRect(W - left - labelW + 4, ry + 5, 4, cellH - 10);
+
+      d.series.forEach(function(v, c){
+        var cx = W - left - labelW - c*cellW - cellW;
+        if (v === null){
+          ctx.fillStyle = 'rgba(122,167,255,0.05)'; ctx.fillRect(cx, ry, cellW-2, cellH-2);
+          return;
+        }
+        var col = bucket(v);
+        ctx.fillStyle = col + '33'; ctx.fillRect(cx, ry, cellW-2, cellH-2);
+        ctx.fillStyle = col; ctx.font = 'bold 11px Tajawal, Arial'; ctx.textAlign = 'center';
+        ctx.fillText(String(v), cx + (cellW-2)/2, ry + cellH/2 + 4);
+      });
+    });
+
+    /* مفتاح الألوان */
+    var legY = top + cellH*(nDeps+1) + 34;
+    var legend = [['٩٠+','#3ecf6b'],['٨٠-٨٩','#c9d34f'],['٧٠-٧٩','#e0993d'],['٦٠-٦٩','#e0653d'],['لا بيانات','#7487a0']];
+    var lx = W - left;
+    ctx.textAlign = 'right'; ctx.font = '12px Tajawal, Arial';
+    legend.forEach(function(l){
+      ctx.fillStyle = l[1]; ctx.fillRect(lx-14, legY-11, 14, 14);
+      ctx.fillStyle = '#8fa3b8';
+      var tw = ctx.measureText(l[0]).width;
+      ctx.fillText(l[0], lx-20, legY);
+      lx -= (20 + tw + 22);
+    });
+
+    cv.toBlob(function(blob){
+      if (!blob){ try{ neoToast('تعذّر إنشاء الملف'); }catch(e){} return; }
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url; a.download = 'اتجاه-الأقسام-' + D.cycle.label + '.png';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(function(){ URL.revokeObjectURL(url); }, 4000);
+      try{ neoToast('نزّل الملف — ' + Math.round(blob.size/1024) + ' كيلوبايت', true); }catch(e){}
+    }, 'image/png');
+  }catch(e){
+    try{ neoToast('تعذّر التصدير: ' + (e && e.message)); }catch(x){}
+  }
+};
 
 function neoWeekRange(offset){
   const now = (typeof iraqNow === 'function') ? iraqNow() : new Date();
@@ -6539,7 +6750,8 @@ async function neoRunAI(kind, id, name){
     let deptStats = [];
     if (kind === 'hall'){
       try{
-        const { data: dps } = await supabaseClient.from('departments').select('id,name');
+        let { data: dps } = await supabaseClient.from('departments').select('id,name');
+        try{ if (typeof neoHallFilter === 'function') dps = await neoHallFilter(dps); }catch(e){}
         for (const d of (dps||[])){
           let r = { pct:0, total:0, verified:0 };
           try{ r = (await computeHallAuditProgressForUser(id, [d], today, true)) || r; }catch(e){}
@@ -6711,7 +6923,9 @@ async function renderHallManagerReport(userId, userName){
       supabaseClient.from('departments').select('id,name')
     ]);
 
-    const rows = cur || [], depts = dps || [];
+    const rows = cur || [];
+    let depts = dps || [];
+    try{ if (typeof neoHallFilter === 'function') depts = await neoHallFilter(depts); }catch(e){}
     const vals = rows.map(r => r.pct);
     const avg = vals.length ? Math.round(vals.reduce((a,b)=>a+b,0)/vals.length) : 0;
     const prevVals = (prev||[]).map(r => r.pct);
@@ -7844,7 +8058,8 @@ async function renderSalesManagersTab(period){
                          diff: (prevMap[k] !== undefined) ? (sv.pct - prevMap[k]) : null };
         } else {
           const ids = (p.department_ids && p.department_ids.length) ? p.department_ids : allDeptIds;
-          const sc = (depts||[]).filter(d => ids.includes(d.id));
+          let sc = (depts||[]).filter(d => ids.includes(d.id));
+          try{ if (typeof neoHallFilter === 'function') sc = await neoHallFilter(sc); }catch(e){}
           let a = { pct: 0, total: 0, verified: 0 };
           try{ a = (await computeHallAuditProgressForUser(p.id, sc, _d, true)) || a; }catch(e){}
           perHall[k] = { pct: (a.pct===null?0:a.pct), verified: a.verified||0, total: a.total||0,
@@ -7913,7 +8128,9 @@ async function renderSalesManagerHallDetail(profileId){
     const badgeClass = pct => pct>=80?'good':pct>=50?'mid':'bad';
 
     const today = todayStr();
-    const audit = await computeHallAuditProgressForUser(profileId, scopedDepts, today, true);
+    let auditDepts = scopedDepts;
+    try{ if (typeof neoHallFilter === 'function') auditDepts = await neoHallFilter(scopedDepts); }catch(e){}
+    const audit = await computeHallAuditProgressForUser(profileId, auditDepts, today, true);
     const auditBadgeClass = audit.pct === null ? '' : audit.pct === 100 ? 'good' : audit.pct >= 50 ? 'mid' : 'bad';
     const auditHtml = `
       <div class="card" style="display:flex; justify-content:space-between; align-items:center;">
@@ -8168,7 +8385,7 @@ async function renderSalesDeptMissingDetail(deptId, profileId){
       <div class="card">
         <button class="secondary" onclick="${profileId ? `renderSalesManagerHallDetail('${profileId}')` : `renderSalesDeptChooser('${deptId}')`}">◀ رجوع</button>
         <div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px;">
-          <h2 style="margin:0;">${dept?.name || ''} — خانة التدقيق المفصل <span style="font-size:11px;color:#38d9b9;">v164</span> <span style="font-size:10px;color:#7487a0;">(مستقرة)</span></h2>
+          <h2 style="margin:0;">${dept?.name || ''} — خانة التدقيق المفصل <span style="font-size:11px;color:#38d9b9;">v169</span> <span style="font-size:10px;color:#7487a0;">(مستقرة)</span></h2>
           <span class="dept-summary-badge" style="${totalMissing===0 ? 'background:#17402a; color:#3ecf6b;' : ''}">${totalMissing===0 ? '✅ مكتمل' : `${totalMissing} ناقص`}</span>
         </div>
       </div>
@@ -10538,7 +10755,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.08.16.15";
+const APP_VERSION = "2026.08.19.1";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -15983,8 +16200,8 @@ window.neoHallHideUI = async function(){
       +'<b style="color:#c8d4e2;font-size:14px;">🙈 إخفاء أقسام عن الصالة</b>'
       +'<button class="secondary" style="font-size:12px;padding:6px 12px;" onclick="document.getElementById(\'hhOv\').remove()">إغلاق</button></div>'
       +'<div style="color:#9fb0c5;font-size:11px;line-height:1.8;margin-bottom:12px;">'
-      +'القسم المخفي لا يظهر في تدقيق الصالة ولا النواقص ولا نواقص التدقيق.<br>'
-      +'<b style="color:#ffb37a;">لا يؤثر على مسؤول الشفت ولا على النسب.</b></div>';
+      +'القسم المخفي لا يظهر في تدقيق الصالة ولا النواقص ولا نواقص التدقيق، ولا يُحتسب ضمن نسبة مشرف الصالة.<br>'
+      +'<b style="color:#ffb37a;">لا يؤثر على مسؤول الشفت.</b></div>';
     depts.forEach(function(d){
       var on=hid.indexOf(String(d.id))!==-1;
       h+='<div onclick="neoHallHideTog(\''+esc(d.id)+'\',this)" data-id="'+esc(d.id)+'" data-on="'+(on?1:0)+'" '
