@@ -5423,6 +5423,8 @@ async function hallProgSave(cfg, id){
     else neoNotify('خطأ بالحفظ: ' + error.message);
     return false;
   }
+  /* أبطل ذاكرة نسبة التدقيق المؤقتة (٢٠ ثانية) — وإلا رجعت النسبة قديمة عند الرجوع للقائمة فوراً بعد الحفظ */
+  try{ window.__hapCache = {}; }catch(e){}
   return true;
 }
 
@@ -7585,7 +7587,8 @@ async function computeAllDeptsOverallPctRange(startDate, endDate){
   (locLogs||[]).forEach(l => {
     const deptId = locToDept[l.location_id];
     if (!deptId) return;
-    FIELD_DEFS.forEach(f => { if (l[f.key]) bump(deptId, 0, 1); });
+    const fn = l.field_notes || {};
+    FIELD_DEFS.forEach(f => { if (l[f.key] || (fn[f.key]||'').trim()) bump(deptId, 0, 1); });
   });
 
   const { data: allStaff } = await cachedSelectResponse('staff_ref', 'staff', 'id, department_id, name, sort_order, created_at', 'sort_order');
@@ -7595,7 +7598,8 @@ async function computeAllDeptsOverallPctRange(startDate, endDate){
   (staffLogs||[]).forEach(e => {
     const deptId = staffToDept[e.staff_id];
     if (!deptId) return;
-    STAFF_FIELD_DEFS.forEach(f => { if (e[f.key]) bump(deptId, 0, 1); });
+    const fn = e.field_notes || {};
+    STAFF_FIELD_DEFS.forEach(f => { if (e[f.key] || (fn[f.key]||'').trim()) bump(deptId, 0, 1); });
   });
 
   const { data: allTasks } = await cachedSelectResponse('tasks_ref', 'daily_tasks', 'id, department_id, name, created_at', 'created_at');
@@ -7605,7 +7609,7 @@ async function computeAllDeptsOverallPctRange(startDate, endDate){
   (taskLogs||[]).forEach(l => {
     const deptId = taskToDept[l.task_id];
     if (!deptId) return;
-    if (l.checked) bump(deptId, 0, 1);
+    if (l.checked || ((l.field_notes||{}).checked||'').trim()) bump(deptId, 0, 1);
   });
 
   const { data: allIpads } = await cachedSelectResponse('ipads_ref', 'ipads', 'id, department_id, code, created_at', 'created_at');
@@ -7615,7 +7619,8 @@ async function computeAllDeptsOverallPctRange(startDate, endDate){
   (ipadLogs||[]).forEach(l => {
     const deptId = ipadToDept[l.ipad_id];
     if (!deptId) return;
-    IPAD_FIELD_DEFS.forEach(f => { if (l[f.key]) bump(deptId, 0, 1); });
+    const fn = l.field_notes || {};
+    IPAD_FIELD_DEFS.forEach(f => { if (l[f.key] || (fn[f.key]||'').trim()) bump(deptId, 0, 1); });
   });
 
   const { data: allReaders } = await cachedSelectResponse('readers_ref', 'serial_readers', 'id, department_id, code, created_at', 'created_at');
@@ -7625,7 +7630,8 @@ async function computeAllDeptsOverallPctRange(startDate, endDate){
   (readerLogs||[]).forEach(l => {
     const deptId = readerToDept[l.reader_id];
     if (!deptId) return;
-    READER_FIELD_DEFS.forEach(f => { if (l[f.key]) bump(deptId, 0, 1); });
+    const fn = l.field_notes || {};
+    READER_FIELD_DEFS.forEach(f => { if (l[f.key] || (fn[f.key]||'').trim()) bump(deptId, 0, 1); });
   });
 
   const { data: allIpadReaderDevices } = await cachedSelectResponse('ipad_reader_devices_ref', 'ipad_reader_devices', 'id, department_id, code, created_at', 'created_at');
@@ -7635,7 +7641,8 @@ async function computeAllDeptsOverallPctRange(startDate, endDate){
   (ipadReaderDeviceLogs||[]).forEach(l => {
     const deptId = ipadReaderDeviceToDept[l.device_id];
     if (!deptId) return;
-    IPAD_READER_FIELD_DEFS.forEach(f => { if (l[f.key]) bump(deptId, 0, 1); });
+    const fn = l.field_notes || {};
+    IPAD_READER_FIELD_DEFS.forEach(f => { if (l[f.key] || (fn[f.key]||'').trim()) bump(deptId, 0, 1); });
   });
 
   const { data: allLaptops } = await cachedSelectResponse('laptops_ref', 'laptops', 'id, department_id, code, created_at', 'created_at');
@@ -7645,7 +7652,8 @@ async function computeAllDeptsOverallPctRange(startDate, endDate){
   (laptopLogs||[]).forEach(l => {
     const deptId = laptopToDept[l.laptop_id];
     if (!deptId) return;
-    LAPTOP_FIELD_DEFS.forEach(f => { if (l[f.key]) bump(deptId, 0, 1); });
+    const fn = l.field_notes || {};
+    LAPTOP_FIELD_DEFS.forEach(f => { if (l[f.key] || (fn[f.key]||'').trim()) bump(deptId, 0, 1); });
   });
 
   const { data: allPosDevices } = await cachedSelectResponse('pos_devices_ref', 'pos_devices', 'id, department_id, code, created_at', 'created_at');
@@ -7655,14 +7663,16 @@ async function computeAllDeptsOverallPctRange(startDate, endDate){
   (posDeviceLogs||[]).forEach(l => {
     const deptId = posDeviceToDept[l.pos_device_id];
     if (!deptId) return;
-    POS_FIELD_DEFS.forEach(f => { if (l[f.key]) bump(deptId, 0, 1); });
+    const fn = l.field_notes || {};
+    POS_FIELD_DEFS.forEach(f => { if (l[f.key] || (fn[f.key]||'').trim()) bump(deptId, 0, 1); });
   });
 
   const { data: depts2 } = await cachedSelectResponse('departments', 'departments', '*', 'id');
   const { data: cleanLogs } = await supabaseClient.from('department_cleanliness_logs').select('*').gte('log_date', startDate).lte('log_date', endDate);
   (depts2||[]).forEach(d => bump(d.id, CLEAN_FIELD_DEFS.length * SHIFTS * dayCount, 0));
   (cleanLogs||[]).forEach(l => {
-    CLEAN_FIELD_DEFS.forEach(f => { if (l[f.key]) bump(l.department_id, 0, 1); });
+    const fn = l.field_notes || {};
+    CLEAN_FIELD_DEFS.forEach(f => { if (l[f.key] || (fn[f.key]||'').trim()) bump(l.department_id, 0, 1); });
   });
 
   const pctByDept = {};
@@ -10763,7 +10773,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.08.19.1";
+const APP_VERSION = "2026.08.19.2";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
