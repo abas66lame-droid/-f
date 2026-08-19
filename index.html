@@ -3306,14 +3306,17 @@ function neoComputeShiftPct(){
     if (st && st.locations){
       st.locations.forEach(loc => {
         const log = st.logsMap[loc.id] || {};
+        const fn = log?.field_notes || {};
         FIELD_DEFS.forEach(f => {
           if (typeof neoCellDisabled === 'function' && neoCellDisabled(loc, f.key)) return;
           total++;
-          if (shiftFieldState(log, f.key) === 'yes') done++;
+          const s = shiftFieldState(log, f.key);
+          if (s === 'yes' || (s === 'no' && (fn[f.key]||'').trim())) done++;
         });
         (st.customFields||[]).forEach(cf => {
           total++;
-          if (shiftExtraState(log, cf.id) === 'yes') done++;
+          const s = shiftExtraState(log, cf.id);
+          if (s === 'yes' || (s === 'no' && (fn['extra_'+cf.id]||'').trim())) done++;
         });
       });
     }
@@ -3322,18 +3325,23 @@ function neoComputeShiftPct(){
       const cfg = progSections[k];
       if (!cfg || !cfg.items || !cfg.fields) return;
       cfg.items.forEach(it => {
+        const log = cfg.logsMap[it.id] || {};
+        const fn = log?.field_notes || {};
         cfg.fields.forEach(f => {
           if (typeof neoCellDisabled === 'function' && neoCellDisabled(it, f.key)) return;
           total++;
-          if (progState(cfg.logsMap[it.id] || {}, f.key) === 'yes') done++;
+          const s = progState(log, f.key);
+          if (s === 'yes' || (s === 'no' && (fn[f.key]||'').trim())) done++;
         });
       });
     });
     /* النظافة */
     if (typeof cleanProgState !== 'undefined' && cleanProgState && cleanProgState.log){
+      const fn = cleanProgState.log?.field_notes || {};
       (CLEAN_FIELD_DEFS||[]).forEach(f => {
         total++;
-        if (progState(cleanProgState.log, f.key) === 'yes') done++;
+        const s = progState(cleanProgState.log, f.key);
+        if (s === 'yes' || (s === 'no' && (fn[f.key]||'').trim())) done++;
       });
     }
   }catch(e){}
