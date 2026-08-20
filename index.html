@@ -2958,7 +2958,9 @@ async function renderPointsSection(deptId){
           ${criteria.map(c=>`<th>${c.name}</th>`).join('')}
           <th>المجموع</th>
         </tr>
-        ${rowsHtml || (criteria.length ? '<tr><td colspan="8">لا يوجد موظفون مسجلون بعد</td></tr>' : '<tr><td>لا توجد معايير تقييم لهذا القسم بعد</td></tr>')}
+        ${criteria.length === 0
+          ? '<tr><td colspan="2">لا توجد معايير تقييم لهذا القسم بعد — اطلب من مدير المبيعات إضافتها (وضع الإدارة ← معايير نقاط الموظفين)</td></tr>'
+          : (rowsHtml || `<tr><td colspan="${criteria.length + 2}">لا يوجد موظفون مسجلون بعد</td></tr>`)}
       </table>
     </div>
     ${manageHtml}`;
@@ -10791,7 +10793,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.08.19.4";
+const APP_VERSION = "2026.08.19.5";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
