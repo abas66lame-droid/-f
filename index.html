@@ -10793,7 +10793,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.08.19.5";
+const APP_VERSION = "2026.08.19.6";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -15076,6 +15076,15 @@ window.renderFleetSupView=async function(profile){
     var open=trips.filter(function(t){ return !t.in_at; });
     var pend=trips.filter(function(t){ return t.reject_note; });
     var vmap={}; vs.forEach(function(v){ vmap[String(v.id)]=v; });
+    var byDrv={};
+    trips.forEach(function(t){
+      var k=t.driver_name||t.driver_id;
+      if(!byDrv[k]) byDrv[k]={n:0,ok:0,rej:0,open:0};
+      byDrv[k].n++;
+      if(t.verified_at&&!t.reject_note) byDrv[k].ok++;
+      if(t.reject_note) byDrv[k].rej++;
+      if(!t.in_at) byDrv[k].open++;
+    });
 
     var h='<div class="card"><h2>🧾 تدقيق التوصيل</h2>'
       +'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:9px;">'
@@ -15107,17 +15116,25 @@ window.renderFleetSupView=async function(profile){
     var liveV=vs.filter(function(v){ return !v.archived; });
     var archV=vs.filter(function(v){ return v.archived; });
     if(!liveV.length) h+='<div style="color:#8fa3b8;font-size:12px;">لا توجد مركبات</div>';
-    liveV.forEach(function(v){
+    for(var vi=0;vi<liveV.length;vi++){
+      var v=liveV[vi];
+      var tk=await getTasks(v.id);
       h+='<div style="padding:11px;margin-bottom:7px;border-radius:11px;background:rgba(122,167,255,0.05);'
         +'border-inline-start:3px solid '+(v.holder_id?'#ff8c42':v.active?'#38d9b9':'#5d6d80')+';">'
         +'<div style="color:#c8d4e2;font-size:14px;font-weight:700;">'+kindLabel(v.kind)+' '+esc(v.plate)+'</div>'
         +(v.label?'<div style="color:#8fa3b8;font-size:11px;">'+esc(v.label)+'</div>':'')
         +(v.holder_id?'<div style="color:#ffb37a;font-size:11px;margin-top:3px;">عند '+esc(v.holder_name||'')+'</div>'
           :'<div style="color:'+(v.active?'#38d9b9':'#7487a0')+';font-size:11px;margin-top:3px;">'+(v.active?'متاحة':'معطّلة')+'</div>')
+        +'<div style="color:#7487a0;font-size:11px;margin-top:8px;">مهام الاستلام: '
+        +tk.filter(function(t){return t.phase==='out';}).length
+        +' · التسليم: '+tk.filter(function(t){return t.phase==='in';}).length+'</div>'
         +'<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:8px;">'
+        +'<button class="secondary" style="font-size:11px;padding:7px 10px;" onclick="fleetTasksUI('+v.id+',\'sup\')">مهامها</button>'
+        +'<button class="secondary" style="font-size:11px;padding:7px 10px;color:#9fd3ff;" onclick="fleetEditVehicle('+v.id+',\'sup\')">تعديل</button>'
+        +'<button class="secondary" style="font-size:11px;padding:7px 10px;" onclick="fleetToggle('+v.id+','+(v.active?'false':'true')+',\'sup\')">'+(v.active?'تعطيل':'تفعيل')+'</button>'
         +'<button class="secondary" style="font-size:11px;padding:7px 10px;color:#f0b3b8;" onclick="fleetArchive('+v.id+',\'sup\')">حذف (أرشفة)</button>'
         +'</div></div>';
-    });
+    }
     if(archV.length){
       h+='<div style="color:#7487a0;font-size:12px;font-weight:700;margin:14px 0 6px;">المؤرشفة ('+archV.length+')</div>';
       archV.forEach(function(v){
@@ -15145,6 +15162,29 @@ window.renderFleetSupView=async function(profile){
     h+='</div>';   /* /fsVehWrap */
 
     h+='<div id="fsTripWrap" class="hidden">';
+
+    var dk=Object.keys(byDrv);
+    if(dk.length){
+      h+='<div class="card"><h2>أداء الموظفين</h2>'
+        +'<table style="width:100%;border-collapse:collapse;font-size:11px;">'
+        +'<tr style="color:#7487a0;text-align:right;">'
+        +'<th style="padding:5px 3px;font-weight:600;">الموظف</th>'
+        +'<th style="padding:5px 3px;font-weight:600;">رحلات</th>'
+        +'<th style="padding:5px 3px;font-weight:600;">معتمدة</th>'
+        +'<th style="padding:5px 3px;font-weight:600;">ملاحظات</th>'
+        +'<th style="padding:5px 3px;font-weight:600;">مفتوحة</th></tr>';
+      dk.sort(function(a,b){ return byDrv[b].n-byDrv[a].n; }).forEach(function(k){
+        var d=byDrv[k];
+        h+='<tr style="border-top:1px solid rgba(122,167,255,0.10);">'
+          +'<td style="padding:6px 3px;color:#c8d4e2;">'+esc(k)+'</td>'
+          +'<td style="padding:6px 3px;color:#8fb8d8;">'+d.n+'</td>'
+          +'<td style="padding:6px 3px;color:#38d9b9;">'+d.ok+'</td>'
+          +'<td style="padding:6px 3px;color:'+(d.rej?'#e8a0a4':'#5d6d80')+';">'+d.rej+'</td>'
+          +'<td style="padding:6px 3px;color:'+(d.open?'#ffb37a':'#5d6d80')+';">'+d.open+'</td></tr>';
+      });
+      h+='</table></div>';
+    }
+
     h+='<div class="card"><h2>الرحلات المكتملة</h2>';
     var done=trips.filter(function(t){ return t.in_at; });
     if(!done.length) h+='<div style="color:#8fa3b8;font-size:12px;">لا توجد رحلات بعد</div>';
