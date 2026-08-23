@@ -7397,13 +7397,16 @@ async function computeAllDeptsOverallPct(date){
     });
   }catch(e){}
   const colsOf = (deptId, scope) => Math.max(1, (_BASE[scope]||0) + ((_delta[deptId] && _delta[deptId][scope]) || 0));
-  /* يعدّ المنجز شاملاً الأعمدة المضافة (extra_fields) — وإلا ظهرت النسبة أقل من الحقيقة */
+  /* يعدّ المنجز شاملاً الأعمدة المضافة (extra_fields) — وإلا ظهرت النسبة أقل من الحقيقة
+     كما نحتسب ✗ مع ملاحظة كمُنجز — نفس معيار اكتمال الصف بشاشة مسؤول الشفت (shiftRowComplete)،
+     وإلا ظهرت نسبة القسم متراجعة رغم أن كل خانة إما ✓ أو ✗ موثّقة بسبب واضح */
   const doneIn = (row, baseDefs, cap) => {
     if (!row) return 0;
     let c = 0; const seen = {};
-    (baseDefs||[]).forEach(f => { if (row[f.key] === true && !seen[f.key]){ seen[f.key]=1; c++; } });
+    const fn = row.field_notes || {};
+    (baseDefs||[]).forEach(f => { if ((row[f.key] === true || (fn[f.key]||'').trim()) && !seen[f.key]){ seen[f.key]=1; c++; } });
     const ex = row.extra_fields || {};
-    Object.keys(ex).forEach(k => { if (ex[k] === true && !seen[k]){ seen[k]=1; c++; } });
+    Object.keys(ex).forEach(k => { if ((ex[k] === true || (fn['extra_'+k]||'').trim()) && !seen[k]){ seen[k]=1; c++; } });
     /* معايير الموظفين الإضافية تُخزَّن في extra_evaluations — كانت لا تُحتسب */
     const ev = row.extra_evaluations || {};
     Object.keys(ev).forEach(k => { if (ev[k] === true && !seen['e_'+k]){ seen['e_'+k]=1; c++; } });
@@ -10793,7 +10796,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.08.19.6";
+const APP_VERSION = "2026.08.19.7";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
