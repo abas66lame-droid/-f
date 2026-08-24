@@ -6356,12 +6356,18 @@ window.neoBillingMonth = neoBillingMonth;
 
 let trendDept = 'all';
 let trendMode = 'dept';   /* dept | hall */
+let trendCycleOffset = 0;   /* 0 = الدورة الحالية، 1 = التي قبلها، وهكذا — للتنقّل بين الدورات */
 /* لا حاجة لمتغيّر تبديل — الجدول الحراري يظهر دائماً في وضع الأقسام */
+
+window.trendCycleShift = function(delta){
+  trendCycleOffset = Math.max(0, trendCycleOffset + delta);
+  renderSalesTrend();
+};
 
 async function renderSalesTrend(){
   mountSalesShell('trend', '<div class="card"><div class="neoLoadBox">جاري بناء الاتجاه…<div class="neoBarLoad"></div></div></div>');
   try{
-    const cycle = neoBillingMonth(0);
+    const cycle = neoBillingMonth(trendCycleOffset);
     const start = new Date(cycle.from + 'T12:00:00');
     const end   = new Date(cycle.to   + 'T12:00:00');
     const f = d => d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
@@ -6418,7 +6424,7 @@ async function renderSalesTrend(){
     const vals = series.filter(v => v !== null);
     const avg = vals.length ? Math.round(vals.reduce((a,b)=>a+b,0)/vals.length) : 0;
     /* المقارنة مع الدورة السابقة كاملة — أدقّ من مقارنة أسبوعين داخل الدورة */
-    const pc = neoBillingMonth(1);
+    const pc = neoBillingMonth(trendCycleOffset + 1);
     let prevAvg = null;
     try{
       const tbl = trendMode === 'hall' ? 'hall_stats' : 'daily_stats';
@@ -6457,7 +6463,11 @@ async function renderSalesTrend(){
     const html = `
       <div class="card">
         <h2 style="margin:0 0 4px;">📈 اتجاه ${trendMode==='hall'?'مشرفي الصالة':'الأقسام'} — دورة ${cycle.label}</h2>
-        <div style="color:#8fa3b8;font-size:12px;">${cycle.from} إلى ${cycle.to} · ${days.length} من ${cycle.days} يوماً</div>
+        <div style="color:#8fa3b8;font-size:12px;margin-bottom:8px;">${cycle.from} إلى ${cycle.to} · ${days.length} من ${cycle.days} يوماً</div>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <button class="secondary" onclick="trendCycleShift(1)" style="flex:1;font-size:12px;padding:9px;">◀ الدورة السابقة</button>
+          <button class="secondary" onclick="trendCycleShift(-1)" style="flex:1;font-size:12px;padding:9px;${trendCycleOffset===0?'opacity:0.4;pointer-events:none;':''}">الدورة التالية ▶</button>
+        </div>
       </div>
 
       <div class="card">
@@ -10796,7 +10806,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.08.19.7";
+const APP_VERSION = "2026.08.19.8";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
