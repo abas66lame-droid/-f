@@ -10806,7 +10806,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.08.19.8";
+const APP_VERSION = "2026.08.19.9";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -14587,6 +14587,38 @@ async function fleetGetProofs(tripId){
     return m;
   }catch(e){ return {}; }
 }
+
+/* ── عدّاد النواقص لقائمة رحلات دفعة واحدة (استعلام مجمّع لا رحلة برحلة) ──
+   ناقص = مهمة غير معلَّمة منجزة، أو معلَّمة لكن بلا صورة إثبات مرفوعة */
+async function fleetTripsMissingInfo(trips){
+  var out={};
+  if(!trips||!trips.length) return out;
+  var vehIds=[], seen={};
+  trips.forEach(function(t){ var k=String(t.vehicle_id); if(!seen[k]){ seen[k]=1; vehIds.push(t.vehicle_id); } });
+  var tasksByVeh={};
+  for(var i=0;i<vehIds.length;i++) tasksByVeh[String(vehIds[i])]=await getTasks(vehIds[i]);
+  var proofsByTrip={};
+  try{
+    var tripIds=trips.map(function(t){ return t.id; });
+    var pr=await SB().from('fleet_task_proofs').select('trip_id,task_id').in('trip_id',tripIds);
+    (pr.data||[]).forEach(function(x){
+      var k=String(x.trip_id);
+      if(!proofsByTrip[k]) proofsByTrip[k]={};
+      proofsByTrip[k][String(x.task_id)]=1;
+    });
+  }catch(e){}
+  trips.forEach(function(t){
+    var tk=tasksByVeh[String(t.vehicle_id)]||[];
+    var pf=proofsByTrip[String(t.id)]||{};
+    var count=0;
+    tk.forEach(function(x){
+      var checks=x.phase==='out'?(t.out_checks||{}):(t.in_checks||{});
+      if(!checks[x.id] || !pf[String(x.id)]) count++;
+    });
+    out[t.id]={ count: count };
+  });
+  return out;
+}
 async function getTasks(vid){
   var r=await SB().from('fleet_tasks').select('*').eq('vehicle_id',vid).eq('active',true).order('sort');
   return r.data||[];
@@ -14679,12 +14711,8 @@ window.renderDriverView = async function(profile){
                 +'<span style="flex:1;color:#38d9b9;font-size:11px;">✓ تم إثبات المهمة بالصورة</span></div>'
               : '<div style="color:#ffb37a;font-size:11px;margin-top:7px;">📷 بانتظار الصورة</div>')
             +'<div style="display:flex;gap:6px;margin-top:8px;">'
-            +'<input type="file" accept="image/*" id="fp_'+t.id+'" style="display:none" '
-            +'onchange="fleetProofPick('+trip.id+','+t.id+','+v.id+',this)">'
             +'<button class="secondary" style="flex:1;font-size:12px;padding:9px;" '
             +'onclick="fleetCam('+trip.id+','+t.id+','+v.id+')">📷 '+(ready?'استبدال الصورة':'التقاط بالكاميرا')+'</button>'
-            +'<button class="secondary" style="font-size:12px;padding:9px;" '
-            +'onclick="document.getElementById(\'fp_'+t.id+'\').click()">🖼</button>'
             +'<button style="flex:1;font-size:12px;padding:9px;'
             +(ready?'':'opacity:.45;')+'background:'+(on?'#5a3a3a':'#14705f')+';" '
             +'onclick="fleetTaskDone('+trip.id+',\''+phase+'\','+t.id+','+(ready?1:0)+')">'
@@ -14855,7 +14883,7 @@ window.fleetCam=async function(tripId,taskId,vehId){
       video:{ facingMode:{ideal:'environment'}, width:{ideal:1280} }, audio:false });
     V.srcObject=stream;
   }catch(e){
-    say('تعذّر فتح الكاميرا — استخدم 🖼 لاختيار صورة','#e8a0a4');
+    say('تعذّر فتح الكاميرا — تحقّق من صلاحية الوصول للكاميرا بالمتصفح','#e8a0a4');
     return;
   }
 
@@ -15199,29 +15227,46 @@ window.renderFleetSupView=async function(profile){
     }
 
     h+='<div class="card"><h2>الرحلات المكتملة</h2>';
-    var done=trips.filter(function(t){ return t.in_at; });
+    var done=trips.filter(function(t){ return t.in_at; }).slice(0,60);
+    var missingInfo2=await fleetTripsMissingInfo(done);
     if(!done.length) h+='<div style="color:#8fa3b8;font-size:12px;">لا توجد رحلات بعد</div>';
-    done.slice(0,60).forEach(function(t){
-      var v=vmap[String(t.vehicle_id)]||{};
-      var oc=Object.keys(t.out_checks||{}).length, ic=Object.keys(t.in_checks||{}).length;
-      var ok=!!t.verified_at, rej=!!t.reject_note;
-      h+='<div style="padding:10px;margin-bottom:6px;border-radius:10px;background:rgba(122,167,255,0.05);'
-        +'border-inline-start:3px solid '+(rej?'#e15b64':ok?'#38d9b9':'#7487a0')+';">'
-        +'<div style="display:flex;justify-content:space-between;gap:8px;">'
-        +'<div style="flex:1;"><div style="color:#c8d4e2;font-size:13px;font-weight:700;">'+kindLabel(v.kind)+' '+esc(v.plate||'?')+'</div>'
-        +'<div style="color:#8fa3b8;font-size:11px;">'+esc(t.driver_name||'')+'</div>'
-        +'<div style="color:#7487a0;font-size:10px;">'+fmt(t.out_at)+' ← '+fmt(t.in_at)+'</div>'
-        +'<div style="color:#7487a0;font-size:10px;">علامات: استلام '+oc+' · تسليم '+ic+'</div>'
-        +'<button class="secondary" style="width:100%;font-size:11px;padding:7px;margin-top:7px;" '
-        +'onclick="fleetTripDetail('+t.id+')">📋 تفاصيل المهام والصور</button>'
-        +(t.note?'<div style="color:#ffb37a;font-size:11px;margin-top:3px;">📝 '+esc(t.note)+'</div>':'')
-        +(t.reject_note?'<div style="color:#e8a0a4;font-size:11px;margin-top:3px;">⚠️ '+esc(t.reject_note)+'</div>':'')
-        +(ok?'<div style="color:#38d9b9;font-size:10px;margin-top:3px;">✓ '+esc(t.verified_name||'')+'</div>':'')
-        +'</div></div>'
-        +(rej?'':'<div style="display:flex;gap:6px;margin-top:8px;">'
-          +(ok?'':'<button style="flex:1;font-size:11px;padding:8px;background:#14705f;" onclick="fleetVerify('+t.id+')">اعتماد</button>')
-          +'<button class="secondary" style="flex:1;font-size:11px;padding:8px;color:#e8a0a4;" onclick="fleetReject('+t.id+')">تسجيل ملاحظة</button></div>')
+    var byVeh2={}, vehOrder2=[];
+    done.forEach(function(t){
+      var vk=String(t.vehicle_id);
+      if(!byVeh2[vk]){ byVeh2[vk]=[]; vehOrder2.push(vk); }
+      byVeh2[vk].push(t);
+    });
+    vehOrder2.forEach(function(vk){
+      var v=vmap[vk]||{};
+      var vTrips=byVeh2[vk];
+      var vMissing=vTrips.reduce(function(s,t){ return s+missingInfo2[t.id].count; },0);
+      h+='<div style="display:flex;justify-content:space-between;align-items:center;margin:12px 0 7px;padding-bottom:5px;border-bottom:1px solid rgba(122,167,255,0.12);">'
+        +'<div style="color:#8fb8d8;font-size:13px;font-weight:700;">'+kindLabel(v.kind)+' '+esc(v.plate||'؟')+'</div>'
+        +(vMissing?'<span style="background:#5a2020;color:#ff8f8f;font-size:11px;font-weight:800;padding:3px 10px;border-radius:10px;">'+vMissing+' ناقص</span>':'')
         +'</div>';
+      vTrips.forEach(function(t){
+        var oc=Object.keys(t.out_checks||{}).length, ic=Object.keys(t.in_checks||{}).length;
+        var ok=!!t.verified_at, rej=!!t.reject_note;
+        var missing=missingInfo2[t.id].count;
+        h+='<div style="padding:10px;margin-bottom:6px;border-radius:10px;background:'+(missing?'rgba(225,91,100,0.08)':'rgba(122,167,255,0.05)')+';'
+          +'border-inline-start:3px solid '+(missing?'#e15b64':rej?'#e15b64':ok?'#38d9b9':'#7487a0')+';">'
+          +'<div style="display:flex;justify-content:space-between;gap:8px;">'
+          +'<div style="flex:1;"><div style="color:#c8d4e2;font-size:11px;">'+esc(t.driver_name||'')+'</div>'
+          +'<div style="color:#7487a0;font-size:10px;">'+fmt(t.out_at)+' ← '+fmt(t.in_at)+'</div>'
+          +'<div style="color:#7487a0;font-size:10px;">علامات: استلام '+oc+' · تسليم '+ic+'</div>'
+          +'<button class="secondary" style="width:100%;font-size:11px;padding:7px;margin-top:7px;" '
+          +'onclick="fleetTripDetail('+t.id+')">📋 تفاصيل المهام والصور</button>'
+          +(t.note?'<div style="color:#ffb37a;font-size:11px;margin-top:3px;">📝 '+esc(t.note)+'</div>':'')
+          +(t.reject_note?'<div style="color:#e8a0a4;font-size:11px;margin-top:3px;">⚠️ '+esc(t.reject_note)+'</div>':'')
+          +(ok?'<div style="color:#38d9b9;font-size:10px;margin-top:3px;">✓ '+esc(t.verified_name||'')+'</div>':'')
+          +'</div>'
+          +(missing?'<span style="background:#5a2020;color:#ff8f8f;font-size:10px;font-weight:800;padding:2px 8px;border-radius:9px;flex-shrink:0;height:fit-content;">'+missing+' ناقص</span>':'')
+          +'</div>'
+          +(rej?'':'<div style="display:flex;gap:6px;margin-top:8px;">'
+            +(ok?'':'<button style="flex:1;font-size:11px;padding:8px;background:#14705f;" onclick="fleetVerify('+t.id+')">اعتماد</button>')
+            +'<button class="secondary" style="flex:1;font-size:11px;padding:8px;color:#e8a0a4;" onclick="fleetReject('+t.id+')">تسجيل ملاحظة</button></div>')
+          +'</div>';
+      });
     });
     h+='</div>';
     h+='<div class="card"><button class="secondary" style="width:100%;font-size:12px;padding:10px;" '
@@ -15413,29 +15458,49 @@ window.renderFleetManagerTab=async function(){
       h+='</table></div>';
     }
 
-    /* سجل الرحلات */
+    /* سجل الرحلات — مقسّم حسب كل مركبة، مع عدّاد أحمر لأي مهمة ناقصة أو بلا صورة */
+    var visTrips=trips.slice(0,80);
+    var missingInfo=await fleetTripsMissingInfo(visTrips);
     h+='<div class="card"><h2>سجل الرحلات</h2>';
-    if(!trips.length) h+='<div style="color:#8fa3b8;font-size:12px;">لا توجد رحلات</div>';
-    trips.slice(0,80).forEach(function(t){
-      var v=vmap[String(t.vehicle_id)]||{};
-      var ok=!!t.verified_at, rej=!!t.reject_note, opn=!t.in_at;
-      h+='<div style="padding:9px;margin-bottom:5px;border-radius:9px;background:rgba(122,167,255,0.04);'
-        +'border-inline-start:3px solid '+(opn?'#ff8c42':rej?'#e15b64':ok?'#38d9b9':'#5d6d80')+';">'
-        +'<div style="color:#c8d4e2;font-size:12px;">'+kindLabel(v.kind)+' '+esc(v.plate||'?')+' — '+esc(t.driver_name||'')+'</div>'
-        +'<div style="color:#7487a0;font-size:10px;">'+fmt(t.out_at)+' ← '+(t.in_at?fmt(t.in_at):'<span style="color:#ffb37a;">لم تُرجَع</span>')+'</div>'
-        +'<div style="color:#7487a0;font-size:10px;">علامات: استلام '+Object.keys(t.out_checks||{}).length+' · تسليم '+Object.keys(t.in_checks||{}).length+'</div>'
-        +'<div style="display:flex;gap:6px;margin-top:6px;">'
-        +'<button class="secondary" style="flex:2;font-size:11px;padding:7px;" '
-        +'onclick="fleetTripDetail('+t.id+')">📋 تفاصيل المهام والصور</button>'
-        +'<button class="secondary" style="flex:1;font-size:11px;padding:7px;color:#ff6b74;" '
-        +'onclick="fleetPurgeTrip('+t.id+')">حذف</button></div>'
-        +(t.note?'<div style="color:#ffb37a;font-size:11px;">📝 '+esc(t.note)+'</div>':'')
-        +(t.reject_note?'<div style="color:#e8a0a4;font-size:11px;">⚠️ '+esc(t.reject_note)+'</div>':'')
-        +(ok&&!rej?'<div style="color:#38d9b9;font-size:10px;">✓ '+esc(t.verified_name||'')+'</div>':'')
-        +(!opn&&!rej?'<div style="display:flex;gap:6px;margin-top:7px;">'
-          +(ok?'':'<button style="flex:1;font-size:11px;padding:7px;background:#14705f;" onclick="fleetVerify('+t.id+')">اعتماد</button>')
-          +'<button class="secondary" style="flex:1;font-size:11px;padding:7px;color:#e8a0a4;" onclick="fleetReject('+t.id+')">تسجيل ملاحظة</button></div>':'')
+    if(!visTrips.length) h+='<div style="color:#8fa3b8;font-size:12px;">لا توجد رحلات</div>';
+    var byVeh1={}, vehOrder1=[];
+    visTrips.forEach(function(t){
+      var vk=String(t.vehicle_id);
+      if(!byVeh1[vk]){ byVeh1[vk]=[]; vehOrder1.push(vk); }
+      byVeh1[vk].push(t);
+    });
+    vehOrder1.forEach(function(vk){
+      var v=vmap[vk]||{};
+      var vTrips=byVeh1[vk];
+      var vMissing=vTrips.reduce(function(s,t){ return s+missingInfo[t.id].count; },0);
+      h+='<div style="display:flex;justify-content:space-between;align-items:center;margin:14px 0 7px;padding-bottom:5px;border-bottom:1px solid rgba(122,167,255,0.12);">'
+        +'<div style="color:#8fb8d8;font-size:13px;font-weight:700;">'+kindLabel(v.kind)+' '+esc(v.plate||'؟')+'</div>'
+        +(vMissing?'<span style="background:#5a2020;color:#ff8f8f;font-size:11px;font-weight:800;padding:3px 10px;border-radius:10px;">'+vMissing+' ناقص</span>':'')
         +'</div>';
+      vTrips.forEach(function(t){
+        var ok=!!t.verified_at, rej=!!t.reject_note, opn=!t.in_at;
+        var missing=missingInfo[t.id].count;
+        h+='<div style="padding:9px;margin-bottom:5px;border-radius:9px;background:'+(missing?'rgba(225,91,100,0.08)':'rgba(122,167,255,0.04)')+';'
+          +'border-inline-start:3px solid '+(missing?'#e15b64':opn?'#ff8c42':rej?'#e15b64':ok?'#38d9b9':'#5d6d80')+';">'
+          +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">'
+          +'<span style="color:#c8d4e2;font-size:12px;">'+esc(t.driver_name||'')+'</span>'
+          +(missing?'<span style="background:#5a2020;color:#ff8f8f;font-size:10px;font-weight:800;padding:2px 8px;border-radius:9px;flex-shrink:0;">'+missing+' ناقص</span>':'')
+          +'</div>'
+          +'<div style="color:#7487a0;font-size:10px;">'+fmt(t.out_at)+' ← '+(t.in_at?fmt(t.in_at):'<span style="color:#ffb37a;">لم تُرجَع</span>')+'</div>'
+          +'<div style="color:#7487a0;font-size:10px;">علامات: استلام '+Object.keys(t.out_checks||{}).length+' · تسليم '+Object.keys(t.in_checks||{}).length+'</div>'
+          +'<div style="display:flex;gap:6px;margin-top:6px;">'
+          +'<button class="secondary" style="flex:2;font-size:11px;padding:7px;" '
+          +'onclick="fleetTripDetail('+t.id+')">📋 تفاصيل المهام والصور</button>'
+          +'<button class="secondary" style="flex:1;font-size:11px;padding:7px;color:#ff6b74;" '
+          +'onclick="fleetPurgeTrip('+t.id+')">حذف</button></div>'
+          +(t.note?'<div style="color:#ffb37a;font-size:11px;">📝 '+esc(t.note)+'</div>':'')
+          +(t.reject_note?'<div style="color:#e8a0a4;font-size:11px;">⚠️ '+esc(t.reject_note)+'</div>':'')
+          +(ok&&!rej?'<div style="color:#38d9b9;font-size:10px;">✓ '+esc(t.verified_name||'')+'</div>':'')
+          +(!opn&&!rej?'<div style="display:flex;gap:6px;margin-top:7px;">'
+            +(ok?'':'<button style="flex:1;font-size:11px;padding:7px;background:#14705f;" onclick="fleetVerify('+t.id+')">اعتماد</button>')
+            +'<button class="secondary" style="flex:1;font-size:11px;padding:7px;color:#e8a0a4;" onclick="fleetReject('+t.id+')">تسجيل ملاحظة</button></div>':'')
+          +'</div>';
+      });
     });
     h+='</div>';
     h+='</div>';   /* /fmTripWrap */
