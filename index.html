@@ -5761,11 +5761,13 @@ window.neoRepairStreak = async function(ownerId, kind){
   if (!(await neoConfirm('استخدام الترميم؟',
       'سيُعيد سلسلتك ويستهلك ترميمك الوحيد لهذا الشهر.'))) return;
   const restore = Math.max(s.current || 0, 1);
-  await neoSafeUpsert('streaks', {
+  const repaired = await neoSafeUpsert('streaks', {
     owner_id:String(ownerId), owner_kind:kind, current:restore, best:Math.max(s.best||0, restore),
     last_date:s.last_date, frozen_date:null, repair_month:mon,
     total_days:s.total_days||0, updated_at:new Date().toISOString()
   }, 'owner_id,owner_kind');
+  /* neoSafeUpsert نفسها تُظهر تنبيه الفشل — هنا فقط لا نكذب بادّعاء النجاح ولا نستهلك ترميم الشهر لو فعلياً ما حُفظ */
+  if (!repaired) return;
   try{ neoPlay('done'); neoCheer(); }catch(e){}
   neoToast('🔧 رُمّمت سلسلتك — ' + restore + ' يوم', true);
   if (typeof renderStreakBox === 'function') renderStreakBox(ownerId, kind);
@@ -10806,7 +10808,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.08.19.10";
+const APP_VERSION = "2026.08.19.11";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -14464,6 +14466,9 @@ function SB(){
 function esc(s){ return String(s==null?'':s).replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
 function toast(m,ok){ try{ neoToast(m,ok); }catch(e){} }
 function nowISO(){ return new Date().toISOString(); }
+/* أُتيحت عالمياً — كانت هذي الدوال الثلاث نفسها معرَّفة محلياً بأربع وحدات منفصلة
+   (نسخ متطابقة بلا أي فرق سلوكي)، فبقية الوحدات تعتمد الآن على هذي بدل تكرارها */
+window.esc = esc; window.toast = toast; window.SB = SB;
 function fmt(t){
   if(!t) return '—';
   try{ var d=new Date(t);
@@ -15939,9 +15944,7 @@ window.fleetDelTask=async function(tid,vid){
 /* ══ ترتيب المواقع لمشرف الصالة — وحدة إضافية مستقلة ══ */
 (function(){
 'use strict';
-function SB(){ return window.supabaseClient; }
-function esc(s){ return String(s==null?'':s).replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
-function toast(m,ok){ try{ neoToast(m,ok); }catch(e){} }
+/* SB/esc/toast تُستخدم هنا من نسختها العالمية المُتاحة بوحدة التوصيل — لا تكرار محلي */
 var ORD=null;   /* { deptId, list:[{id,code,sort_order}] } */
 
 window.renderHallReorder = async function(){
@@ -16045,9 +16048,7 @@ window.hallReorderSave = async function(){
 /* ══ مجموعات الجداول — عناوين هرمية بعمق غير محدود · إضافة صرفة ══ */
 (function(){
 'use strict';
-function SB(){ return window.supabaseClient; }
-function esc(s){ return String(s==null?'':s).replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
-function toast(m,ok){ try{ neoToast(m,ok); }catch(e){} }
+/* SB/esc/toast تُستخدم هنا من نسختها العالمية المُتاحة بوحدة التوصيل — لا تكرار محلي */
 
 /* ── قراءة المجموعات وبناء الشجرة ── */
 window.neoGetGroups = async function(deptId){
@@ -16318,9 +16319,7 @@ window.neoSecAssign = async function(secId,deptId){
 /* ══ إخفاء أقسام مؤقتاً عن الصالة + التحكم بالسلاسل — إضافة صرفة ══ */
 (function(){
 'use strict';
-function SB(){ return window.supabaseClient; }
-function esc(s){ return String(s==null?'':s).replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
-function toast(m,ok){ try{ neoToast(m,ok); }catch(e){} }
+/* SB/esc/toast تُستخدم هنا من نسختها العالمية المُتاحة بوحدة التوصيل — لا تكرار محلي */
 
 /* ════════ ١) إخفاء الأقسام عن مشرف الصالة ════════ */
 var HID=null, HIDT=0;
