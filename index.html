@@ -10806,7 +10806,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.08.19.9";
+const APP_VERSION = "2026.08.19.10";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -14580,10 +14580,12 @@ async function fleetUploadProof(file, tripId, taskId, vehicleId, driverId){
   }
   return { path:path, url:url };
 }
+/* تُرجع مصفوفة صور لكل مهمة — الجدول أصلاً يقبل أكثر من صورة بالمهمة الواحدة
+   (كل رفعة تُدرَج كصف جديد بلا استبدال)، وكان العرض فقط يقتصر على واحدة */
 async function fleetGetProofs(tripId){
   try{
-    var r=await SB().from('fleet_task_proofs').select('*').eq('trip_id',tripId);
-    var m={}; (r.data||[]).forEach(function(x){ m[String(x.task_id)]=x; });
+    var r=await SB().from('fleet_task_proofs').select('*').eq('trip_id',tripId).order('created_at');
+    var m={}; (r.data||[]).forEach(function(x){ var k=String(x.task_id); (m[k]=m[k]||[]).push(x); });
     return m;
   }catch(e){ return {}; }
 }
@@ -14695,8 +14697,8 @@ window.renderDriverView = async function(profile){
         var oc=(trip&&trip.out_checks)||{}, ic=(trip&&trip.in_checks)||{};
         var proofs=trip?await fleetGetProofs(trip.id):{};
         var taskRow=function(t,on,phase){
-          var pr=proofs[String(t.id)];
-          var ready=!!pr;
+          var pl=proofs[String(t.id)]||[];
+          var ready=pl.length>0;
           return '<div style="padding:10px;margin-bottom:7px;border-radius:10px;'
             +'background:'+(on?'rgba(56,217,185,0.12)':'rgba(122,167,255,0.05)')+';">'
             +'<div style="display:flex;align-items:center;gap:9px;">'
@@ -14705,14 +14707,16 @@ window.renderDriverView = async function(profile){
             +(on?'✓':'')+'</span>'
             +'<span style="flex:1;color:#c8d4e2;font-size:13px;">'+esc(t.title)+'</span></div>'
             +(ready
-              ? '<div style="display:flex;align-items:center;gap:8px;margin-top:8px;">'
-                +'<img src="'+esc(pr.url)+'" style="width:52px;height:52px;object-fit:cover;border-radius:8px;'
-                +'border:1px solid rgba(56,217,185,0.4);" onclick="fleetViewProof(\''+esc(pr.url)+'\')">'
-                +'<span style="flex:1;color:#38d9b9;font-size:11px;">✓ تم إثبات المهمة بالصورة</span></div>'
+              ? '<div style="display:flex;align-items:center;gap:6px;margin-top:8px;flex-wrap:wrap;">'
+                +pl.map(function(p){
+                  return '<img src="'+esc(p.url)+'" style="width:52px;height:52px;object-fit:cover;border-radius:8px;'
+                    +'border:1px solid rgba(56,217,185,0.4);" onclick="fleetViewProof(\''+esc(p.url)+'\')">';
+                }).join('')
+                +'<span style="color:#38d9b9;font-size:11px;">✓ '+pl.length+' صورة</span></div>'
               : '<div style="color:#ffb37a;font-size:11px;margin-top:7px;">📷 بانتظار الصورة</div>')
             +'<div style="display:flex;gap:6px;margin-top:8px;">'
             +'<button class="secondary" style="flex:1;font-size:12px;padding:9px;" '
-            +'onclick="fleetCam('+trip.id+','+t.id+','+v.id+')">📷 '+(ready?'استبدال الصورة':'التقاط بالكاميرا')+'</button>'
+            +'onclick="fleetCam('+trip.id+','+t.id+','+v.id+')">📷 '+(ready?'إضافة صورة أخرى':'التقاط بالكاميرا')+'</button>'
             +'<button style="flex:1;font-size:12px;padding:9px;'
             +(ready?'':'opacity:.45;')+'background:'+(on?'#5a3a3a':'#14705f')+';" '
             +'onclick="fleetTaskDone('+trip.id+',\''+phase+'\','+t.id+','+(ready?1:0)+')">'
@@ -15007,19 +15011,20 @@ window.fleetTripDetail=async function(tripId){
       var b='<div style="color:'+color+';font-size:12px;font-weight:700;margin:12px 0 6px;">'+title+'</div>';
       if(!list.length) return b+'<div style="color:#5d6d80;font-size:11px;">لا توجد مهام</div>';
       list.forEach(function(x){
-        var on=!!checks[x.id], pr=proofs[String(x.id)];
+        var on=!!checks[x.id], pl=proofs[String(x.id)]||[];
         b+='<div style="padding:10px;margin-bottom:6px;border-radius:10px;'
           +'background:'+(on?'rgba(56,217,185,0.10)':'rgba(225,91,100,0.07)')+';">'
           +'<div style="display:flex;align-items:center;gap:8px;">'
           +'<span style="color:'+(on?'#38d9b9':'#e8a0a4')+';font-size:13px;">'+(on?'✓':'✗')+'</span>'
           +'<span style="flex:1;color:#c8d4e2;font-size:12px;">'+esc(x.title)+'</span></div>'
           +(on&&checks[x.id]?'<div style="color:#5d6d80;font-size:10px;margin-top:3px;">أُنجزت '+fmt(checks[x.id])+'</div>':'')
-          +(pr
-            ? '<div style="display:flex;align-items:center;gap:8px;margin-top:7px;">'
-              +'<img src="'+esc(pr.url)+'" onclick="fleetViewProof(\''+esc(pr.url)+'\')" '
-              +'style="width:56px;height:56px;object-fit:cover;border-radius:8px;border:1px solid rgba(56,217,185,0.4);">'
-              +'<div><div style="color:#38d9b9;font-size:11px;">📷 صورة إثبات</div>'
-              +'<div style="color:#5d6d80;font-size:10px;">'+fmt(pr.created_at)+'</div></div></div>'
+          +(pl.length
+            ? '<div style="display:flex;align-items:center;gap:8px;margin-top:7px;flex-wrap:wrap;">'
+              +pl.map(function(p){
+                return '<img src="'+esc(p.url)+'" onclick="fleetViewProof(\''+esc(p.url)+'\')" '
+                  +'style="width:56px;height:56px;object-fit:cover;border-radius:8px;border:1px solid rgba(56,217,185,0.4);">';
+              }).join('')
+              +'<div style="color:#38d9b9;font-size:11px;">📷 '+pl.length+' صورة</div></div>'
             : '<div style="color:#e8a0a4;font-size:11px;margin-top:6px;">📷 بلا صورة</div>')
           +'</div>';
       });
@@ -15172,6 +15177,7 @@ window.renderFleetSupView=async function(profile){
         +'<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:8px;">'
         +'<button class="secondary" style="font-size:11px;padding:7px 10px;" onclick="fleetTasksUI('+v.id+',\'sup\')">مهامها</button>'
         +'<button class="secondary" style="font-size:11px;padding:7px 10px;color:#9fd3ff;" onclick="fleetEditVehicle('+v.id+',\'sup\')">تعديل</button>'
+        +(v.holder_id?'<button class="secondary" style="font-size:11px;padding:7px 10px;color:#e8a0a4;" onclick="fleetForce('+v.id+',\'sup\')">فكّ القفل</button>':'')
         +'<button class="secondary" style="font-size:11px;padding:7px 10px;" onclick="fleetToggle('+v.id+','+(v.active?'false':'true')+',\'sup\')">'+(v.active?'تعطيل':'تفعيل')+'</button>'
         +'<button class="secondary" style="font-size:11px;padding:7px 10px;color:#f0b3b8;" onclick="fleetArchive('+v.id+',\'sup\')">حذف (أرشفة)</button>'
         +'</div></div>';
@@ -15319,16 +15325,19 @@ window.fleetReject=function(tid){
 
 window.fleetForce=async function(vid,from){
   var p=window.__fleetProfile; if(!p) return;
-  if(!confirm('فكّ قفل هذه المركبة وإنهاء رحلتها؟')) return;
-  try{
-    var vs=await getVehicles(true);
-    var v=vs.filter(function(x){ return String(x.id)===String(vid); })[0];
-    if(!v) return;
-    await forceRelease(v,p.name||'');
-    toast('فُكّ القفل',true);
-  }catch(e){ toast('تعذّر فكّ القفل'); }
-  if(from==='sup') await window.renderFleetSupView(p);
-  else await window.renderFleetManagerTab();
+  /* كانت تستخدم confirm() الأصلية — محجوبة بالمتصفح المدمج فترجع فوراً بلا فعل،
+     فيظهر الزر وكأنه لا يعمل. استُبدلت بنفس مربّع التأكيد المستخدم بباقي الشاشة. */
+  fleetConfirm('فكّ قفل هذه المركبة؟', 'ستُنهى رحلتها الحالية قسراً وتصبح متاحة من جديد.', async function(){
+    try{
+      var vs=await getVehicles(true);
+      var v=vs.filter(function(x){ return String(x.id)===String(vid); })[0];
+      if(!v) return;
+      await forceRelease(v,p.name||'');
+      toast('فُكّ القفل',true);
+    }catch(e){ toast('تعذّر فكّ القفل'); }
+    if(from==='sup') await window.renderFleetSupView(p);
+    else await window.renderFleetManagerTab();
+  });
 };
 
 /* ── مربّع إدخال بديل عن prompt (محجوب في المتصفح المدمج) ── */
