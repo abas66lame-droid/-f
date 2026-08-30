@@ -1872,7 +1872,7 @@ async function renderLocationsSection(deptId){
     const delBtn = canManage ? ` <span style="cursor:pointer;color:#ff7b7b;font-size:13px;" onclick="confirmDeleteClick(this, () => deleteLocation('${loc.id}','${deptId}'))">✕ حذف</span>` : '';
     rowsHtml += `
       <div class="item-row">
-        <div class="item-name">${loc.code}</div>
+        <div class="item-name">${esc(loc.code)}</div>
         ${delBtn}
       </div>`;
   }
@@ -1933,7 +1933,7 @@ async function renderCustomFieldsSection(deptId){
   for (const f of fields){
     rowsHtml += `
       <div class="item-row">
-        <div class="item-name">${f.name}</div>
+        <div class="item-name">${esc(f.name)}</div>
         <span style="cursor:pointer;color:#ff7b7b;font-size:13px;" onclick="confirmDeleteClick(this, () => deleteCustomField('${f.id}','${deptId}'))">✕ حذف</span>
       </div>`;
   }
@@ -2017,7 +2017,7 @@ async function renderIpadSection(deptId){
       cells += `<td><div class="check ${checked?'on':''}" id="ipadchk_${ip.id}_${f.key}" onclick="toggleIpadField('${ip.id}','${f.key}','${date}','${shift}')">${checked?'✓':''}</div></td>`;
     }
     const delBtn = canManage ? ` <span style="cursor:pointer;color:#ff7b7b;font-size:11px;" onclick="confirmDeleteClick(this, () => deleteIpad('${ip.id}','${deptId}'))">✕</span>` : '';
-    rowsHtml += `<tr><td class="code-cell">${ip.code}${delBtn}</td>${cells}</tr>`;
+    rowsHtml += `<tr><td class="code-cell">${esc(ip.code)}${delBtn}</td>${cells}</tr>`;
   }
 
   const manageHtml = canManage ? `
@@ -2108,7 +2108,7 @@ async function renderReaderSection(deptId){
       cells += `<td><div class="check ${checked?'on':''}" id="readerchk_${r.id}_${f.key}" onclick="toggleReaderField('${r.id}','${f.key}','${date}','${shift}')">${checked?'✓':''}</div></td>`;
     }
     const delBtn = canManage ? ` <span style="cursor:pointer;color:#ff7b7b;font-size:11px;" onclick="confirmDeleteClick(this, () => deleteReader('${r.id}','${deptId}'))">✕</span>` : '';
-    rowsHtml += `<tr><td class="code-cell">${r.code}${delBtn}</td>${cells}</tr>`;
+    rowsHtml += `<tr><td class="code-cell">${esc(r.code)}${delBtn}</td>${cells}</tr>`;
   }
 
   const manageHtml = canManage ? `
@@ -2199,7 +2199,7 @@ async function renderLaptopSection(deptId){
       cells += `<td><div class="check ${checked?'on':''}" id="laptopchk_${l.id}_${f.key}" onclick="toggleLaptopField('${l.id}','${f.key}','${date}','${shift}')">${checked?'✓':''}</div></td>`;
     }
     const delBtn = canManage ? ` <span style="cursor:pointer;color:#ff7b7b;font-size:11px;" onclick="confirmDeleteClick(this, () => deleteLaptop('${l.id}','${deptId}'))">✕</span>` : '';
-    rowsHtml += `<tr><td class="code-cell">${l.code}${delBtn}</td>${cells}</tr>`;
+    rowsHtml += `<tr><td class="code-cell">${esc(l.code)}${delBtn}</td>${cells}</tr>`;
   }
 
   const manageHtml = canManage ? `
@@ -2290,7 +2290,7 @@ async function renderIpadReaderDeviceSection(deptId){
       cells += `<td><div class="check ${checked?'on':''}" id="ipadreaderchk_${dv.id}_${f.key}" onclick="toggleIpadReaderDeviceField('${dv.id}','${f.key}','${date}','${shift}')">${checked?'✓':''}</div></td>`;
     }
     const delBtn = canManage ? ` <span style="cursor:pointer;color:#ff7b7b;font-size:11px;" onclick="confirmDeleteClick(this, () => deleteIpadReaderDevice('${dv.id}','${deptId}'))">✕</span>` : '';
-    rowsHtml += `<tr><td class="code-cell">${dv.code}${delBtn}</td>${cells}</tr>`;
+    rowsHtml += `<tr><td class="code-cell">${esc(dv.code)}${delBtn}</td>${cells}</tr>`;
   }
 
   const manageHtml = canManage ? `
@@ -2381,7 +2381,7 @@ async function renderPosDeviceSection(deptId){
       cells += `<td><div class="check ${checked?'on':''}" id="posdevicechk_${d.id}_${f.key}" onclick="togglePosDeviceField('${d.id}','${f.key}','${date}','${shift}')">${checked?'✓':''}</div></td>`;
     }
     const delBtn = canManage ? ` <span style="cursor:pointer;color:#ff7b7b;font-size:11px;" onclick="confirmDeleteClick(this, () => deletePosDevice('${d.id}','${deptId}'))">✕</span>` : '';
-    rowsHtml += `<tr><td class="code-cell">${d.code}${delBtn}</td>${cells}</tr>`;
+    rowsHtml += `<tr><td class="code-cell">${esc(d.code)}${delBtn}</td>${cells}</tr>`;
   }
 
   const manageHtml = canManage ? `
@@ -2561,7 +2561,7 @@ async function renderPointCriteriaManage(deptId){
   const criteria = await getPointCriteria(deptId);
   const rows = criteria.map(c => `
     <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 4px;border-bottom:1px solid rgba(122,167,255,0.12);">
-      <span style="color:#c8d4e2;">${c.name}</span>
+      <span style="color:#c8d4e2;">${esc(c.name)}</span>
       <span style="cursor:pointer;color:#ff7b7b;font-size:12px;" onclick="confirmDeleteClick(this, async () => { await deletePointCriterionRow('${c.id}'); await renderPointCriteriaManage('${deptId}'); })">✕ حذف</span>
     </div>`).join('');
   el.innerHTML = `
@@ -2705,7 +2705,7 @@ async function renderTasksSection(deptId){
     const delBtn = canManage ? ` <span style="cursor:pointer;color:#ff7b7b;font-size:11px;" onclick="confirmDeleteClick(this, () => deleteDailyTask('${t.id}','${deptId}'))">✕</span>` : '';
     rowsHtml += `
       <div class="item-row ${checked?'checked':'unchecked'}">
-        <div class="item-name">${t.name}${delBtn}</div>
+        <div class="item-name">${esc(t.name)}${delBtn}</div>
         <div class="check ${checked?'on':''}" id="taskchk_${t.id}" onclick="toggleTaskLog('${t.id}','${date}','${shift}')">${checked?'✓':''}</div>
       </div>`;
   }
@@ -2926,10 +2926,10 @@ async function renderPointsSection(deptId){
       const val = (raw === null || raw === undefined) ? null : raw;
       if (val !== null){ total += val; hasAny = true; }
       const display = val === null ? '—' : val;
-      cells += `<td><div class="point-cell" onclick="openPointSlider('${s.id}','${deptId}','${date}','${c.id}','${c.name.replace(/'/g,"\\'")}', ${val === null ? 'null' : val})">${display}</div></td>`;
+      cells += `<td><div class="point-cell" onclick="openPointSlider('${s.id}','${deptId}','${date}','${c.id}','${esc(c.name.replace(/'/g,"\\'"))}', ${val === null ? 'null' : val})">${display}</div></td>`;
     }
     const totalColor = !hasAny ? '#999' : (total/(maxTotal||1)) >= 0.8 ? '#3ecf6b' : (total/(maxTotal||1)) >= 0.5 ? '#ffcf5c' : '#ff7b7b';
-    rowsHtml += `<tr><td class="code-cell">${s.name}</td>${cells}<td style="color:${totalColor}; font-weight:bold;">${hasAny ? total : '—'}${maxTotal ? '/'+maxTotal : ''}</td></tr>`;
+    rowsHtml += `<tr><td class="code-cell">${esc(s.name)}</td>${cells}<td style="color:${totalColor}; font-weight:bold;">${hasAny ? total : '—'}${maxTotal ? '/'+maxTotal : ''}</td></tr>`;
   }
 
   const manageHtml = currentManageMode ? `
@@ -2937,7 +2937,7 @@ async function renderPointsSection(deptId){
       <div style="font-size:12px; color:#999; margin-bottom:6px;">إدارة معايير التقييم لهذا القسم</div>
       ${criteria.map(c => `
         <div class="item-row">
-          <div class="item-name">${c.name}</div>
+          <div class="item-name">${esc(c.name)}</div>
           <span style="cursor:pointer;color:#ff7b7b;font-size:13px;" onclick="confirmDeleteClick(this, async () => { await deletePointCriterionRow('${c.id}'); await renderPointsSection('${deptId}'); })">✕ حذف</span>
         </div>`).join('')}
       <div style="margin-top:8px; display:flex; gap:6px;">
@@ -2955,7 +2955,7 @@ async function renderPointsSection(deptId){
       <table>
         <tr>
           <th>الموظف</th>
-          ${criteria.map(c=>`<th>${c.name}</th>`).join('')}
+          ${criteria.map(c=>`<th>${esc(c.name)}</th>`).join('')}
           <th>المجموع</th>
         </tr>
         ${criteria.length === 0
@@ -3233,7 +3233,7 @@ async function renderStaffSection(deptId){
     const downBtn = canManage && idx < staffList.length - 1 ? ` <span style="cursor:pointer;color:#8ab4f8;font-size:13px;" onclick="moveStaffOrder('${s.id}','${deptId}','down')" title="نقل لأسفل">▼</span>` : '';
     const replaceBtn = canManage ? ` <span style="cursor:pointer;color:#3ecf6b;font-size:11px;" onclick="showReplaceStaffForm('${s.id}','${deptId}','${safeName}')" title="استبدال باسم موظف جديد بدون فقدان سجله">✏️</span>` : '';
     const delBtn = canManage ? ` <span style="cursor:pointer;color:#ff7b7b;font-size:11px;" onclick="confirmDeleteClick(this, () => deleteStaffMember('${s.id}','${deptId}'))">✕</span>` : '';
-    rowsHtml += `<tr><td class="code-cell" id="staffnamecell_${s.id}">${s.name}${upBtn}${downBtn}${replaceBtn}${delBtn}</td>${cells}</tr>`;
+    rowsHtml += `<tr><td class="code-cell" id="staffnamecell_${s.id}">${esc(s.name)}${upBtn}${downBtn}${replaceBtn}${delBtn}</td>${cells}</tr>`;
   }
 
   let criteriaManagerHtml = '';
@@ -3792,7 +3792,7 @@ async function renderShiftView(profile){
   shiftRowsState = { deptId, date, shift: currentShiftChoice, locations, customFields: cleanCF, logsMap };
   const rowsHtml = buildShiftProgressiveRows();
 
-  const customHeaders = cleanCF.map(cf => `<th>${cf.name}</th>`).join('');
+  const customHeaders = cleanCF.map(cf => `<th>${esc(cf.name)}</th>`).join('');
 
   try{ await neoLoadSavedStats(date); }catch(e){}
   el.innerHTML = `
@@ -3913,13 +3913,13 @@ function buildShiftProgressiveRows(){
       cells += `<td><div class="check ${s==='yes'?'on':s==='no'?'bad':''}" onclick="shiftCycleField('${loc.id}','${String(cf.id)}',true)">${s==='yes'?'✓':s==='no'?'✗':''}</div></td>`;
       if (s === 'no') wrongList.push({ key: 'extra_'+cf.id, label: cf.name });
     }
-    html += `<tr><td class="code-cell">${loc.code}</td>${cells}</tr>`;
+    html += `<tr><td class="code-cell">${esc(loc.code)}</td>${cells}</tr>`;
     // مربع ملاحظة إجباري مباشرة تحت الصف لكل خانة ✗
     for (const w of wrongList){
       const val = (fn[w.key]||'').replace(/"/g,'&quot;');
       html += `<tr><td colspan="${totalCols}" style="padding:4px 8px;">
         <input type="text" style="width:100%; border:2px solid #ff5c5c; background:#241a1a; border-radius:8px; padding:8px;"
-          placeholder="⚠️ ملاحظة إلزامية عن (${w.label})" value="${val}"
+          placeholder="⚠️ ملاحظة إلزامية عن (${esc(w.label)})" value="${val}"
           onchange="shiftSaveFieldNote('${loc.id}','${w.key}', this.value)">
       </td></tr>`;
     }
@@ -3940,7 +3940,7 @@ function refreshShiftTable(){
   const table = document.querySelector('#shiftView .table-wrap table');
   if (!table) return;
   const st = shiftRowsState;
-  const customHeaders = st.customFields.map(cf => `<th>${cf.name}</th>`).join('');
+  const customHeaders = st.customFields.map(cf => `<th>${esc(cf.name)}</th>`).join('');
   table.innerHTML = `<tr><th>الموقع</th>${FIELD_DEFS.map(f=>`<th>${f.label}</th>`).join('')}${customHeaders}</tr>` + (buildShiftProgressiveRows() || '<tr><td colspan="8">لا توجد مواقع لهذا القسم</td></tr>');
 }
 
@@ -4055,12 +4055,12 @@ function progBuildRows(cfg){
       const nv = (log.notes||'').replace(/"/g,'&quot;');
       cells += `<td><input class="notes-input" value="${nv}" onchange="progSaveGeneralNote('${cfg.key}','${it.id}', this.value)"></td>`;
     }
-    html += `<tr><td class="code-cell">${it.label}</td>${cells}</tr>`;
+    html += `<tr><td class="code-cell">${esc(it.label)}</td>${cells}</tr>`;
     for (const w of wrong){
       const val = (fn[w.key]||'').replace(/"/g,'&quot;');
       html += `<tr><td colspan="${totalCols}" style="padding:4px 8px;">
         <input type="text" style="width:100%; border:2px solid #ff5c5c; background:#241a1a; border-radius:8px; padding:8px;"
-          placeholder="⚠️ ملاحظة إلزامية عن (${w.label})" value="${val}"
+          placeholder="⚠️ ملاحظة إلزامية عن (${esc(w.label)})" value="${val}"
           onchange="progSaveNote('${cfg.key}','${it.id}','${w.key}', this.value)">
       </td></tr>`;
     }
@@ -4518,7 +4518,7 @@ function buildStatusTable(items, fieldDefs, rowLabelFn, logsById){
     const hm = log?.hall_missing_notes || {};
     Object.keys(hm).forEach(k => { if (labelByKey[k] && (hm[k]||'').trim()) parts.push(`🏬 ${labelByKey[k]}: ${String(hm[k]).replace(/</g,'&lt;')}`); });
     const notesCell = `<td style="color:#ffb84d; font-size:12px; white-space:normal; text-align:right;">${parts.join('<br>')}</td>`;
-    return `<tr><td class="code-cell">${rowLabelFn(item)}</td>${cells}${notesCell}</tr>`;
+    return `<tr><td class="code-cell">${esc(rowLabelFn(item))}</td>${cells}${notesCell}</tr>`;
   }).join('');
   const html = `<div class="table-wrap roomy-table"><table>
     <tr><th>العنصر</th>${fieldDefs.map(f=>`<th>${f.label}</th>`).join('')}<th>ملاحظات</th></tr>
@@ -4555,7 +4555,7 @@ function missRowsHtml(table){
       const hasNote = (hallFn[f.key]||'').trim();
       cells += `<td onclick="hallMissOpenNote('${table}','${it.id}','${f.key}')" style="cursor:pointer;">${done?'<span style="color:#3ecf6b;">✓</span>':'<span style="color:#ff7b7b;">✗</span>'}${hasNote?' <span style="font-size:10px;">📝</span>':''}</td>`;
     }
-    rows += `<tr><td class="code-cell">${cfg.rowLabelFn(it)}</td>${cells}</tr>`;
+    rows += `<tr><td class="code-cell">${esc(cfg.rowLabelFn(it))}</td>${cells}</tr>`;
     // ملاحظات مسؤول الشفت (عرض فقط)
     const parts = [];
     if (log.notes) parts.push('👷 ' + String(log.notes).replace(/</g,'&lt;'));
@@ -4631,12 +4631,12 @@ async function renderCustomSectionsManage(deptId){
   for (const sec of secs){
     const cols = await getSectionCols(sec.id);
     const rows = await getSectionRows(sec.id);
-    const colsHtml = cols.map(c => `<span style="display:inline-block; background:#2b3140; padding:4px 10px; border-radius:14px; margin:2px; font-size:12px;">${c.name} <span style="cursor:pointer;color:#ff7b7b;" onclick="deleteSectionCol('${c.id}','${deptId}')">✕</span></span>`).join('') || '<span style="color:#777; font-size:11px;">لا أعمدة بعد</span>';
-    const rowsHtml = rows.map(r => `<div style="display:flex; justify-content:space-between; padding:3px 0; font-size:12px;"><span>${r.name}</span><span style="cursor:pointer;color:#ff7b7b;" onclick="deleteSectionRow('${r.id}','${deptId}')">✕</span></div>`).join('') || '<div style="color:#777; font-size:11px;">لا صفوف بعد</div>';
+    const colsHtml = cols.map(c => `<span style="display:inline-block; background:#2b3140; padding:4px 10px; border-radius:14px; margin:2px; font-size:12px;">${esc(c.name)} <span style="cursor:pointer;color:#ff7b7b;" onclick="deleteSectionCol('${c.id}','${deptId}')">✕</span></span>`).join('') || '<span style="color:#777; font-size:11px;">لا أعمدة بعد</span>';
+    const rowsHtml = rows.map(r => `<div style="display:flex; justify-content:space-between; padding:3px 0; font-size:12px;"><span>${esc(r.name)}</span><span style="cursor:pointer;color:#ff7b7b;" onclick="deleteSectionRow('${r.id}','${deptId}')">✕</span></div>`).join('') || '<div style="color:#777; font-size:11px;">لا صفوف بعد</div>';
     secsHtml += `
       <div style="border:1px solid #2a2e37; border-radius:10px; padding:12px; margin-bottom:12px;">
         <div style="display:flex; justify-content:space-between; align-items:center;">
-          <h3 style="margin:0;">🧾 ${sec.title}</h3>
+          <h3 style="margin:0;">🧾 ${esc(sec.title)}</h3>
           <span style="cursor:pointer;color:#ff7b7b;font-size:12px;" onclick="confirmDeleteClick(this, () => deleteCustomSection('${sec.id}','${deptId}'))">✕ حذف الجدول</span>
         </div>
         <div style="color:#9fd3ff; font-size:12px; margin:8px 0 4px;">الأعمدة:</div>
@@ -4717,9 +4717,9 @@ async function renderCustomSectionsShift(deptId){
     const logsMap = await getSectionLogsMap(rows.map(r=>r.id), date, shift);
     Object.values(logsMap).forEach(flattenSectionLog);
     const cfgKey = 'cs_' + sec.id;
-    const headerHtml = `<tr><th>العنصر</th>${cols.map(c=>`<th>${c.name}</th>`).join('')}</tr>`;
+    const headerHtml = `<tr><th>العنصر</th>${cols.map(c=>`<th>${esc(c.name)}</th>`).join('')}</tr>`;
     const rowsHtml = progSetup({ key: cfgKey, table: 'custom_section_logs', idCol: 'row_id', jsonValues: true, date, shift, fields: cols.map(c=>({key:c.id, label:c.name})), items: rows.map(r=>({id:r.id, label:r.name})), logsMap, tableId: 'progT_'+cfgKey, headerHtml });
-    return `<h3>🧾 ${sec.title} — ${date}</h3>
+    return `<h3>🧾 ${esc(sec.title)} — ${date}</h3>
       <div class="table-wrap"><table id="progT_${cfgKey}">${headerHtml}${rowsHtml || '<tr><td colspan="9">لا صفوف</td></tr>'}</table></div>`;
   };
 
@@ -4765,7 +4765,7 @@ async function renderCustomSectionsMonitor(deptId){
       const logsMap = await getSectionLogsMap(rows.map(r=>r.id), date, 'morning');
       Object.values(logsMap).forEach(flattenSectionLog);
       const t = buildStatusTable(rows, fields, r => r.name, logsMap);
-      html += `<div class="subhead">${sec.title}</div>${t.html}`;
+      html += `<div class="subhead">${esc(sec.title)}</div>${t.html}`;
     }
   }
   if (!any){ el.style.display = 'none'; return; }
@@ -4939,7 +4939,7 @@ async function renderHallMissingList(){
     cardsHtml += `
       <div class="card" id="hmc_${dept.id}" style="margin-bottom:14px; opacity:0.6;">
         <div style="display:flex; justify-content:space-between; align-items:center;">
-          <h3 style="margin:0;">${dept.name}</h3>
+          <h3 style="margin:0;">${esc(dept.name)}</h3>
           <span class="dept-summary-badge" id="hmb_${dept.id}" style="opacity:.5;">…</span>
         </div>
       </div>`;
@@ -5262,7 +5262,7 @@ async function showHallMissingDetail(deptId){
       <button class="secondary" onclick="loadHallMissing()">◀ رجوع لكل الأقسام</button>
       <button class="secondary" onclick="neoOpenPO('${deptId}','${(dept.name||'').replace(/'/g,'')}')" style="margin-right:6px;color:#38d9b9;border-color:rgba(56,217,185,0.45);">⇅ ترتيبي</button>
       <div style="display:flex; justify-content:space-between; align-items:center; margin-top:12px;">
-        <h3 style="margin:0;">${dept.name}</h3>
+        <h3 style="margin:0;">${esc(dept.name)}</h3>
         <span class="dept-summary-badge" style="${totalMissing===0 ? 'background:#17402a; color:#3ecf6b;' : ''}">${totalMissing===0 ? '✅ مكتمل' : `${totalMissing} ناقص`}</span>
       </div>
       ${sectionsHtml || '<div style="color:#999; margin-top:8px;">لا توجد عناصر مسجلة</div>'}
@@ -5320,13 +5320,13 @@ function hallProgBuildRows(table){
       const shiftYes = (f.key === '__task') ? (log.done === true || log.completed === true || log['__task'] === true) : (log[f.key] === true);
       const hasRep = ('__report_'+f.key) in fn;
       const repOn = (typeof neoReportsEnabled !== 'function') || neoReportsEnabled();
-      const repBtn = !repOn ? '' : `<div onclick="neoReport('${table}','${it.id}','${f.key}','${(f.label||'').replace(/'/g,'')}')" title="إبلاغ عن هذه الخانة" style="font-size:13px;cursor:pointer;margin-top:3px;text-align:center;opacity:${hasRep?1:0.5};">${hasRep?'🚨':'🚨'}</div>`;
+      const repBtn = !repOn ? '' : `<div onclick="neoReport('${table}','${it.id}','${f.key}','${esc((f.label||'').replace(/'/g,''))}')" title="إبلاغ عن هذه الخانة" style="font-size:13px;cursor:pointer;margin-top:3px;text-align:center;opacity:${hasRep?1:0.5};">${hasRep?'🚨':'🚨'}</div>`;
       cells += cfg.locked
         ? `<td><div class="check ${s==='yes'?'on':s==='no'?'bad':''}" style="opacity:0.6;">${mark}</div>${repBtn}</td>`
         : `<td><div class="check ${s==='yes'?'on':s==='no'?'bad':''}" onclick="hallProgCycle('${table}','${it.id}','${f.key}')">${mark}</div>${repBtn}</td>`;
       if (s === 'no') wrong.push(f);
     }
-    html += `<tr><td class="code-cell">${cfg.rowLabelFn(it)}</td>${cells}</tr>`;
+    html += `<tr><td class="code-cell">${esc(cfg.rowLabelFn(it))}</td>${cells}</tr>`;
     for (const w of wrong){
       const val = (fn[w.key]||'').replace(/"/g,'&quot;');
       html += cfg.locked
@@ -5529,7 +5529,7 @@ async function renderHallAuditList(){
     cardsHtml += `
       <div class="card dept-card" onclick="showHallAuditDetail('${dept.id}')" style="margin-bottom:14px;">
         <div style="display:flex; justify-content:space-between; align-items:center;">
-          <h3 style="margin:0;">${dept.name}</h3>
+          <h3 style="margin:0;">${esc(dept.name)}</h3>
           <span class="dept-summary-badge" id="hab_${dept.id}" style="opacity:.5;">…</span>
         </div>
       </div>`;
@@ -6274,7 +6274,7 @@ const inDept = (arr) => (arr || []).filter(x => String(x.department_id) === Stri
       <button class="secondary" onclick="loadHallAudit()">◀ رجوع لكل الأقسام</button>
       <button onclick="hallSaveAndBack()" style="margin-right:6px;background:#14705f;">💾 حفظ وإنهاء التدقيق</button>
       ${typeof neoHallPctBox === 'function' ? '<div style="margin-top:10px;">' + neoHallPctBox() + '</div>' : ''}
-      <h3 style="margin:12px 0 4px;">${dept.name}</h3>
+      <h3 style="margin:12px 0 4px;">${esc(dept.name)}</h3>
       ${locked
         ? '<div class="insight">✅ خلّصت تدقيق هذا القسم بالكامل — الخانات مقفلة للعرض فقط، ونواقص هذا القسم صارت متاحة من تبويب "مراقبة النواقص".</div>'
         : '<div style="color:#999; font-size:11px; margin-bottom:6px;">راجع كل خانة بنفسك بالموقع وعلّم عليها — بدون ما تشوف جواب مسؤول الشفت</div>'}
@@ -6479,7 +6479,7 @@ async function renderSalesTrend(){
         </div>
         <select id="trDept" onchange="trendDept=this.value; renderSalesTrend();" style="width:100%;font-size:13px;">
           <option value="all"${trendDept==='all'?' selected':''}>📊 ${trendMode==='hall'?'كل المشرفين (المتوسط)':'كل الأقسام (المتوسط)'}</option>
-          ${(trendMode==='hall' ? hallList : depts).map(d => `<option value="${d.id}"${String(trendDept)===String(d.id)?' selected':''}>${d.name}</option>`).join('')}
+          ${(trendMode==='hall' ? hallList : depts).map(d => `<option value="${d.id}"${String(trendDept)===String(d.id)?' selected':''}>${esc(d.name)}</option>`).join('')}
         </select>
       </div>
 
@@ -10808,7 +10808,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.08.19.11";
+const APP_VERSION = "2026.08.19.12";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
