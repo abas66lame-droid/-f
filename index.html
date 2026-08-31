@@ -6517,10 +6517,10 @@ async function renderSalesTrend(){
             <div style="color:#38d9b9;font-size:16px;font-weight:800;">${bestDay?dLabel(bestDay.day):'—'} — ${bestDay?bestDay.v:0}٪</div></div>
           <div style="background:rgba(225,91,100,0.10);border-radius:9px;padding:9px;text-align:center;">
             <div style="color:#7487a0;font-size:10px;">أضعف قسم</div>
-            <div style="color:#e8a0a4;font-size:14px;font-weight:800;">${worstDept.name} — ${worstDept.avg}٪</div></div>
+            <div style="color:#e8a0a4;font-size:14px;font-weight:800;">${esc(worstDept.name)} — ${worstDept.avg}٪</div></div>
           <div style="background:rgba(240,179,35,0.10);border-radius:9px;padding:9px;text-align:center;">
             <div style="color:#7487a0;font-size:10px;">أفضل قسم</div>
-            <div style="color:#f0b323;font-size:14px;font-weight:800;">${bestDept.name} — ${bestDept.avg}٪</div></div>
+            <div style="color:#f0b323;font-size:14px;font-weight:800;">${esc(bestDept.name)} — ${bestDept.avg}٪</div></div>
         </div>
         <div style="text-align:center;color:#8fa3b8;font-size:11px;margin-bottom:10px;">متوسط الدورة: <b style="color:#c8d4e2;">${mAvg}٪</b></div>
 
@@ -6533,7 +6533,7 @@ async function renderSalesTrend(){
             ${deptSeries.map(d => `
             <tr onclick="trendDept='${d.id}'; renderSalesTrend();" style="cursor:pointer;">
               <td style="position:sticky;inset-inline-end:0;background:#0a121e;color:#c8d4e2;padding:6px 10px;white-space:nowrap;
-                border-inline-end:2px solid ${d.color};">${d.name}</td>
+                border-inline-end:2px solid ${d.color};">${esc(d.name)}</td>
               ${d.series.map(v => v===null
                 ? `<td style="background:rgba(122,167,255,0.05);color:#3a4757;text-align:center;padding:5px 2px;">·</td>`
                 : `<td style="background:${bucket(v)}22;color:${bucket(v)};text-align:center;padding:5px 2px;font-weight:700;">${v}</td>`
@@ -6996,7 +6996,7 @@ async function renderHallManagerReport(userId, userName){
         byDept += `
           <div style="border-bottom:1px solid rgba(122,167,255,0.12);padding:9px 2px;">
             <div style="display:flex;justify-content:space-between;align-items:center;">
-              <span style="color:#c8d4e2;font-size:12px;">${d.name}</span>
+              <span style="color:#c8d4e2;font-size:12px;">${esc(d.name)}</span>
               <b style="color:${c};font-size:14px;">${p}٪</b>
             </div>
             <div style="height:5px;border-radius:3px;background:rgba(122,167,255,0.15);overflow:hidden;margin-top:5px;">
@@ -7197,7 +7197,7 @@ async function renderSalesWeeklyReport(){
         ${active.map((r,i) => `
           <div style="border-bottom:1px solid rgba(122,167,255,0.12);padding:10px 2px;">
             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
-              <span style="color:#c8d4e2;font-size:13px;cursor:pointer;" onclick="neoOpenAI('dept','${r.id}','${String(r.name||'').replace(/'/g,'')}')"><b style="color:#5d6d80;">${i+1}.</b> ${r.name} <span style="color:#7cc9ff;font-size:10px;">🤖</span></span>
+              <span style="color:#c8d4e2;font-size:13px;cursor:pointer;" onclick="neoOpenAI('dept','${r.id}','${esc(String(r.name||'').replace(/'/g,''))}')"><b style="color:#5d6d80;">${i+1}.</b> ${esc(r.name)} <span style="color:#7cc9ff;font-size:10px;">🤖</span></span>
               <span style="display:flex;gap:9px;align-items:center;">
                 <span style="font-size:11px;">${arrow(r.diff)}</span>
                 <b style="color:${r.cur>=85?'#3ecf6b':r.cur>=60?'#d3a04f':'#e15b64'};font-size:15px;">${r.cur}٪</b>
@@ -7224,7 +7224,7 @@ async function renderSalesWeeklyReport(){
         ${hallRows.map((r,i) => `
           <div style="border-bottom:1px solid rgba(122,167,255,0.12);padding:10px 2px;">
             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
-              <span style="color:#c8d4e2;font-size:13px;"><b style="color:#5d6d80;">${i+1}.</b> ${r.name}</span>
+              <span style="color:#c8d4e2;font-size:13px;"><b style="color:#5d6d80;">${i+1}.</b> ${esc(r.name)}</span>
               <b style="color:${r.cur>=85?'#3ecf6b':r.cur>=60?'#d3a04f':'#e15b64'};font-size:15px;">${r.cur}٪</b>
             </div>
             <div style="display:flex;gap:6px;margin-top:7px;">
@@ -7326,7 +7326,7 @@ async function buildSalesDeptCardsHtml(date, returnTab){
       : '<span class="badge ' + badgeClass + '">' + pct + '%</span>';
     cardsHtml += `
       <div class="card dept-card" onclick="salesDetailReturnTab='${returnTab}'; openSalesDept('${dept.id}')">
-        <h3>${dept.name}</h3>
+        <h3>${esc(dept.name)}</h3>
         <div>نسبة الإنجاز العامة: ${pctHtml}</div>
       </div>`;
   }
@@ -7854,7 +7854,7 @@ function renderSalesChatMessages(){
   if (!box) return;
   box.innerHTML = salesChatHistory.map(m => {
     const isUser = m.role === 'user';
-    return `<div style="align-self:${isUser ? 'flex-end' : 'flex-start'}; max-width:85%; background:${isUser ? '#ff6f00' : '#2b3140'}; color:${isUser ? '#fff' : '#eee'}; padding:8px 12px; border-radius:12px; white-space:pre-wrap; font-size:13px; line-height:1.7;">${m.content}</div>`;
+    return `<div style="align-self:${isUser ? 'flex-end' : 'flex-start'}; max-width:85%; background:${isUser ? '#ff6f00' : '#2b3140'}; color:${isUser ? '#fff' : '#eee'}; padding:8px 12px; border-radius:12px; white-space:pre-wrap; font-size:13px; line-height:1.7;">${esc(m.content)}</div>`;
   }).join('');
   box.scrollTop = box.scrollHeight;
 }
@@ -7945,13 +7945,13 @@ async function renderSalesLeaderboardTab(period){
     (depts||[]).forEach(dept => {
       const staffInDept = (byDept[dept.id] || []).sort((a,b) => b.total_points - a.total_points);
       if (!staffInDept.length) return;
-      listHtml += `<div class="subhead" style="margin-top:16px;">${dept.name}</div>`;
+      listHtml += `<div class="subhead" style="margin-top:16px;">${esc(dept.name)}</div>`;
       listHtml += staffInDept.map((s, i) => `
         <div class="card" style="display:flex; justify-content:space-between; align-items:center; padding:12px 16px;">
           <div style="display:flex; align-items:center; gap:10px;">
             <div style="font-size:18px; width:26px; text-align:center;">${medals[i] || (i+1)}</div>
             <div>
-              <div style="font-weight:bold;">${s.name}</div>
+              <div style="font-weight:bold;">${esc(s.name)}</div>
               <div style="font-size:11px; color:#999;">${s.days_counted} يوم مُقيّم</div>
             </div>
           </div>
@@ -8410,7 +8410,7 @@ async function renderSalesDeptMissingDetail(deptId, profileId){
       const sN = ((tl?.field_notes||{})['checked']||'').trim(); if (sN) np.push('👷 ' + sN.replace(/</g,'&lt;'));
       const hN = ((tl?.hall_missing_notes||{})['checked']||'').trim(); if (hN) np.push('🏬 ' + hN.replace(/</g,'&lt;'));
       const noteHtml = np.length ? `<div style="color:#ffb84d; font-size:11px;">${np.join('<br>')}</div>` : '';
-      return `<tr><td class="code-cell">${t.name}</td><td>${done ? '<span style="color:#3ecf6b;">✓</span>' : '<span style="color:#ff7b7b;">✗</span>'}${noteHtml}</td></tr>`;
+      return `<tr><td class="code-cell">${esc(t.name)}</td><td>${done ? '<span style="color:#3ecf6b;">✓</span>' : '<span style="color:#ff7b7b;">✗</span>'}${noteHtml}</td></tr>`;
     }).join('');
     const tasksTable = tasksInDept.length ? `<div class="table-wrap roomy-table"><table><tr><th>المهمة</th><th>الحالة</th></tr>${taskRows}</table></div>` : '';
 
@@ -8542,7 +8542,7 @@ async function renderSalesHallAuditDetail(deptId, profileId){
       const tNote = ((tl?.hall_field_notes||{})['__task']||'').trim();
       if (!verified && !tNote) tasksNotVerified++;
       const noteHtml = tNote ? `<div style="color:#ffb84d; font-size:11px;">⚠️ ${tNote.replace(/</g,'&lt;')}</div>` : '';
-      return `<tr><td class="code-cell">${t.name}</td><td>${verified ? '<span style="color:#3ecf6b;">✓</span>' : '<span style="color:#ff7b7b;">✗</span>'}${noteHtml}</td></tr>`;
+      return `<tr><td class="code-cell">${esc(t.name)}</td><td>${verified ? '<span style="color:#3ecf6b;">✓</span>' : '<span style="color:#ff7b7b;">✗</span>'}${noteHtml}</td></tr>`;
     }).join('');
     const tasksTable = tasksInDept.length ? `<div class="table-wrap roomy-table"><table><tr><th>المهمة</th><th>راجعها مسؤول الصالة؟</th></tr>${taskRows}</table></div>` : '';
 
@@ -8589,7 +8589,7 @@ async function renderEditManagerForm(profileId, role){
       cachedSelectResponse('departments', 'departments', '*', 'id')
     ]);
     const currentDeptId = (profile?.department_ids && profile.department_ids[0]) || '';
-    const deptOptions = (depts||[]).map(d => `<option value="${d.id}" ${String(d.id)===String(currentDeptId)?'selected':''}>${d.name}</option>`).join('');
+    const deptOptions = (depts||[]).map(d => `<option value="${d.id}" ${String(d.id)===String(currentDeptId)?'selected':''}>${esc(d.name)}</option>`).join('');
     const deptFieldHtml = role === 'shift' ? `
       <label style="font-size:12px; color:#999; display:block; margin-top:10px;">القسم المسؤول عنه</label>
       <select id="editManagerDept">
@@ -9050,7 +9050,7 @@ async function loadStaffRange(range){
     if (pct < worstStaffPct){ worstStaffPct = pct; worstStaffName = s.name; worstStaffDept = s.departments?.name || ''; }
     const badgeClass = pct>=80?'good':pct>=50?'mid':'bad';
     rowsHtml += `<tr>
-      <td>${s.name}</td>
+      <td>${esc(s.name)}</td>
       <td>${s.departments?.name || ''}</td>
       <td>${checked}/${totalPossible}</td>
       <td><span class="badge ${badgeClass}">${pct}%</span></td>
@@ -9152,7 +9152,7 @@ async function loadSalesRange(range){
     const deptWorstLabel = deptWorstCount > 0 ? (FIELD_DEFS.find(f=>f.key===deptWorstField)?.label || deptWorstField) : '—';
 
     rowsHtml += `<tr>
-      <td>${dept.name}</td>
+      <td>${esc(dept.name)}</td>
       <td>${locations.length}</td>
       <td>${checkedFields}/${totalFieldsPossible}</td>
       <td><span class="badge ${badgeClass}">${pct}%</span></td>
@@ -9246,7 +9246,7 @@ async function loadTaskRange(range){
     if (pct < worstPct){ worstPct = pct; worstDept = dept.name; }
     const badgeClass = pct>=80?'good':pct>=50?'mid':'bad';
     rowsHtml += `<tr>
-      <td>${dept.name}</td>
+      <td>${esc(dept.name)}</td>
       <td>${tasks.length}</td>
       <td>${checked}/${totalPossible}</td>
       <td><span class="badge ${badgeClass}">${pct}%</span></td>
@@ -9298,7 +9298,7 @@ async function loadIpadRange(range){
     const pct = totalPossible ? Math.round((checked/totalPossible)*100) : 0;
     const negatives = totalPossible - checked;
     const badgeClass = pct>=80?'good':pct>=50?'mid':'bad';
-    rowsHtml += `<tr><td>${dept.name}</td><td>${ipadIds.length}</td><td>${checked}/${totalPossible}</td><td><span class="badge ${badgeClass}">${pct}%</span></td><td style="color:${negatives>0?'#ff7b7b':'#3ecf6b'}">${negatives}</td></tr>`;
+    rowsHtml += `<tr><td>${esc(dept.name)}</td><td>${ipadIds.length}</td><td>${checked}/${totalPossible}</td><td><span class="badge ${badgeClass}">${pct}%</span></td><td style="color:${negatives>0?'#ff7b7b':'#3ecf6b'}">${negatives}</td></tr>`;
   }
   wrap.innerHTML = `<div class="table-wrap"><table><tr><th>القسم</th><th>عدد الأجهزة</th><th>منجز/المتوقع</th><th>نسبة الإنجاز</th><th>سلبيات</th></tr>${rowsHtml}</table></div>`;
 }
@@ -9333,7 +9333,7 @@ async function loadReaderRange(range){
     const pct = totalPossible ? Math.round((checked/totalPossible)*100) : 0;
     const negatives = totalPossible - checked;
     const badgeClass = pct>=80?'good':pct>=50?'mid':'bad';
-    rowsHtml += `<tr><td>${dept.name}</td><td>${readerIds.length}</td><td>${checked}/${totalPossible}</td><td><span class="badge ${badgeClass}">${pct}%</span></td><td style="color:${negatives>0?'#ff7b7b':'#3ecf6b'}">${negatives}</td></tr>`;
+    rowsHtml += `<tr><td>${esc(dept.name)}</td><td>${readerIds.length}</td><td>${checked}/${totalPossible}</td><td><span class="badge ${badgeClass}">${pct}%</span></td><td style="color:${negatives>0?'#ff7b7b':'#3ecf6b'}">${negatives}</td></tr>`;
   }
   wrap.innerHTML = `<div class="table-wrap"><table><tr><th>القسم</th><th>عدد الأجهزة</th><th>منجز/المتوقع</th><th>نسبة الإنجاز</th><th>سلبيات</th></tr>${rowsHtml}</table></div>`;
 }
@@ -9368,7 +9368,7 @@ async function loadLaptopRange(range){
     const pct = totalPossible ? Math.round((checked/totalPossible)*100) : 0;
     const negatives = totalPossible - checked;
     const badgeClass = pct>=80?'good':pct>=50?'mid':'bad';
-    rowsHtml += `<tr><td>${dept.name}</td><td>${laptopIds.length}</td><td>${checked}/${totalPossible}</td><td><span class="badge ${badgeClass}">${pct}%</span></td><td style="color:${negatives>0?'#ff7b7b':'#3ecf6b'}">${negatives}</td></tr>`;
+    rowsHtml += `<tr><td>${esc(dept.name)}</td><td>${laptopIds.length}</td><td>${checked}/${totalPossible}</td><td><span class="badge ${badgeClass}">${pct}%</span></td><td style="color:${negatives>0?'#ff7b7b':'#3ecf6b'}">${negatives}</td></tr>`;
   }
   wrap.innerHTML = `<div class="table-wrap"><table><tr><th>القسم</th><th>عدد الأجهزة</th><th>منجز/المتوقع</th><th>نسبة الإنجاز</th><th>سلبيات</th></tr>${rowsHtml}</table></div>`;
 }
@@ -9403,7 +9403,7 @@ async function loadIpadReaderDeviceRange(range){
     const pct = totalPossible ? Math.round((checked/totalPossible)*100) : 0;
     const negatives = totalPossible - checked;
     const badgeClass = pct>=80?'good':pct>=50?'mid':'bad';
-    rowsHtml += `<tr><td>${dept.name}</td><td>${deviceIds.length}</td><td>${checked}/${totalPossible}</td><td><span class="badge ${badgeClass}">${pct}%</span></td><td style="color:${negatives>0?'#ff7b7b':'#3ecf6b'}">${negatives}</td></tr>`;
+    rowsHtml += `<tr><td>${esc(dept.name)}</td><td>${deviceIds.length}</td><td>${checked}/${totalPossible}</td><td><span class="badge ${badgeClass}">${pct}%</span></td><td style="color:${negatives>0?'#ff7b7b':'#3ecf6b'}">${negatives}</td></tr>`;
   }
   wrap.innerHTML = `<div class="table-wrap"><table><tr><th>القسم</th><th>عدد الأجهزة</th><th>منجز/المتوقع</th><th>نسبة الإنجاز</th><th>سلبيات</th></tr>${rowsHtml}</table></div>`;
 }
@@ -9438,7 +9438,7 @@ async function loadPosDeviceRange(range){
     const pct = totalPossible ? Math.round((checked/totalPossible)*100) : 0;
     const negatives = totalPossible - checked;
     const badgeClass = pct>=80?'good':pct>=50?'mid':'bad';
-    rowsHtml += `<tr><td>${dept.name}</td><td>${deviceIds.length}</td><td>${checked}/${totalPossible}</td><td><span class="badge ${badgeClass}">${pct}%</span></td><td style="color:${negatives>0?'#ff7b7b':'#3ecf6b'}">${negatives}</td></tr>`;
+    rowsHtml += `<tr><td>${esc(dept.name)}</td><td>${deviceIds.length}</td><td>${checked}/${totalPossible}</td><td><span class="badge ${badgeClass}">${pct}%</span></td><td style="color:${negatives>0?'#ff7b7b':'#3ecf6b'}">${negatives}</td></tr>`;
   }
   wrap.innerHTML = `<div class="table-wrap"><table><tr><th>القسم</th><th>عدد الأجهزة</th><th>منجز/المتوقع</th><th>نسبة الإنجاز</th><th>سلبيات</th></tr>${rowsHtml}</table></div>`;
 }
@@ -9469,7 +9469,7 @@ async function loadCleanRange(range){
     const pct = totalPossible ? Math.round((checked/totalPossible)*100) : 0;
     const negatives = totalPossible - checked;
     const badgeClass = pct>=80?'good':pct>=50?'mid':'bad';
-    rowsHtml += `<tr><td>${dept.name}</td><td>${checked}/${totalPossible}</td><td><span class="badge ${badgeClass}">${pct}%</span></td><td style="color:${negatives>0?'#ff7b7b':'#3ecf6b'}">${negatives}</td></tr>`;
+    rowsHtml += `<tr><td>${esc(dept.name)}</td><td>${checked}/${totalPossible}</td><td><span class="badge ${badgeClass}">${pct}%</span></td><td style="color:${negatives>0?'#ff7b7b':'#3ecf6b'}">${negatives}</td></tr>`;
   }
   wrap.innerHTML = `<div class="table-wrap"><table><tr><th>القسم</th><th>منجز/المتوقع</th><th>نسبة الإنجاز</th><th>سلبيات</th></tr>${rowsHtml}</table></div>`;
 }
@@ -9510,7 +9510,7 @@ async function loadPointsRange(range){
     const dailySums = staffPoints.map(p => sumScoresFromScores(p.scores)).filter(v => v !== null);
     const totalPoints = dailySums.length ? dailySums.reduce((a,b) => a+b, 0) : null;
     rowsHtml += `<tr>
-      <td>${s.name}</td>
+      <td>${esc(s.name)}</td>
       <td>${s.departments?.name || ''}</td>
       <td>${dailySums.length} من ${numDays} يوم</td>
       <td style="font-weight:bold;">${totalPoints === null ? '—' : totalPoints + ' نقطة'}</td>
@@ -9619,7 +9619,14 @@ function autoColWidths(aoa){
   return widths.map(w => ({ wch: w }));
 }
 
+/* حماية من "حقن الصيغ" بإكسل — لو خلية تبدأ بـ = أو + أو - أو @ يفسّرها إكسل صيغة
+   بدل نص عادي عند الفتح (نفس فكرة أي اسم/ملاحظة مُدخلة من المستخدم قد تحتوي هذي الرموز) */
+function neoXlsxSafe(v){
+  if (typeof v !== 'string') return v;
+  return /^[=+\-@\t\r]/.test(v) ? "'" + v : v;
+}
 function addAoaSheet(wb, sheetName, aoa){
+  aoa = aoa.map(row => row.map(neoXlsxSafe));
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   ws['!cols'] = autoColWidths(aoa);
   ws['!views'] = [{ rightToLeft: true }];
@@ -10292,17 +10299,17 @@ async function renderNeoAdminTools(deptId){
     const hiddenRows = extras.filter(r => (r.name||'').startsWith('⟦hide:'+s+'⟧'));
     const baseChips = live.filter(f => !String(f.key).startsWith('x_')).map(f =>
       `<span style="font-size:13px;background:rgba(122,167,255,0.08);border:1px solid rgba(122,167,255,0.25);border-radius:10px;padding:6px 10px;display:inline-flex;align-items:center;gap:8px;margin:3px;">
-        ${f.label}
+        ${esc(f.label)}
         <b data-neoact="ren" data-dept="${deptId}" data-scope="${s}" data-key="${f.key}" data-label="${String(f.label).replace(/"/g,'&quot;')}" style="color:#8fb8d8;font-size:17px;cursor:pointer;padding:5px 8px;line-height:1;border-radius:6px;background:rgba(143,184,216,0.12);" title="إعادة تسمية">✏️</b>
         <b data-neoact="hide" data-dept="${deptId}" data-scope="${s}" data-key="${f.key}" data-label="${String(f.label).replace(/"/g,'&quot;')}" style="color:#e15b64;font-size:17px;cursor:pointer;padding:5px 8px;line-height:1;border-radius:6px;background:rgba(225,91,100,0.14);" title="حذف">✕</b>
       </span>`).join('');
     const addChips = mine.map(r =>
       `<span style="font-size:13px;background:rgba(56,217,185,0.1);border:1px solid rgba(56,217,185,0.3);border-radius:10px;padding:6px 10px;display:inline-flex;align-items:center;gap:8px;margin:3px;">
-        ${(r.name||'').replace('⟦'+s+'⟧','')}
+        ${esc((r.name||'').replace('⟦'+s+'⟧',''))}
         <b data-neoact="del" data-dept="${deptId}" data-key="${r.id}" style="color:#e15b64;font-size:17px;cursor:pointer;padding:5px 8px;line-height:1;border-radius:6px;background:rgba(225,91,100,0.14);margin-inline-start:6px;" title="حذف">✕</b>
       </span>`).join('');
     const restore = hiddenRows.length ? `<div style="margin-top:6px;font-size:10px;color:#7487a0;">محذوفة (اضغط للاستعادة):
-      ${hiddenRows.map(r => `<b style="cursor:pointer;color:#8fb8d8;background:rgba(143,184,216,0.08);border-radius:6px;padding:2px 6px;margin-inline-start:4px;" onclick="neoRestoreCol('${deptId}','${r.id}')">↩ ${(r.name||'').replace('⟦hide:'+s+'⟧','')}</b>`).join('')}</div>` : '';
+      ${hiddenRows.map(r => `<b style="cursor:pointer;color:#8fb8d8;background:rgba(143,184,216,0.08);border-radius:6px;padding:2px 6px;margin-inline-start:4px;" onclick="neoRestoreCol('${deptId}','${r.id}')">↩ ${esc((r.name||'').replace('⟦hide:'+s+'⟧',''))}</b>`).join('')}</div>` : '';
     return `<div style="margin-bottom:8px;padding:8px;background:rgba(122,167,255,0.04);border-radius:10px;">
       <div style="font-size:12px;color:#a9c4ff;margin-bottom:5px;">${cfg.label}</div>
       <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px;">${baseChips}${addChips}</div>
@@ -10784,7 +10791,7 @@ async function neoRenderCredibility(){
       <div style="display:flex;align-items:center;gap:10px;">
         <span style="color:#7487a0;font-size:12px;min-width:20px;">${i+1}</span>
         <div style="flex:1;min-width:0;">
-          <b style="color:#e8eef7;font-size:14px;">${m.name}</b>
+          <b style="color:#e8eef7;font-size:14px;">${esc(m.name)}</b>
           <div style="font-size:11px;color:#8fa3b8;margin-top:3px;">
             <span style="color:#38d9b9;">✓ ${m.ok}</span> ·
             <span style="color:#a9c4ff;">✗ بأمانة ${m.honest}</span> ·
@@ -10809,7 +10816,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.08.19.13";
+const APP_VERSION = "2026.08.19.14";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
