@@ -10021,13 +10021,13 @@ window.cleanProgNote = cleanProgNote;
     if (e.target.closest && e.target.closest('[onclick*="account"]')) setBadge(0);
   }, true);
 
-  /* — الأرشفة: حذف كل ما هو أقدم من 60 يوماً (مرة واحدة يومياً، بحساب المدير) — */
+  /* — الأرشفة: حذف كل ما هو أقدم من 90 يوماً (مرة واحدة يومياً، بحساب المدير) — */
   async function retention(){
     try{
       const today = new Date().toISOString().slice(0,10);
       if (localStorage.getItem('neoRetentionDay') === today) return;
       if (!(await isSales())) return;
-      const cutoff = new Date(Date.now() - 60*86400000).toISOString().slice(0,10);
+      const cutoff = new Date(Date.now() - 90*86400000).toISOString().slice(0,10);
       const tables = [...LOG_TABLES, 'staff_points', 'custom_section_logs'];
       let cleaned = 0;
       for (const t of tables){
@@ -10816,7 +10816,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.08.19.14";
+const APP_VERSION = "2026.08.19.15";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -14200,7 +14200,7 @@ window.__realTodayStr = function(){
       + '<h3 style="margin-top:0;">الإبلاغ عن مشكلة في النظام</h3>'
       + '<div style="font-size:11px;color:#8fa3b8;margin-bottom:10px;line-height:1.8;">'
       + 'اشرح المشكلة بكلماتك: ماذا كنت تفعل؟ وماذا حدث؟<br>'
-      + '<span style="color:#5d6d80;">سيُرفق تلقائياً: ' + c.name + ' · ' + c.role + ' · الشاشة الحالية</span></div>'
+      + '<span style="color:#5d6d80;">سيُرفق تلقائياً: ' + esc(c.name) + ' · ' + esc(c.role) + ' · الشاشة الحالية</span></div>'
       + '<textarea id="isMsg" rows="5" placeholder="مثال: ضغطت على حفظ التقييم فلم يُحفظ شيء…" style="width:100%;resize:vertical;"></textarea>'
       + '<div id="isErr" style="color:#e15b64;font-size:12px;height:16px;margin-top:4px;"></div>'
       + '<div style="display:flex;gap:8px;margin-top:8px;">'
