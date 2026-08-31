@@ -10816,7 +10816,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.08.19.15";
+const APP_VERSION = "2026.08.19.16";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -11883,92 +11883,6 @@ const APP_VERSION = "2026.08.19.15";
       if (document.getElementById('devPanel') && BOX()) draw(); else clearInterval(liveTimer);
     }, 10000);
   }
-
-  /* ══════════ مُنفّذ SQL — تحكّم كامل بقاعدة البيانات من داخل التطبيق ══════════ */
-  const SQL_PRESETS = [
-    ['عدد صفوف كل جدول', '__counts__'],
-    ['بنية كل الجداول', '__schema__'],
-    ['آخر ١٠ إدخالات اليوم', "select l.code, d.field_times, d.updated_at from daily_logs d join locations l on l.id=d.location_id where d.log_date=current_date order by d.updated_at desc limit 10"],
-    ['الأقسام وعدد مواقعها', "select dep.name, count(loc.id) as locations from departments dep left join locations loc on loc.department_id=dep.id group by dep.name order by locations desc"],
-    ['الحسابات وأدوارها', "select name, role, department_ids from profiles order by role"],
-    ['أعمدة مخصصة لكل قسم', "select dep.name as dept, cf.name as col from custom_fields cf join departments dep on dep.id=cf.department_id order by dep.name"]
-  ];
-  function sqlReport(){
-    BOX().innerHTML =
-        '<div style="color:#7487a0;font-size:11px;margin-bottom:8px;line-height:1.8;">'
-      + 'نفّذ أي استعلام مباشرة — لا حاجة لفتح Supabase.<br>'
-      + '<span style="color:#d3a04f;">يتطلب تشغيل ملف dev_power.sql مرة واحدة.</span></div>'
-      + '<select id="sqlPreset" style="width:100%;margin-bottom:7px;font-size:12px;"><option value="">— استعلامات جاهزة —</option>'
-      + SQL_PRESETS.map((p,i) => '<option value="'+i+'">'+H(p[0])+'</option>').join('') + '</select>'
-      + '<textarea id="sqlBox" rows="4" placeholder="select * from departments" style="width:100%;font-family:monospace;font-size:12px;direction:ltr;text-align:left;"></textarea>'
-      + '<div style="display:flex;gap:7px;margin-top:7px;">'
-      + '<button onclick="__devRunSQL(false)" style="flex:1;font-size:12px;padding:10px;">▶ تنفيذ (قراءة)</button>'
-      + '<button onclick="__devRunSQL(true)" class="secondary" style="flex:1;font-size:12px;padding:10px;color:#e15b64;">⚡ تنفيذ (تعديل)</button></div>'
-      + '<div id="sqlOut" style="margin-top:10px;font-size:11px;color:#c8d4e2;max-height:40vh;overflow:auto;"></div>';
-    document.getElementById('sqlPreset').onchange = e => {
-      const i = e.target.value;
-      if (i === '') return;
-      const q = SQL_PRESETS[i][1];
-      if (q === '__counts__'){ __devCounts(); return; }
-      if (q === '__schema__'){ __devSchema(); return; }
-      document.getElementById('sqlBox').value = q;
-    };
-  }
-  window.__devRunSQL = async function(isExec){
-    const q = document.getElementById('sqlBox').value.trim();
-    const out = document.getElementById('sqlOut');
-    if (!q){ out.innerHTML = '<span style="color:#d3a04f;">اكتب استعلاماً أولاً</span>'; return; }
-    if (isExec && !(await neoConfirm('تنفيذ أمر تعديل؟', 'قد يغيّر أو يحذف بيانات — تأكد من الأمر.'))) return;
-    out.innerHTML = 'جاري التنفيذ…';
-    try{
-      const { data, error } = await supabaseClient.rpc(isExec ? 'dev_exec' : 'dev_sql', { q: q });
-      if (error) throw error;
-      if (data && data.error){ out.innerHTML = '<div style="color:#e15b64;">✕ '+H(data.error)+'</div>'; return; }
-      out.innerHTML = __devTable(data);
-    }catch(e){
-      out.innerHTML = '<div style="color:#e15b64;line-height:1.8;">✕ '+H(e.message||e)
-        + '<br><span style="color:#7487a0;font-size:11px;">إن كانت الدالة غير موجودة، شغّل dev_power.sql في Supabase.</span></div>';
-    }
-  };
-  function __devTable(data){
-    if (!Array.isArray(data) || !data.length) return '<span style="color:#7487a0;">لا نتائج</span>';
-    const cols = Object.keys(data[0]);
-    return '<div style="color:#38d9b9;margin-bottom:6px;">'+data.length+' صف</div>'
-      + '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:11px;">'
-      + '<tr>'+cols.map(c=>'<th style="text-align:right;padding:6px;border-bottom:1px solid #38d9b9;color:#8fb8d8;white-space:nowrap;">'+H(c)+'</th>').join('')+'</tr>'
-      + data.slice(0,60).map(r => '<tr>'+cols.map(c => {
-          let v = r[c];
-          if (v === null) v = '—';
-          else if (typeof v === 'object') v = JSON.stringify(v);
-          return '<td style="padding:6px;border-bottom:1px solid rgba(122,167,255,0.12);word-break:break-all;">'+H(String(v).slice(0,90))+'</td>';
-        }).join('')+'</tr>').join('') + '</table></div>'
-      + (data.length > 60 ? '<div style="color:#7487a0;margin-top:6px;">…عُرض ٦٠ من '+data.length+'</div>' : '');
-  }
-  window.__devCounts = async function(){
-    const out = document.getElementById('sqlOut') || BOX();
-    out.innerHTML = 'جاري العد…';
-    try{
-      const { data, error } = await supabaseClient.rpc('dev_counts');
-      if (error) throw error;
-      out.innerHTML = __devTable(data);
-    }catch(e){ out.innerHTML = '<div style="color:#e15b64;">'+H(e.message||e)+'</div>'; }
-  };
-  window.__devSchema = async function(){
-    const out = document.getElementById('sqlOut') || BOX();
-    out.innerHTML = 'جاري القراءة…';
-    try{
-      const { data, error } = await supabaseClient.rpc('dev_schema');
-      if (error) throw error;
-      const byT = {};
-      (data||[]).forEach(r => { (byT[r.table_name] = byT[r.table_name] || []).push(r); });
-      out.innerHTML = Object.keys(byT).map(t =>
-          '<div style="border:1px solid rgba(122,167,255,0.2);border-radius:9px;padding:9px;margin-bottom:7px;background:#0c1524;">'
-        + '<b style="color:#38d9b9;font-size:12px;">'+H(t)+'</b> <span style="color:#7487a0;font-size:11px;">('+byT[t].length+' عمود)</span>'
-        + '<div style="margin-top:5px;font-size:11px;color:#c8d4e2;line-height:1.9;">'
-        + byT[t].map(c => H(c.column_name)+' <span style="color:#5d6d80;">'+H(c.data_type)+'</span>').join(' · ')
-        + '</div></div>').join('');
-    }catch(e){ out.innerHTML = '<div style="color:#e15b64;">'+H(e.message||e)+'</div>'; }
-  };
 
   /* ══════════ نسخة احتياطية — تصدير واستعادة كل البيانات ══════════ */
   const BACKUP_TABLES = ['departments','profiles','locations','staff','daily_tasks','ipads','serial_readers',
@@ -13484,13 +13398,6 @@ const APP_VERSION = "2026.08.19.15";
           issues ? issues + ' بلاغ ينتظر' : 'لا بلاغات',
           issues ? 'افتح «بلاغات المستخدمين» لمراجعتها' : null);
 
-      /* ٩) دوال SQL المتقدّمة */
-      tick('فحص أدوات SQL');
-      let sqlOk = false;
-      try{ const { error } = await supabaseClient.rpc('dev_counts'); sqlOk = !error; }catch(e){}
-      add(sqlOk, 'منفّذ SQL', sqlOk ? 'جاهز' : 'غير مثبّت — لهذا زر SQL لا يعمل',
-          sqlOk ? null : 'شغّل ملف dev_power.sql في Supabase');
-
     }catch(e){ add(false, 'الفحص', String(e.message||e), null); }
 
     /* العرض */
@@ -14053,7 +13960,6 @@ window.__olSortNumeric = async function(){
       + '<button id="dvDept" class="secondary" style="font-size:11px;padding:10px 2px;">🏢 الأقسام</button>'
       + '<button id="dvCols" class="secondary" style="font-size:11px;padding:10px 2px;">🧩 الأعمدة</button>'
       + '<button id="dvNet"  class="secondary" style="font-size:11px;padding:10px 2px;">🌐 الشبكة</button>'
-      + '<button id="dvSQL"  class="secondary" style="font-size:11px;padding:10px 2px;color:#38d9b9;">⌨ SQL</button>'
       + '<button id="dvSim"  class="secondary" style="font-size:11px;padding:10px 2px;">👤 محاكاة</button>'
       + '<button id="dvLive" class="secondary" style="font-size:11px;padding:10px 2px;">🔴 مباشر</button>'
       + '<button id="dvStreakTbl" class="secondary" style="font-size:11px;padding:10px 2px;color:#ffb37a;">🔥 السلاسل</button></div>'
@@ -14108,7 +14014,6 @@ window.__olSortNumeric = async function(){
     { const _b = p.querySelector('#dvSim'); if (_b) _b.onclick = () => { simReport(); SEE(); }; }
     { const _b = p.querySelector('#dvMulti'); if (_b) _b.onclick = () => { multiReport(); SEE(); }; }
     { const _b = p.querySelector('#dvLive'); if (_b) _b.onclick = () => { liveReport(); SEE(); }; }
-    { const _b = p.querySelector('#dvSQL'); if (_b) _b.onclick = () => { sqlReport(); SEE(); }; }
     { const _b = p.querySelector('#dvStage'); if (_b) _b.onclick = () => { stageTestReport(); SEE(); }; }
     { const _b = p.querySelector('#dvFull'); if (_b) _b.onclick = () => { fullTestReport(); SEE(); }; }
     { const _b = p.querySelector('#dvBack'); if (_b) _b.onclick = () => { backfillReport(); SEE(); }; }
