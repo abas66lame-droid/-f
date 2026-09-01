@@ -1695,7 +1695,11 @@ async function neoLoadExtraCols(deptId){
       arr.push({ key:x.key, label: renamed[x.key] || x.label });
     });
     rows.filter(r => (r.name||'').startsWith('⟦'+s+'⟧'))
-        .forEach(r => arr.push({ key:'x_'+r.id.replace(/-/g,'').slice(0,12), label:(r.name||'').replace('⟦'+s+'⟧','') }));
+        .forEach(r => {
+          const k = 'x_'+r.id.replace(/-/g,'').slice(0,12);
+          if (hidden.has(k)) return;      /* عمود أضافه المدير ثم عطّله — يُستثنى كالأساسي */
+          arr.push({ key:k, label:(r.name||'').replace('⟦'+s+'⟧','') });
+        });
     /* الترتيب المخصص المحفوظ بالسحب */
     const ordRow = rows.find(r => (r.name||'').startsWith('⟦ord:'+s+'⟧'));
     if (ordRow){
@@ -10387,22 +10391,28 @@ function neoConfirm(title, desc){
 }
 window.neoConfirm = neoConfirm;
 
+/* — تعطيل عمود مؤقتاً — نفس منطق تعطيل العناصر: لا يُحذف شيء، والإرجاع بضغطة.
+     يعمل على الأعمدة الأساسية والأعمدة التي أضافها المدير بنفسه سواءً بسواء. */
 async function neoHideCol(deptId, scope, key, label){
   const live = (typeof neoDefsArr === 'function' ? neoDefsArr(scope) : null) || [];
-  if (live.length <= 1){ neoToast('⚠️ لا يمكن حذف آخر عمود — أضف عموداً جديداً أولاً.'); return; }
-  if (!(await neoConfirm('حذف العمود «' + label + '»؟', 'سيُحذف من كل الجداول لدى مسؤول الشفت ومشرف الصالة.<br>يمكنك استعادته لاحقاً من نفس المكان.'))) return;
-  // حفظ الاسم الأصلي محلياً قبل الحذف
+  if (live.length <= 1){ neoToast('⚠️ لا يمكن تعطيل آخر عمود — أضف عموداً جديداً أولاً.'); return; }
+  if (!(await neoConfirm('تعطيل العمود «' + label + '»؟',
+      'سيختفي من جداول مسؤول الشفت ومشرف الصالة، ولن يدخل في حساب النسبة.'
+      + '<br><br>لا يُحذف شيء — بياناته السابقة تبقى، وترجّعه بضغطة ▶ من نفس المكان.'))) return;
+  // حفظ الاسم الأصلي محلياً حتى يظهر مفهوماً في قائمة المعطَّلة
   const colNames = JSON.parse(localStorage.getItem('neoColNames_'+deptId) || '{}');
   colNames[key] = label;
   localStorage.setItem('neoColNames_'+deptId, JSON.stringify(colNames));
   const { error } = await supabaseClient.from('custom_fields').insert({ department_id: deptId, name: '⟦hide:'+scope+'⟧'+key });
   if (error){ neoNotify('تعذر: ' + error.message); return; }
   neoInvalidateCols(); await neoLoadExtraCols(deptId); renderNeoAdminTools(deptId);
+  neoToast('⏸ عُطّل عمود «' + label + '» — بياناته محفوظة');
 }
-/* — استعادة عمود محذوف — */
+/* — إرجاع عمود معطَّل للعمل — */
 async function neoRestoreCol(deptId, rowId){
   await supabaseClient.from('custom_fields').delete().eq('id', rowId);
   neoInvalidateCols(); await neoLoadExtraCols(deptId); renderNeoAdminTools(deptId);
+  neoToast('▶ رجع العمود للعمل', true);
 }
 
 // استعادة اسم العمود الأصلي من localStorage
@@ -10447,7 +10457,10 @@ async function neoAddCol(deptId, scope, btn){
   alert('✅ أُضيف العمود. حدّث الشاشة لرؤيته في الجدول.');
 }
 async function neoDelCol(deptId, fieldId){
-  if (!(await neoConfirm('حذف هذا العمود؟', 'سيُحذف نهائياً مع كل القيم المسجّلة فيه — لا يمكن التراجع.'))) return;
+  if (!(await neoConfirm('حذف هذا العمود نهائياً؟',
+      'سيُحذف مع كل القيم المسجّلة فيه — <b>لا يمكن التراجع</b>.'
+      + '<br><br>لو تريده أن يختفي مؤقتاً فقط، أغلق هذه النافذة واضغط <b>⏸</b> بدلاً منه '
+      + '— يختفي عن الشفت والصالة وتبقى بياناته.'))) return;
   const { error } = await supabaseClient.from('custom_fields').delete().eq('id', fieldId);
   if (error){ neoToast('تعذر الحذف: ' + error.message); return; }
   neoInvalidateCols(); await neoLoadExtraCols(deptId);
@@ -10498,15 +10511,22 @@ async function renderNeoAdminTools(deptId){
       `<span style="font-size:13px;background:rgba(122,167,255,0.08);border:1px solid rgba(122,167,255,0.25);border-radius:10px;padding:6px 10px;display:inline-flex;align-items:center;gap:8px;margin:3px;">
         ${esc(f.label)}
         <b data-neoact="ren" data-dept="${deptId}" data-scope="${s}" data-key="${f.key}" data-label="${String(f.label).replace(/"/g,'&quot;')}" style="color:#8fb8d8;font-size:17px;cursor:pointer;padding:5px 8px;line-height:1;border-radius:6px;background:rgba(143,184,216,0.12);" title="إعادة تسمية">✏️</b>
-        <b data-neoact="hide" data-dept="${deptId}" data-scope="${s}" data-key="${f.key}" data-label="${String(f.label).replace(/"/g,'&quot;')}" style="color:#e15b64;font-size:17px;cursor:pointer;padding:5px 8px;line-height:1;border-radius:6px;background:rgba(225,91,100,0.14);" title="حذف">✕</b>
+        <b data-neoact="hide" data-dept="${deptId}" data-scope="${s}" data-key="${f.key}" data-label="${String(f.label).replace(/"/g,'&quot;')}" style="color:#ffcf5c;font-size:15px;cursor:pointer;padding:5px 8px;line-height:1;border-radius:6px;background:rgba(255,207,92,0.14);" title="تعطيل مؤقت — يختفي عن الشفت والصالة ولا يُحتسب">⏸</b>
       </span>`).join('');
-    const addChips = mine.map(r =>
-      `<span style="font-size:13px;background:rgba(56,217,185,0.1);border:1px solid rgba(56,217,185,0.3);border-radius:10px;padding:6px 10px;display:inline-flex;align-items:center;gap:8px;margin:3px;">
-        ${esc((r.name||'').replace('⟦'+s+'⟧',''))}
-        <b data-neoact="del" data-dept="${deptId}" data-key="${r.id}" style="color:#e15b64;font-size:17px;cursor:pointer;padding:5px 8px;line-height:1;border-radius:6px;background:rgba(225,91,100,0.14);margin-inline-start:6px;" title="حذف">✕</b>
-      </span>`).join('');
-    const restore = hiddenRows.length ? `<div style="margin-top:6px;font-size:10px;color:#7487a0;">محذوفة (اضغط للاستعادة):
-      ${hiddenRows.map(r => `<b style="cursor:pointer;color:#8fb8d8;background:rgba(143,184,216,0.08);border-radius:6px;padding:2px 6px;margin-inline-start:4px;" onclick="neoRestoreCol('${deptId}','${r.id}')">↩ ${esc((r.name||'').replace('⟦hide:'+s+'⟧',''))}</b>`).join('')}</div>` : '';
+    const addChips = mine.map(r => {
+      const xk = 'x_'+r.id.replace(/-/g,'').slice(0,12);
+      const nm = (r.name||'').replace('⟦'+s+'⟧','');
+      return `<span style="font-size:13px;background:rgba(56,217,185,0.1);border:1px solid rgba(56,217,185,0.3);border-radius:10px;padding:6px 10px;display:inline-flex;align-items:center;gap:8px;margin:3px;">
+        ${esc(nm)}
+        <b data-neoact="hide" data-dept="${deptId}" data-scope="${s}" data-key="${xk}" data-label="${String(nm).replace(/"/g,'&quot;')}" style="color:#ffcf5c;font-size:15px;cursor:pointer;padding:5px 8px;line-height:1;border-radius:6px;background:rgba(255,207,92,0.14);" title="تعطيل مؤقت — يبقى العمود وبياناته">⏸</b>
+        <b data-neoact="del" data-dept="${deptId}" data-key="${r.id}" style="color:#e15b64;font-size:17px;cursor:pointer;padding:5px 8px;line-height:1;border-radius:6px;background:rgba(225,91,100,0.14);" title="حذف نهائي">✕</b>
+      </span>`; }).join('');
+    const restore = hiddenRows.length ? `<div style="margin-top:6px;font-size:10px;color:#7487a0;">⏸ معطَّلة (اضغط للإرجاع):
+      ${hiddenRows.map(r => {
+        const k = (r.name||'').replace('⟦hide:'+s+'⟧','');
+        const nm = (typeof neoGetColName === 'function') ? neoGetColName(deptId, k) : k;
+        return `<b style="cursor:pointer;color:#3ecf6b;background:rgba(62,207,107,0.10);border-radius:6px;padding:2px 6px;margin-inline-start:4px;" onclick="neoRestoreCol('${deptId}','${r.id}')">▶ ${esc(nm)}</b>`;
+      }).join('')}</div>` : '';
     return `<div style="margin-bottom:8px;padding:8px;background:rgba(122,167,255,0.04);border-radius:10px;">
       <div style="font-size:12px;color:#a9c4ff;margin-bottom:5px;">${cfg.label}</div>
       <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px;">${baseChips}${addChips}</div>
@@ -11013,7 +11033,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.01.04";
+const APP_VERSION = "2026.09.01.05";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
