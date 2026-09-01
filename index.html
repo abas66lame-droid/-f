@@ -10946,7 +10946,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.01.02";
+const APP_VERSION = "2026.09.01.03";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -14638,6 +14638,88 @@ async function fleetGetProofs(tripId){
   }catch(e){ return {}; }
 }
 
+/* ══════════════════════════════════════════════════════════════════
+   الرحلة المتكررة — استلام وتسليم بلا إعادة المهام
+   ──────────────────────────────────────────────────────────────────
+   إذا استلم السائق مركبة، وأنجز كل مهامها بصورها، وأرجعها — ثم استلمها
+   مجدداً بثلاثة شروط مجتمعة: نفس اليوم، ونفس المركبة، ونفس الحساب —
+   فلا يعيد المهام. يضغط استلام، وعند الرجوع تسليم فقط.
+
+   تُشتق الحالة من البيانات الموجودة (المركبة + السائق + اليوم) فلا تحتاج
+   أي عمود جديد في قاعدة البيانات.
+
+   شرط رابع مقصود: الرحلة الأولى لازم تكون مكتملة بلا نواقص. لو نقصتها
+   مهمة أو صورة، فالرحلة التالية عادية وتتطلب المهام كاملة — وإلا صار
+   بالإمكان التهرّب من المهام بأول رحلة ناقصة ثم تكرارها طول اليوم.
+   ══════════════════════════════════════════════════════════════════ */
+function fleetDayKey(iso){
+  try{
+    var d=new Date(iso);
+    return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate();   /* يوم تقويمي محلي */
+  }catch(e){ return String(iso||'').slice(0,10); }
+}
+/* مفتاح المجموعة = الشروط الثلاثة مجتمعة */
+function fleetGroupKey(t){
+  return String(t.vehicle_id)+'|'+String(t.driver_id)+'|'+fleetDayKey(t.out_at);
+}
+
+/* يجمع الرحلات للعرض: كل مجموعة = رحلة أساسية + متكرراتها بالترتيب.
+   الرحلة التي لا تنطبق عليها شروط التكرار تُعرض أساسيةً مستقلة. */
+function fleetMergeTrips(trips, missingInfo){
+  var byKey={}, order=[];
+  (trips||[]).slice().sort(function(a,b){ return new Date(a.out_at)-new Date(b.out_at); })
+    .forEach(function(t){
+      var k=fleetGroupKey(t);
+      if(!byKey[k]){ byKey[k]={anchor:t,repeats:[]}; order.push(k); return; }
+      if((missingInfo&&missingInfo[t.id]||{}).repeat){ byKey[k].repeats.push(t); return; }
+      var k2=k+'#'+t.id;                       /* لا تنطبق الشروط — رحلة مستقلة */
+      byKey[k2]={anchor:t,repeats:[]}; order.push(k2);
+    });
+  return order.map(function(k){ return byKey[k]; })
+              .sort(function(a,b){ return new Date(b.anchor.out_at)-new Date(a.anchor.out_at); });
+}
+
+/* صف مضغوط للرحلة المتكررة — ملحق بالرحلة الأساسية بأيقونة أصغر منها */
+function fleetRepeatRow(t, seq, opts){
+  var o=opts||{};
+  return '<div style="margin-inline-start:16px;margin-bottom:5px;padding:7px 10px;border-radius:8px;'
+    +'background:rgba(56,217,185,0.06);border-inline-start:2px solid rgba(56,217,185,0.35);">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">'
+    +'<span style="color:#9fb0c5;font-size:11px;"><span style="font-size:10px;">🔁</span> '
+    +'رحلة متكررة '+seq+'</span>'
+    +'<span style="background:rgba(56,217,185,0.13);color:#38d9b9;font-size:9px;font-weight:800;'
+    +'padding:2px 7px;border-radius:8px;flex-shrink:0;">٠ ناقص</span></div>'
+    +'<div style="color:#7487a0;font-size:10px;margin-top:2px;">'+fmt(t.out_at)+' ← '
+    +(t.in_at?fmt(t.in_at):'<span style="color:#ffb37a;">لم تُرجَع</span>')+'</div>'
+    +(t.note?'<div style="color:#ffb37a;font-size:10px;margin-top:3px;">📝 '+esc(t.note)+'</div>':'')
+    +(o.del?'<button class="secondary" style="width:100%;font-size:10px;padding:5px;margin-top:5px;'
+      +'color:#ff6b74;" onclick="fleetPurgeTrip('+t.id+')">حذف</button>':'')
+    +'</div>';
+}
+/* شارة تُوضع على الرحلة الأساسية تدلّ على عدد المتكررات المدموجة معها */
+function fleetRepeatBadge(n){
+  return n ? '<span style="background:rgba(56,217,185,0.13);color:#38d9b9;font-size:9px;'
+    +'font-weight:800;padding:2px 7px;border-radius:8px;margin-inline-start:6px;">'
+    +'🔁 '+n+' متكررة</span>' : '';
+}
+
+/* هل رحلة السائق المفتوحة الآن متكررة؟ يُستعلم مباشرة من القاعدة لا من الشاشة */
+async function fleetRepeatAnchor(vehicleId, driverId){
+  try{
+    var d0=new Date(); d0.setHours(0,0,0,0);
+    var r=await SB().from('fleet_trips').select('*')
+      .eq('vehicle_id',vehicleId).eq('driver_id',String(driverId))
+      .gte('out_at',d0.toISOString()).not('in_at','is',null)
+      .order('out_at',{ascending:true}).limit(20);
+    var done=r.data||[];
+    if(!done.length) return null;
+    var anchor=done[0];
+    var mi=await fleetTripsMissingInfo([anchor]);
+    if(((mi[anchor.id]||{}).count||0)>0) return null;   /* الأولى ناقصة — المهام مطلوبة */
+    return { anchor: anchor, seq: done.length + 1 };
+  }catch(e){ return null; }
+}
+
 /* ── عدّاد النواقص لقائمة رحلات دفعة واحدة (استعلام مجمّع لا رحلة برحلة) ──
    ناقص = مهمة غير معلَّمة منجزة، أو معلَّمة لكن بلا صورة إثبات مرفوعة */
 async function fleetTripsMissingInfo(trips){
@@ -14667,6 +14749,22 @@ async function fleetTripsMissingInfo(trips){
     });
     out[t.id]={ count: count };
   });
+
+  /* الرحلات المتكررة: مهامها أُنجزت في الرحلة الأولى — نواقصها صفر دائماً.
+     تُحسب بعد النواقص الخام لأن الشرط يعتمد على خلوّ الأولى من النواقص. */
+  var firstOf={};
+  trips.slice().sort(function(a,b){ return new Date(a.out_at)-new Date(b.out_at); })
+    .forEach(function(t){ var k=fleetGroupKey(t); if(!firstOf[k]) firstOf[k]=t; });
+  var seqOf={};
+  trips.slice().sort(function(a,b){ return new Date(a.out_at)-new Date(b.out_at); })
+    .forEach(function(t){
+      var a=firstOf[fleetGroupKey(t)];
+      if(!a || String(a.id)===String(t.id)) return;
+      if(!a.in_at || (out[a.id]||{}).count>0) return;   /* الأولى مفتوحة أو ناقصة — لا اختصار */
+      var k=fleetGroupKey(t);
+      seqOf[k]=(seqOf[k]||1)+1;
+      out[t.id]={ count:0, repeat:true, anchorId:a.id, seq:seqOf[k] };
+    });
   return out;
 }
 async function getTasks(vid){
@@ -14771,6 +14869,28 @@ window.renderDriverView = async function(profile){
             +(on?'إلغاء الإكمال':'تم إكمال المهمة')+'</button></div>'
             +'<div id="fpS_'+t.id+'" style="color:#8fa3b8;font-size:11px;margin-top:6px;"></div></div>';
         };
+        /* رحلة متكررة؟ نفس اليوم والمركبة والحساب بعد رحلة أولى مكتملة —
+           لا مهام، تسليم مباشر */
+        var rep = trip ? await fleetRepeatAnchor(v.id, uid) : null;
+        if(rep){
+          h+='<div class="card" style="border:1px solid rgba(56,217,185,0.45);">'
+            +'<h2>'+kindLabel(v.kind)+' '+esc(v.plate)
+            +' <span style="color:#38d9b9;font-size:12px;">بحوزتك</span></h2>'
+            +(v.label?'<div style="color:#8fa3b8;font-size:12px;">'+esc(v.label)+'</div>':'')
+            +'<div style="color:#7487a0;font-size:11px;margin:6px 0;">منذ '+fmt(v.taken_at)+'</div>'
+            +'<div style="background:rgba(56,217,185,0.10);border:1px solid rgba(56,217,185,0.28);'
+            +'border-radius:11px;padding:12px;margin-top:10px;">'
+            +'<div style="color:#38d9b9;font-size:13px;font-weight:800;">🔁 رحلة متكررة رقم '+rep.seq+'</div>'
+            +'<div style="color:#8fa3b8;font-size:12px;line-height:1.9;margin-top:6px;">'
+            +'أنجزت مهام هذه المركبة اليوم بالكامل في رحلتك الأولى '
+            +'('+fmt(rep.anchor.out_at)+') — لا حاجة لإعادتها.'
+            +'<br>اضغط <b style="color:#38d9b9;">تسليم</b> عند رجوعك فقط.</div></div>'
+            +'<textarea id="fnote'+v.id+'" placeholder="ملاحظة عند التسليم (اختياري)" '
+            +'style="width:100%;margin-top:10px;min-height:52px;font-size:12px;"></textarea>'
+            +'<button style="width:100%;margin-top:8px;background:#14705f;font-size:13px;padding:11px;" '
+            +'onclick="fleetReturn('+v.id+')">✅ تسليم</button></div>';
+          continue;
+        }
         h+='<div class="card" style="border:1px solid rgba(56,217,185,0.35);">'
           +'<h2>'+kindLabel(v.kind)+' '+esc(v.plate)+' <span style="color:#38d9b9;font-size:12px;">بحوزتك</span></h2>'
           +(v.label?'<div style="color:#8fa3b8;font-size:12px;">'+esc(v.label)+'</div>':'')
@@ -15298,14 +15418,16 @@ window.renderFleetSupView=async function(profile){
         +'<div style="color:#8fb8d8;font-size:13px;font-weight:700;">'+kindLabel(v.kind)+' '+esc(v.plate||'؟')+'</div>'
         +(vMissing?'<span style="background:#5a2020;color:#ff8f8f;font-size:11px;font-weight:800;padding:3px 10px;border-radius:10px;">'+vMissing+' ناقص</span>':'')
         +'</div>';
-      vTrips.forEach(function(t){
+      fleetMergeTrips(vTrips,missingInfo2).forEach(function(g){
+        var t=g.anchor;
         var oc=Object.keys(t.out_checks||{}).length, ic=Object.keys(t.in_checks||{}).length;
         var ok=!!t.verified_at, rej=!!t.reject_note;
         var missing=missingInfo2[t.id].count;
         h+='<div style="padding:10px;margin-bottom:6px;border-radius:10px;background:'+(missing?'rgba(225,91,100,0.08)':'rgba(122,167,255,0.05)')+';'
           +'border-inline-start:3px solid '+(missing?'#e15b64':rej?'#e15b64':ok?'#38d9b9':'#7487a0')+';">'
           +'<div style="display:flex;justify-content:space-between;gap:8px;">'
-          +'<div style="flex:1;"><div style="color:#c8d4e2;font-size:11px;">'+esc(t.driver_name||'')+'</div>'
+          +'<div style="flex:1;"><div style="color:#c8d4e2;font-size:11px;">'+esc(t.driver_name||'')
+          +fleetRepeatBadge(g.repeats.length)+'</div>'
           +'<div style="color:#7487a0;font-size:10px;">'+fmt(t.out_at)+' ← '+fmt(t.in_at)+'</div>'
           +'<div style="color:#7487a0;font-size:10px;">علامات: استلام '+oc+' · تسليم '+ic+'</div>'
           +'<button class="secondary" style="width:100%;font-size:11px;padding:7px;margin-top:7px;" '
@@ -15320,6 +15442,7 @@ window.renderFleetSupView=async function(profile){
             +(ok?'':'<button style="flex:1;font-size:11px;padding:8px;background:#14705f;" onclick="fleetVerify('+t.id+')">اعتماد</button>')
             +'<button class="secondary" style="flex:1;font-size:11px;padding:8px;color:#e8a0a4;" onclick="fleetReject('+t.id+')">تسجيل ملاحظة</button></div>')
           +'</div>';
+        g.repeats.forEach(function(rt,ix){ h+=fleetRepeatRow(rt,ix+2,{}); });
       });
     });
     h+='</div>';
@@ -15534,13 +15657,15 @@ window.renderFleetManagerTab=async function(){
         +'<div style="color:#8fb8d8;font-size:13px;font-weight:700;">'+kindLabel(v.kind)+' '+esc(v.plate||'؟')+'</div>'
         +(vMissing?'<span style="background:#5a2020;color:#ff8f8f;font-size:11px;font-weight:800;padding:3px 10px;border-radius:10px;">'+vMissing+' ناقص</span>':'')
         +'</div>';
-      vTrips.forEach(function(t){
+      fleetMergeTrips(vTrips,missingInfo).forEach(function(g){
+        var t=g.anchor;
         var ok=!!t.verified_at, rej=!!t.reject_note, opn=!t.in_at;
         var missing=missingInfo[t.id].count;
         h+='<div style="padding:9px;margin-bottom:5px;border-radius:9px;background:'+(missing?'rgba(225,91,100,0.08)':'rgba(122,167,255,0.04)')+';'
           +'border-inline-start:3px solid '+(missing?'#e15b64':opn?'#ff8c42':rej?'#e15b64':ok?'#38d9b9':'#5d6d80')+';">'
           +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">'
-          +'<span style="color:#c8d4e2;font-size:12px;">'+esc(t.driver_name||'')+'</span>'
+          +'<span style="color:#c8d4e2;font-size:12px;">'+esc(t.driver_name||'')
+          +fleetRepeatBadge(g.repeats.length)+'</span>'
           +(missing?'<span style="background:#5a2020;color:#ff8f8f;font-size:10px;font-weight:800;padding:2px 8px;border-radius:9px;flex-shrink:0;">'+missing+' ناقص</span>':'')
           +'</div>'
           +'<div style="color:#7487a0;font-size:10px;">'+fmt(t.out_at)+' ← '+(t.in_at?fmt(t.in_at):'<span style="color:#ffb37a;">لم تُرجَع</span>')+'</div>'
@@ -15557,6 +15682,7 @@ window.renderFleetManagerTab=async function(){
             +(ok?'':'<button style="flex:1;font-size:11px;padding:7px;background:#14705f;" onclick="fleetVerify('+t.id+')">اعتماد</button>')
             +'<button class="secondary" style="flex:1;font-size:11px;padding:7px;color:#e8a0a4;" onclick="fleetReject('+t.id+')">تسجيل ملاحظة</button></div>':'')
           +'</div>';
+        g.repeats.forEach(function(rt,ix){ h+=fleetRepeatRow(rt,ix+2,{del:1}); });
       });
     });
     h+='</div>';
