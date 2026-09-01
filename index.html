@@ -1267,11 +1267,20 @@ try{ window.supabaseClient = supabaseClient; }catch(e){}
 // يعمل تحديث كامل للصفحة، نخلي كل نسخة مخزنة تنتهي صلاحيتها تلقائياً بعد دقيقة وحدة.
 const _refCache = {};
 const REF_CACHE_TTL_MS = 20000; // ٢٠ ثانية — حتى تظهر الإضافات الجديدة بسرعة لكل المستخدمين
-async function cachedSelectResponse(cacheKey, table, selectStr, orderCol){
+async function cachedSelectResponse(cacheKey, table, selectStr, orderCol, includeOff){
+  /* المعطَّلون مؤقتاً يُستبعدون هنا — نقطة واحدة تغطي كل الشاشات التي تقرأ
+     الموظفين/المواقع/المهام (الشفت، الصالة، المتابعة). الذاكرة المؤقتة تحتفظ
+     بالقائمة كاملة، والترشيح يتم عند كل إرجاع — فإرجاع الموظف للعمل يظهر فوراً.
+     مرّر includeOff=true لشاشات الإدارة التي يجب أن ترى الجميع. */
+  const finish = async (res) => {
+    if (includeOff || !NEO_OFFABLE[table] || res.error || !res.data) return res;
+    await neoLoadOff();
+    return { data: neoDropOff(res.data), error: null };
+  };
   const cached = _refCache[cacheKey];
   /* لا نثق بذاكرة فارغة — قد تكون نتيجة انقطاع لحظي فتُخفي كل البيانات */
   if (cached && cached.data && cached.data.length && (Date.now() - cached.ts) < REF_CACHE_TTL_MS){
-    return { data: cached.data, error: null };
+    return finish({ data: cached.data, error: null });
   }
   const mkQ = () => {
     let x = supabaseClient.from(table).select(selectStr);
@@ -1291,11 +1300,102 @@ async function cachedSelectResponse(cacheKey, table, selectStr, orderCol){
   }
   /* نُخزّن النتائج غير الفارغة فقط */
   if (!res.error && res.data && res.data.length) _refCache[cacheKey] = { data: res.data, ts: Date.now() };
-  return res;
+  return finish(res);
 }
 function invalidateRefCache(cacheKey){
   if (cacheKey) delete _refCache[cacheKey];
   else Object.keys(_refCache).forEach(k => delete _refCache[k]);
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   التعطيل المؤقت — إخفاء عنصر عن مسؤولي الشفتات والصالة بلا حذفه
+   ──────────────────────────────────────────────────────────────────
+   مدير المبيعات يقدر يوقف موظفاً (أو موقعاً أو مهمة) مؤقتاً: يختفي من
+   كل شاشات الإدخال والمتابعة، لكن صفّه يبقى في قاعدة البيانات — فكل
+   سجلاته التاريخية تظل سليمة، ويرجع للعمل بضغطة واحدة.
+
+   ليش هذا مهم: الحذف النهائي يمسح السجلات التاريخية معه ولا يمكن
+   استرجاعها. التعطيل يعطي نفس النتيجة المرئية بدون أي فقدان بيانات.
+
+   التخزين: صف علامة في custom_fields بنفس نمط ⟦hide:⟧/⟦ren:⟧ المستعمل
+   أصلاً للأعمدة — فلا يحتاج أي تعديل على قاعدة البيانات. و getCustomFields
+   يستبعد كل ما يبدأ بـ ⟦ فلا تظهر العلامة كعمود غريب عند أحد.
+   ══════════════════════════════════════════════════════════════════ */
+const NEO_OFF_TAG = '⟦off⟧';
+/* الجداول التي يسري عليها التعطيل — تُرشَّح تلقائياً في cachedSelectResponse */
+const NEO_OFFABLE = { staff:1, locations:1, daily_tasks:1 };
+let _neoOffSet = null, _neoOffTs = 0;
+const NEO_OFF_TTL_MS = 20000;   /* نفس عمر ذاكرة المراجع — تظهر التغييرات بسرعة على كل الأجهزة */
+
+async function neoLoadOff(force){
+  if (!force && _neoOffSet && (Date.now() - _neoOffTs) < NEO_OFF_TTL_MS) return _neoOffSet;
+  try{
+    const { data, error } = await supabaseClient.from('custom_fields')
+      .select('name').like('name', NEO_OFF_TAG + '%');
+    if (error) throw error;
+    const s = new Set();
+    (data || []).forEach(r => s.add(String(r.name || '').slice(NEO_OFF_TAG.length)));
+    _neoOffSet = s; _neoOffTs = Date.now();
+  }catch(e){
+    /* عند فشل الشبكة لا نُخفي أحداً — الأسلم أن يظهر الجميع على أن يختفي موظف بالغلط */
+    if (!_neoOffSet) _neoOffSet = new Set();
+  }
+  return _neoOffSet;
+}
+function neoIsOff(id){ return !!(_neoOffSet && _neoOffSet.has(String(id))); }
+function neoDropOff(list){ return (list || []).filter(x => !neoIsOff(x && x.id)); }
+window.neoIsOff = neoIsOff;
+
+/* تعطيل عنصر أو إرجاعه. label للرسالة فقط. */
+async function neoSetOff(deptId, itemId, off, label){
+  const marker = NEO_OFF_TAG + String(itemId);
+  let error;
+  if (off){
+    ({ error } = await supabaseClient.from('custom_fields')
+      .insert({ department_id: deptId, name: marker }));
+  } else {
+    ({ error } = await supabaseClient.from('custom_fields')
+      .delete().eq('department_id', deptId).eq('name', marker));
+  }
+  if (error){ neoNotify('تعذّر الحفظ: ' + error.message); return false; }
+  await neoLoadOff(true);
+  try{ invalidateRefCache(); }catch(e){}
+  try{ window.__extraColsCache = {}; }catch(e){}
+  neoToast(off ? ('⏸ عُطّل «' + (label || '') + '» — سجله محفوظ ويرجع بضغطة')
+               : ('▶ رجع «' + (label || '') + '» للعمل'), !off);
+  return true;
+}
+window.neoSetOff = neoSetOff;
+
+/* عدد السجلات التاريخية المرتبطة بعنصر — يُستخدم للتحذير قبل الحذف النهائي */
+async function neoCountLogs(table, fk, itemId){
+  try{
+    const { count } = await supabaseClient.from(table)
+      .select('*', { count:'exact', head:true }).eq(fk, itemId);
+    return count || 0;
+  }catch(e){ return 0; }
+}
+
+/* زر واحد يخدم الموظفين والمواقع والمهام — يقلب الحالة ويعيد رسم القسم */
+window.neoToggleOff = async function(kind, itemId, deptId, name){
+  const ok = await neoSetOff(deptId, itemId, !neoIsOff(itemId), name);
+  if (!ok) return;
+  try{
+    if (kind === 'staff')            await renderStaffSection(deptId);
+    else if (kind === 'locations')   await renderLocationsSection(deptId);
+    else if (kind === 'daily_tasks') await renderTasksSection(deptId);
+  }catch(e){}
+};
+
+/* حارس مشترك: يمنع محو تاريخ عنصر بالخطأ ويقترح التعطيل بدلاً منه */
+async function neoGuardDelete(kind, itemId, name, logTable, fk){
+  const n = await neoCountLogs(logTable, fk, itemId);
+  if (!n) return true;
+  return await neoConfirm(
+    '⚠️ «' + (name || '') + '» له ' + n + ' سجلاً سابقاً',
+    'الحذف النهائي يمسح كل سجلات الأيام الماضية لهذا ' + kind + ' — <b>ولا يمكن استرجاعها</b>.'
+    + '<br><br>الأفضل: أغلق هذه النافذة واضغط زر <b>⏸ تعطيل</b> — يختفي عن مسؤولي الشفتات '
+    + 'والصالة تماماً، وتبقى بياناته سليمة، ويرجع وقت ما تحب.');
 }
 
 const FIELD_DEFS = [
@@ -1837,10 +1937,11 @@ async function handleLoggedIn(){
   }
 }
 
-async function getLocations(deptId){
+async function getLocations(deptId, includeOff){
   await neoLoadExtraCols(deptId);
+  await neoLoadOff();
   const { data } = await supabaseClient.from('locations').select('*').eq('department_id', deptId).order('sort_order', { nullsFirst: false }).order('code');
-  return data || [];
+  return includeOff ? (data || []) : neoDropOff(data);
 }
 
 async function addLocation(deptId){
@@ -1856,6 +1957,9 @@ async function addLocation(deptId){
 }
 
 async function deleteLocation(locationId, deptId){
+  const all = await getLocations(deptId, true);
+  const nm = (all.find(l => String(l.id) === String(locationId)) || {}).code || '';
+  if (!await neoGuardDelete('الموقع', locationId, nm, 'daily_logs', 'location_id')) return;
   const { error } = await supabaseClient.from('locations').delete().eq('id', locationId);
   if (error){ neoNotify('خطأ بالحذف: ' + error.message); return; }
   invalidateRefCache('locations_ref');
@@ -1867,14 +1971,18 @@ async function renderLocationsSection(deptId){
   const el = document.getElementById('locationsSection');
   if (!el) return;
   const canManage = currentManageMode;
-  const locations = await getLocations(deptId);
+  const locations = await getLocations(deptId, canManage);
   let rowsHtml = "";
   for (const loc of locations){
+    const isOff = neoIsOff(loc.id);
+    const safeCode = String(loc.code || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+    const offBtn = canManage ? ` <span style="cursor:pointer;color:${isOff ? '#3ecf6b' : '#ffcf5c'};font-size:13px;" onclick="neoToggleOff('locations','${loc.id}','${deptId}','${safeCode}')" title="${isOff ? 'إرجاع الموقع للعمل' : 'تعطيل مؤقت — يختفي عن مسؤولي الشفتات والصالة وتبقى سجلاته'}">${isOff ? '▶ إرجاع' : '⏸ تعطيل'}</span>` : '';
     const delBtn = canManage ? ` <span style="cursor:pointer;color:#ff7b7b;font-size:13px;" onclick="confirmDeleteClick(this, () => deleteLocation('${loc.id}','${deptId}'))">✕ حذف</span>` : '';
+    const offTag = isOff ? ` <span style="background:#5a4a12;color:#ffcf5c;font-size:10px;padding:2px 7px;border-radius:8px;">معطَّل مؤقتاً</span>` : '';
     rowsHtml += `
-      <div class="item-row">
-        <div class="item-name">${esc(loc.code)}</div>
-        ${delBtn}
+      <div class="item-row"${isOff ? ' style="opacity:.55;"' : ''}>
+        <div class="item-name">${esc(loc.code)}${offTag}</div>
+        ${offBtn}${delBtn}
       </div>`;
   }
   const manageHtml = canManage ? `
@@ -2506,9 +2614,10 @@ async function cleanProgSave(){
 }
 
 // ---------- إدارة المهام اليومية العامة ----------
-async function getDailyTasks(deptId){
+async function getDailyTasks(deptId, includeOff){
+  await neoLoadOff();
   const { data } = await supabaseClient.from('daily_tasks').select('*').eq('department_id', deptId).order('created_at');
-  return data || [];
+  return includeOff ? (data || []) : neoDropOff(data);
 }
 
 async function addDailyTask(deptId){
@@ -2522,6 +2631,9 @@ async function addDailyTask(deptId){
 }
 
 async function deleteDailyTask(taskId, deptId){
+  const all = await getDailyTasks(deptId, true);
+  const nm = (all.find(t => String(t.id) === String(taskId)) || {}).name || '';
+  if (!await neoGuardDelete('المهمة', taskId, nm, 'daily_task_logs', 'task_id')) return;
   const { error } = await supabaseClient.from('daily_tasks').delete().eq('id', taskId);
   if (error){ neoNotify('خطأ بالحذف: ' + error.message); return; }
   invalidateRefCache('tasks_ref');
@@ -2686,7 +2798,7 @@ async function renderTasksSection(deptId){
   if (!el) return;
   const date = currentDate || todayStr();
   const shift = currentShiftChoice;
-  const tasks = await getDailyTasks(deptId);
+  const tasks = await getDailyTasks(deptId, canManage);
   const taskIds = tasks.map(t => t.id);
   const logsMap = await getTaskLogsMap(taskIds, date, shift);
 
@@ -2703,10 +2815,14 @@ async function renderTasksSection(deptId){
   for (const t of tasks){
     const log = logsMap[t.id];
     const checked = log?.checked;
+    const isOff = neoIsOff(t.id);
+    const safeTask = String(t.name || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+    const offBtn = canManage ? ` <span style="cursor:pointer;color:${isOff ? '#3ecf6b' : '#ffcf5c'};font-size:12px;" onclick="neoToggleOff('daily_tasks','${t.id}','${deptId}','${safeTask}')" title="${isOff ? 'إرجاع المهمة' : 'تعطيل مؤقت — تختفي عن مسؤولي الشفتات والصالة وتبقى سجلاتها'}">${isOff ? '▶' : '⏸'}</span>` : '';
     const delBtn = canManage ? ` <span style="cursor:pointer;color:#ff7b7b;font-size:11px;" onclick="confirmDeleteClick(this, () => deleteDailyTask('${t.id}','${deptId}'))">✕</span>` : '';
+    const offTag = isOff ? ` <span style="background:#5a4a12;color:#ffcf5c;font-size:10px;padding:2px 7px;border-radius:8px;">معطَّلة</span>` : '';
     rowsHtml += `
-      <div class="item-row ${checked?'checked':'unchecked'}">
-        <div class="item-name">${esc(t.name)}${delBtn}</div>
+      <div class="item-row ${checked?'checked':'unchecked'}"${isOff ? ' style="opacity:.55;"' : ''}>
+        <div class="item-name">${esc(t.name)}${offTag}${offBtn}${delBtn}</div>
         <div class="check ${checked?'on':''}" id="taskchk_${t.id}" onclick="toggleTaskLog('${t.id}','${date}','${shift}')">${checked?'✓':''}</div>
       </div>`;
   }
@@ -2974,16 +3090,18 @@ async function seedDefaultPointCriteria(deptId){
   await renderPointsSection(deptId);
 }
 
-async function getStaffList(deptId){
+async function getStaffList(deptId, includeOff){
   await neoLoadExtraCols(deptId);
+  await neoLoadOff();
   const { data } = await supabaseClient.from('staff').select('*').eq('department_id', deptId).order('sort_order', { nullsFirst: false }).order('created_at');
-  return data || [];
+  return includeOff ? (data || []) : neoDropOff(data);
 }
 
 // يبدّل ترتيب موظفين متجاورين ببعض — يستخدم لأزرار ▲▼ بدل السحب والإفلات
 // (السحب والإفلات غير مضمون النجاح على كل المتصفحات/الأجهزة، وهذا بديل أبسط وأثبت لنفس الغرض)
 async function moveStaffOrder(staffId, deptId, direction){
-  const staffList = await getStaffList(deptId);
+  /* بالقائمة الكاملة — وإلا أعاد ترقيم الترتيب فوق أرقام المعطَّلين وتضاربت */
+  const staffList = await getStaffList(deptId, true);
   const idx = staffList.findIndex(s => s.id === staffId);
   const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
   if (idx === -1 || swapIdx < 0 || swapIdx >= staffList.length) return;
@@ -3011,6 +3129,9 @@ async function addStaffMember(deptId){
 }
 
 async function deleteStaffMember(staffId, deptId){
+  const all = await getStaffList(deptId, true);
+  const nm = (all.find(s => String(s.id) === String(staffId)) || {}).name || '';
+  if (!await neoGuardDelete('الموظف', staffId, nm, 'staff_evaluations', 'staff_id')) return;
   const { error } = await supabaseClient.from('staff').delete().eq('id', staffId);
   if (error){ neoNotify('خطأ بالحذف: ' + error.message); return; }
   invalidateRefCache('staff_ref');
@@ -3205,7 +3326,8 @@ async function renderStaffSection(deptId){
   if (!el) return;
   const date = currentDate || todayStr();
   const shift = currentShiftChoice;
-  const staffList = await getStaffList(deptId);
+  /* مدير المبيعات يرى المعطَّلين أيضاً ليقدر يرجّعهم؛ مسؤول الشفت لا يراهم */
+  const staffList = await getStaffList(deptId, canManage);
   const staffIds = staffList.map(s => s.id);
   const evalMap = flattenStaffExtraEvaluations(await getStaffEvaluationsMap(staffIds, date, shift));
   const { data: depts } = await cachedSelectResponse('departments', 'departments', '*', 'id');
@@ -3233,8 +3355,12 @@ async function renderStaffSection(deptId){
     const upBtn = canManage && idx > 0 ? ` <span style="cursor:pointer;color:#8ab4f8;font-size:13px;" onclick="moveStaffOrder('${s.id}','${deptId}','up')" title="نقل لأعلى">▲</span>` : '';
     const downBtn = canManage && idx < staffList.length - 1 ? ` <span style="cursor:pointer;color:#8ab4f8;font-size:13px;" onclick="moveStaffOrder('${s.id}','${deptId}','down')" title="نقل لأسفل">▼</span>` : '';
     const replaceBtn = canManage ? ` <span style="cursor:pointer;color:#3ecf6b;font-size:11px;" onclick="showReplaceStaffForm('${s.id}','${deptId}','${safeName}')" title="استبدال باسم موظف جديد بدون فقدان سجله">✏️</span>` : '';
+    /* ⏸ تعطيل مؤقت — يختفي عن الشفت والصالة وسجله يبقى كاملاً */
+    const isOff = neoIsOff(s.id);
+    const offBtn = canManage ? ` <span style="cursor:pointer;color:${isOff ? '#3ecf6b' : '#ffcf5c'};font-size:12px;" onclick="neoToggleOff('staff','${s.id}','${deptId}','${safeName}')" title="${isOff ? 'إرجاعه للعمل — يظهر فوراً لمسؤولي الشفتات والصالة' : 'تعطيل مؤقت — يختفي عن مسؤولي الشفتات والصالة، وسجله ونقاطه تبقى محفوظة'}">${isOff ? '▶' : '⏸'}</span>` : '';
     const delBtn = canManage ? ` <span style="cursor:pointer;color:#ff7b7b;font-size:11px;" onclick="confirmDeleteClick(this, () => deleteStaffMember('${s.id}','${deptId}'))">✕</span>` : '';
-    rowsHtml += `<tr><td class="code-cell" id="staffnamecell_${s.id}">${esc(s.name)}${upBtn}${downBtn}${replaceBtn}${delBtn}</td>${cells}</tr>`;
+    const offTag = isOff ? ` <span style="background:#5a4a12;color:#ffcf5c;font-size:10px;padding:2px 7px;border-radius:8px;">معطَّل مؤقتاً</span>` : '';
+    rowsHtml += `<tr${isOff ? ' style="opacity:.55;"' : ''}><td class="code-cell" id="staffnamecell_${s.id}">${esc(s.name)}${offTag}${upBtn}${downBtn}${replaceBtn}${offBtn}${delBtn}</td>${cells}</tr>`;
   }
 
   let criteriaManagerHtml = '';
@@ -10816,7 +10942,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.08.19.16";
+const APP_VERSION = "2026.09.01.01";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
