@@ -546,46 +546,67 @@ window.__netLog = [];
   @keyframes rowIn { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: none; } }
   table tr:hover td { background: rgba(255,255,255,0.03); }
 
-  /* ══ أدوات إدارية: أزرار تحكّم بحجم مضاعف ══
-     كانت الأيقونات ١٥–١٧px بحشوة ٥px، أي هدف لمس ≈٢٧px — أصغر من أن
-     يُضغط بإصبع بثقة. المضاعفة تجعله ≈٥٥px، فوق الحد الموصى به للمس.
-     قاعدة واحدة مقيّدة بالحاوية أضمن من تعديل كل نمط مضمّن على حدة. */
-  #neoAdminTools [data-neoact]{
-    font-size: 32px !important;
-    padding: 10px 16px !important;
-    border-radius: 11px !important;
-    min-width: 30px;
-    text-align: center;
-  }
-  #neoAdminTools b[onclick]{           /* شرائح إرجاع الأعمدة المعطَّلة */
-    font-size: 20px !important;
-    padding: 7px 13px !important;
-    border-radius: 10px !important;
+  /* ══ وضع التعديل: أزرار التحكّم أكبر بـ ١.٣ ══
+     أزرار ✏️ ⏸ ✕ ▲ ▼ كانت ١٠–١٧px بحشوة ٥px — أصغر من أن تُضغط بإصبع بثقة.
+     القاعدة تسري على كل الأقسام دفعةً واحدة عبر body.neoManage بدل تعديل
+     عشرات الأنماط المضمّنة كلٌّ على حدة.
+     الحجم يُشتق من قيمة كل زر الأصلية فتبقى النسبة ١.٣ لكلٍّ منها، ويُحفظ
+     التدرّج البصري بدل تسطيح الجميع على رقم واحد.
+     مربّعات ✓/✗ مستثناة — ليست أزرار تحكّم وتكبيرها يبعثر الجداول. */
+  body.neoManage span[onclick]:not(.check),
+  body.neoManage b[onclick],
+  body.neoManage [data-neoact]{
+    padding: 6px 9px !important;
+    border-radius: 8px !important;
+    line-height: 1.25 !important;
     display: inline-block;
-    margin-block: 3px;
   }
+  body.neoManage span[onclick]:not(.check)[style*="font-size:10px"],
+  body.neoManage b[onclick][style*="font-size:10px"],
+  body.neoManage [data-neoact][style*="font-size:10px"]{ font-size: 13px !important; }   /* ×1.30 */
+  body.neoManage span[onclick]:not(.check)[style*="font-size:11px"],
+  body.neoManage b[onclick][style*="font-size:11px"],
+  body.neoManage [data-neoact][style*="font-size:11px"]{ font-size: 14px !important; }   /* ×1.27 */
+  body.neoManage span[onclick]:not(.check)[style*="font-size:12px"],
+  body.neoManage b[onclick][style*="font-size:12px"],
+  body.neoManage [data-neoact][style*="font-size:12px"]{ font-size: 16px !important; }   /* ×1.33 */
+  body.neoManage span[onclick]:not(.check)[style*="font-size:13px"],
+  body.neoManage b[onclick][style*="font-size:13px"],
+  body.neoManage [data-neoact][style*="font-size:13px"]{ font-size: 17px !important; }   /* ×1.31 */
+  body.neoManage span[onclick]:not(.check)[style*="font-size:14px"],
+  body.neoManage b[onclick][style*="font-size:14px"],
+  body.neoManage [data-neoact][style*="font-size:14px"]{ font-size: 18px !important; }   /* ×1.29 */
+  body.neoManage span[onclick]:not(.check)[style*="font-size:15px"],
+  body.neoManage b[onclick][style*="font-size:15px"],
+  body.neoManage [data-neoact][style*="font-size:15px"]{ font-size: 20px !important; }   /* ×1.33 */
+  body.neoManage span[onclick]:not(.check)[style*="font-size:17px"],
+  body.neoManage b[onclick][style*="font-size:17px"],
+  body.neoManage [data-neoact][style*="font-size:17px"]{ font-size: 22px !important; }   /* ×1.29 */
+
+  /* أدوات إدارية: حقولها وأزرارها العادية — ١.٣ كذلك.
+     (أيقونات data-neoact تأخذ حجمها من الخريطة أعلاه: ١٥→٢٠ و١٧→٢٢) */
+  /* شرائح إرجاع الأعمدة المعطَّلة: لا حجم مضمّن لها — ترث ١٠px من سطرها،
+     فلا تلتقطها خريطة الأحجام أعلاه وتحتاج قيمة صريحة (١٠ × ١.٣ ≈ ١٣). */
+  #neoAdminTools b[onclick]{ font-size: 13px !important; margin-block: 3px; }
+  #neoAdminTools div[style*="font-size:10px"]{ font-size: 13px !important; }
   #neoAdminTools button{
-    font-size: 22px !important;
-    padding: 12px 20px !important;
-    border-radius: 11px !important;
+    font-size: 14px !important;
+    padding: 8px 13px !important;
+    border-radius: 9px !important;
   }
   #neoAdminTools input[type="text"]{
-    font-size: 19px !important;
-    padding: 11px !important;
-    min-width: 0 !important;   /* بدونها يرفض الحقل المرن الانكماش تحت عرضه الطبيعي
-                                  فتفيض الصفحة أفقياً على الهواتف الضيّقة */
+    font-size: 15px !important;
+    padding: 8px !important;
+    min-width: 0 !important;   /* بدونها يرفض الحقل المرن الانكماش تحت عرضه
+                                  الطبيعي فتفيض الصفحة أفقياً على الهواتف الضيّقة */
   }
-  /* الشرائح تكبر مع محتواها حتى لا تتزاحم الأزرار داخلها،
-     وتلتفّ داخلياً حتى لا يفرض اسم عمود طويل عرضاً أكبر من الشاشة */
   #neoAdminTools span[style*="border-radius:10px"]{
-    font-size: 19px !important;
-    gap: 12px !important;
+    font-size: 15px !important;
+    gap: 9px !important;
     flex-wrap: wrap !important;
     max-width: 100%;
   }
-  /* عناوين ونصوص الشرح تكبر بنسبة أقل — الأزرار هي المقصودة */
-  #neoAdminTools div[style*="font-size:12px"]{ font-size: 16px !important; }
-  #neoAdminTools div[style*="font-size:10px"]{ font-size: 14px !important; }
+  #neoAdminTools div[style*="font-size:12px"]{ font-size: 15px !important; }
   .roomy-table th { padding: 13px 10px; }
   .roomy-table td { padding: 12px 10px; }
   .roomy-table tr:nth-child(even) td { background: rgba(255,255,255,0.015); }
@@ -1807,6 +1828,12 @@ let currentDate = null; // التاريخ المعروض حالياً بواجه
 let currentShiftProfile = null; // نحفظه عشان نرجع للواجهة العادية بعد الخروج من وضع المراجعة خطوة بخطوة
 let locationStepperState = null; // حالة وضع "مراجعة المواقع خطوة بخطوة" لمسؤول الشفت (تجريبي)
 let currentManageMode = false; // هل مسموح بالإضافة/الحذف (مدير المبيعات بس)
+/* وضع التعديل متغيّر JS لا تراه الأنماط — نعكسه صنفاً على body ليقدر CSS
+   يكبّر أزرار التحكّم في كل الأقسام دفعةً واحدة بدل تعديل كل نمط مضمّن. */
+function neoSetManageMode(v){
+  currentManageMode = !!v;
+  try{ document.body.classList.toggle('neoManage', !!v); }catch(e){}
+}
 let salesSelectedDate = null; // التاريخ المرجعي بواجهة مسؤول المبيعات
 let currentSalesRange = 'day';
 let currentPointsRange = 'day';
@@ -1976,11 +2003,11 @@ async function handleLoggedIn(){
       document.getElementById('shiftView').classList.remove('hidden');
       currentShiftChoice = 'morning';
       currentDate = todayStr();
-      currentManageMode = false;
+      neoSetManageMode(false);
       await renderShiftView(profile);
     } else if (profile.role === 'hall'){
       document.getElementById('hallView').classList.remove('hidden');
-      currentManageMode = false;
+      neoSetManageMode(false);
       await renderHallView(profile);
     } else if (profile.role === 'sales'){
       document.getElementById('salesView').classList.remove('hidden');
@@ -9065,7 +9092,7 @@ async function renderSalesDeptMonitor(deptId){
       <div id="cleanTableWrap" class="status neoLoad">جاري التحميل...</div>
     </div>
     <div class="card" id="customSectionsMonitor"></div>`;
-  currentManageMode = false;
+  neoSetManageMode(false);
   currentShiftChoice = 'morning';
   currentDate = todayStr();
   /* طي كل بطاقات التحليل — تُحمّل عند الفتح فقط */
@@ -9161,7 +9188,7 @@ window.neoTogglePanel = neoTogglePanel;
 async function renderSalesDeptManage(deptId){
   const el = document.getElementById('salesView');
   const { data: dept } = await supabaseClient.from('departments').select('*').eq('id', deptId).single();
-  currentManageMode = true;
+  neoSetManageMode(true);
   currentShiftChoice = 'morning';
   currentDate = todayStr();
   const dn = dept?.name;
@@ -11074,7 +11101,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.01.06";
+const APP_VERSION = "2026.09.01.07";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -12011,11 +12038,11 @@ const APP_VERSION = "2026.09.01.06";
     if (typeof neoColsDept !== 'undefined') neoColsDept = null;
     if (p.role === 'shift'){
       document.getElementById('shiftView').classList.remove('hidden');
-      currentShiftChoice = 'morning'; currentDate = todayStr(); currentManageMode = false;
+      currentShiftChoice = 'morning'; currentDate = todayStr(); neoSetManageMode(false);
       await renderShiftView(p);
     } else if (p.role === 'hall'){
       document.getElementById('hallView').classList.remove('hidden');
-      currentManageMode = false;
+      neoSetManageMode(false);
       await renderHallView(p);
     } else {
       document.getElementById('salesView').classList.remove('hidden');
@@ -12054,11 +12081,11 @@ const APP_VERSION = "2026.09.01.06";
     ['shiftView','hallView','salesView'].forEach(id => document.getElementById(id)?.classList.add('hidden'));
     if (p.role === 'shift'){
       document.getElementById('shiftView').classList.remove('hidden');
-      currentShiftChoice = 'morning'; currentDate = todayStr(); currentManageMode = false;
+      currentShiftChoice = 'morning'; currentDate = todayStr(); neoSetManageMode(false);
       await renderShiftView(p);
     } else if (p.role === 'hall'){
       document.getElementById('hallView').classList.remove('hidden');
-      currentManageMode = false;
+      neoSetManageMode(false);
       await renderHallView(p);
     } else {
       document.getElementById('salesView').classList.remove('hidden');
