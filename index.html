@@ -1267,20 +1267,15 @@ try{ window.supabaseClient = supabaseClient; }catch(e){}
 // يعمل تحديث كامل للصفحة، نخلي كل نسخة مخزنة تنتهي صلاحيتها تلقائياً بعد دقيقة وحدة.
 const _refCache = {};
 const REF_CACHE_TTL_MS = 20000; // ٢٠ ثانية — حتى تظهر الإضافات الجديدة بسرعة لكل المستخدمين
-async function cachedSelectResponse(cacheKey, table, selectStr, orderCol, includeOff){
-  /* المعطَّلون مؤقتاً يُستبعدون هنا — نقطة واحدة تغطي كل الشاشات التي تقرأ
-     الموظفين/المواقع/المهام (الشفت، الصالة، المتابعة). الذاكرة المؤقتة تحتفظ
-     بالقائمة كاملة، والترشيح يتم عند كل إرجاع — فإرجاع الموظف للعمل يظهر فوراً.
-     مرّر includeOff=true لشاشات الإدارة التي يجب أن ترى الجميع. */
-  const finish = async (res) => {
-    if (includeOff || !NEO_OFFABLE[table] || res.error || !res.data) return res;
-    await neoLoadOff();
-    return { data: neoDropOff(res.data), error: null };
-  };
+async function cachedSelectResponse(cacheKey, table, selectStr, orderCol){
+  /* المعطَّلون يبقون في القوائم — يظهرون للمسؤولين بلا مربعات ومكتوب عليهم
+     «معطَّل». الاستثناء من النسبة يتم في الحساب لا بالإخفاء. لكن حالة التعطيل
+     لازم تكون محمّلة قبل أي رسم أو حساب، فنضمن تحميلها هنا. */
+  if (NEO_OFFABLE[table]) await neoLoadOff();
   const cached = _refCache[cacheKey];
   /* لا نثق بذاكرة فارغة — قد تكون نتيجة انقطاع لحظي فتُخفي كل البيانات */
   if (cached && cached.data && cached.data.length && (Date.now() - cached.ts) < REF_CACHE_TTL_MS){
-    return finish({ data: cached.data, error: null });
+    return { data: cached.data, error: null };
   }
   const mkQ = () => {
     let x = supabaseClient.from(table).select(selectStr);
@@ -1300,7 +1295,7 @@ async function cachedSelectResponse(cacheKey, table, selectStr, orderCol, includ
   }
   /* نُخزّن النتائج غير الفارغة فقط */
   if (!res.error && res.data && res.data.length) _refCache[cacheKey] = { data: res.data, ts: Date.now() };
-  return finish(res);
+  return res;
 }
 function invalidateRefCache(cacheKey){
   if (cacheKey) delete _refCache[cacheKey];
@@ -1343,7 +1338,6 @@ async function neoLoadOff(force){
   return _neoOffSet;
 }
 function neoIsOff(id){ return !!(_neoOffSet && _neoOffSet.has(String(id))); }
-function neoDropOff(list){ return (list || []).filter(x => !neoIsOff(x && x.id)); }
 window.neoIsOff = neoIsOff;
 
 /* تعطيل عنصر أو إرجاعه. label للرسالة فقط. */
@@ -1479,6 +1473,9 @@ function flattenStaffExtraEvaluations(logsById){
    مثال: موظفة أنثى → «شعر/لحية» معطّلة لها وحدها */
 function neoCellDisabled(item, fieldKey){
   if (!item) return false;
+  /* المعطَّل مؤقتاً = كل خاناته معطّلة: يظهر اسمه للمسؤولين بلا مربعات،
+     ولا يمنع اكتمال بقية الصفوف، ولا يدخل في حساب النسبة. */
+  if (typeof neoIsOff === 'function' && neoIsOff(item.id)) return true;
   const d = item.disabled_fields;
   if (!d) return false;
   const arr = Array.isArray(d) ? d : (typeof d === 'string' ? (function(){ try{ return JSON.parse(d); }catch(e){ return []; } })() : []);
@@ -1488,7 +1485,9 @@ window.neoCellDisabled = neoCellDisabled;
 
 /* عدد الخانات المعطّلة في عنصر — لخصمها من المتوقّع */
 function neoDisabledCount(item, fieldKeys){
-  if (!item || !item.disabled_fields) return 0;
+  if (!item) return 0;
+  if (typeof neoIsOff === 'function' && neoIsOff(item.id)) return (fieldKeys || []).length;
+  if (!item.disabled_fields) return 0;
   const d = item.disabled_fields;
   const arr = Array.isArray(d) ? d : (typeof d === 'string' ? (function(){ try{ return JSON.parse(d); }catch(e){ return []; } })() : []);
   return (fieldKeys || []).filter(k => arr.indexOf(k) !== -1).length;
@@ -1937,11 +1936,11 @@ async function handleLoggedIn(){
   }
 }
 
-async function getLocations(deptId, includeOff){
+async function getLocations(deptId){
   await neoLoadExtraCols(deptId);
   await neoLoadOff();
   const { data } = await supabaseClient.from('locations').select('*').eq('department_id', deptId).order('sort_order', { nullsFirst: false }).order('code');
-  return includeOff ? (data || []) : neoDropOff(data);
+  return data || [];
 }
 
 async function addLocation(deptId){
@@ -1957,7 +1956,7 @@ async function addLocation(deptId){
 }
 
 async function deleteLocation(locationId, deptId){
-  const all = await getLocations(deptId, true);
+  const all = await getLocations(deptId);
   const nm = (all.find(l => String(l.id) === String(locationId)) || {}).code || '';
   if (!await neoGuardDelete('الموقع', locationId, nm, 'daily_logs', 'location_id')) return;
   const { error } = await supabaseClient.from('locations').delete().eq('id', locationId);
@@ -1971,7 +1970,7 @@ async function renderLocationsSection(deptId){
   const el = document.getElementById('locationsSection');
   if (!el) return;
   const canManage = currentManageMode;
-  const locations = await getLocations(deptId, canManage);
+  const locations = await getLocations(deptId);
   let rowsHtml = "";
   for (const loc of locations){
     const isOff = neoIsOff(loc.id);
@@ -2614,10 +2613,10 @@ async function cleanProgSave(){
 }
 
 // ---------- إدارة المهام اليومية العامة ----------
-async function getDailyTasks(deptId, includeOff){
+async function getDailyTasks(deptId){
   await neoLoadOff();
   const { data } = await supabaseClient.from('daily_tasks').select('*').eq('department_id', deptId).order('created_at');
-  return includeOff ? (data || []) : neoDropOff(data);
+  return data || [];
 }
 
 async function addDailyTask(deptId){
@@ -2631,7 +2630,7 @@ async function addDailyTask(deptId){
 }
 
 async function deleteDailyTask(taskId, deptId){
-  const all = await getDailyTasks(deptId, true);
+  const all = await getDailyTasks(deptId);
   const nm = (all.find(t => String(t.id) === String(taskId)) || {}).name || '';
   if (!await neoGuardDelete('المهمة', taskId, nm, 'daily_task_logs', 'task_id')) return;
   const { error } = await supabaseClient.from('daily_tasks').delete().eq('id', taskId);
@@ -2798,7 +2797,7 @@ async function renderTasksSection(deptId){
   if (!el) return;
   const date = currentDate || todayStr();
   const shift = currentShiftChoice;
-  const tasks = await getDailyTasks(deptId, canManage);
+  const tasks = await getDailyTasks(deptId);
   const taskIds = tasks.map(t => t.id);
   const logsMap = await getTaskLogsMap(taskIds, date, shift);
 
@@ -3090,18 +3089,17 @@ async function seedDefaultPointCriteria(deptId){
   await renderPointsSection(deptId);
 }
 
-async function getStaffList(deptId, includeOff){
+async function getStaffList(deptId){
   await neoLoadExtraCols(deptId);
   await neoLoadOff();
   const { data } = await supabaseClient.from('staff').select('*').eq('department_id', deptId).order('sort_order', { nullsFirst: false }).order('created_at');
-  return includeOff ? (data || []) : neoDropOff(data);
+  return data || [];
 }
 
 // يبدّل ترتيب موظفين متجاورين ببعض — يستخدم لأزرار ▲▼ بدل السحب والإفلات
 // (السحب والإفلات غير مضمون النجاح على كل المتصفحات/الأجهزة، وهذا بديل أبسط وأثبت لنفس الغرض)
 async function moveStaffOrder(staffId, deptId, direction){
-  /* بالقائمة الكاملة — وإلا أعاد ترقيم الترتيب فوق أرقام المعطَّلين وتضاربت */
-  const staffList = await getStaffList(deptId, true);
+  const staffList = await getStaffList(deptId);
   const idx = staffList.findIndex(s => s.id === staffId);
   const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
   if (idx === -1 || swapIdx < 0 || swapIdx >= staffList.length) return;
@@ -3129,7 +3127,7 @@ async function addStaffMember(deptId){
 }
 
 async function deleteStaffMember(staffId, deptId){
-  const all = await getStaffList(deptId, true);
+  const all = await getStaffList(deptId);
   const nm = (all.find(s => String(s.id) === String(staffId)) || {}).name || '';
   if (!await neoGuardDelete('الموظف', staffId, nm, 'staff_evaluations', 'staff_id')) return;
   const { error } = await supabaseClient.from('staff').delete().eq('id', staffId);
@@ -3326,8 +3324,7 @@ async function renderStaffSection(deptId){
   if (!el) return;
   const date = currentDate || todayStr();
   const shift = currentShiftChoice;
-  /* مدير المبيعات يرى المعطَّلين أيضاً ليقدر يرجّعهم؛ مسؤول الشفت لا يراهم */
-  const staffList = await getStaffList(deptId, canManage);
+  const staffList = await getStaffList(deptId);
   const staffIds = staffList.map(s => s.id);
   const evalMap = flattenStaffExtraEvaluations(await getStaffEvaluationsMap(staffIds, date, shift));
   const { data: depts } = await cachedSelectResponse('departments', 'departments', '*', 'id');
@@ -3434,6 +3431,7 @@ function neoComputeShiftPct(){
     const st = shiftRowsState;
     if (st && st.locations){
       st.locations.forEach(loc => {
+        if (typeof neoIsOff === 'function' && neoIsOff(loc.id)) return;  /* معطَّل — خارج النسبة بأعمدته المخصّصة أيضاً */
         const log = st.logsMap[loc.id] || {};
         const fn = log?.field_notes || {};
         FIELD_DEFS.forEach(f => {
@@ -4182,7 +4180,9 @@ function progBuildRows(cfg){
       const nv = (log.notes||'').replace(/"/g,'&quot;');
       cells += `<td><input class="notes-input" value="${nv}" onchange="progSaveGeneralNote('${cfg.key}','${it.id}', this.value)"></td>`;
     }
-    html += `<tr><td class="code-cell">${esc(it.label)}</td>${cells}</tr>`;
+    const offBadge = (typeof neoIsOff === 'function' && neoIsOff(it.id))
+      ? ' <span style="background:#5a4a12;color:#ffcf5c;font-size:10px;padding:2px 7px;border-radius:8px;white-space:nowrap;">معطَّل</span>' : '';
+    html += `<tr${offBadge ? ' style="opacity:.6;"' : ''}><td class="code-cell">${esc(it.label)}${offBadge}</td>${cells}</tr>`;
     for (const w of wrong){
       const val = (fn[w.key]||'').replace(/"/g,'&quot;');
       html += `<tr><td colspan="${totalCols}" style="padding:4px 8px;">
@@ -4645,7 +4645,9 @@ function buildStatusTable(items, fieldDefs, rowLabelFn, logsById){
     const hm = log?.hall_missing_notes || {};
     Object.keys(hm).forEach(k => { if (labelByKey[k] && (hm[k]||'').trim()) parts.push(`🏬 ${labelByKey[k]}: ${String(hm[k]).replace(/</g,'&lt;')}`); });
     const notesCell = `<td style="color:#ffb84d; font-size:12px; white-space:normal; text-align:right;">${parts.join('<br>')}</td>`;
-    return `<tr><td class="code-cell">${esc(rowLabelFn(item))}</td>${cells}${notesCell}</tr>`;
+    const offBadge = (typeof neoIsOff === 'function' && neoIsOff(item.id))
+      ? ' <span style="background:#5a4a12;color:#ffcf5c;font-size:10px;padding:2px 7px;border-radius:8px;white-space:nowrap;">معطَّل</span>' : '';
+    return `<tr${offBadge ? ' style="opacity:.6;"' : ''}><td class="code-cell">${esc(rowLabelFn(item))}${offBadge}</td>${cells}${notesCell}</tr>`;
   }).join('');
   const html = `<div class="table-wrap roomy-table"><table>
     <tr><th>العنصر</th>${fieldDefs.map(f=>`<th>${f.label}</th>`).join('')}<th>ملاحظات</th></tr>
@@ -7603,6 +7605,7 @@ async function computeAllDeptsOverallPct(date){
   const locToDept = {}; (allLocations||[]).forEach(l => locToDept[l.id]=l.department_id);
   const { data: locLogs } = await supabaseClient.from('daily_logs').select('*').eq('log_date', date);
   (allLocations||[]).forEach(loc => {
+    if (neoIsOff(loc.id)) return;                 /* معطَّل مؤقتاً — خارج الحساب كلياً */
     const dis = (typeof neoDisabledCount === 'function') ? neoDisabledCount(loc, FIELD_DEFS.map(f=>f.key)) : 0;
     bump(loc.department_id, Math.max(1, colsOf(loc.department_id,'loc') - dis) * SHIFTS, 0, 'loc');
   }); // 2 = شفتين، القيمة الافتراضية صفر منجز
@@ -7617,6 +7620,7 @@ async function computeAllDeptsOverallPct(date){
   const staffToDept = {}; (allStaff||[]).forEach(s => staffToDept[s.id]=s.department_id);
   const { data: staffLogs } = await supabaseClient.from('staff_evaluations').select('*').eq('log_date', date);
   (allStaff||[]).forEach(s => {
+    if (neoIsOff(s.id)) return;                   /* معطَّل مؤقتاً — خارج الحساب كلياً */
     const dis = (typeof neoDisabledCount === 'function') ? neoDisabledCount(s, STAFF_FIELD_DEFS.map(f=>f.key)) : 0;
     bump(s.department_id, Math.max(1, colsOf(s.department_id,'staff') - dis) * SHIFTS, 0, 'staff');
   });
@@ -7630,7 +7634,7 @@ async function computeAllDeptsOverallPct(date){
   const { data: allTasks } = await cachedSelectResponse('tasks_ref', 'daily_tasks', 'id, department_id, name, created_at', 'created_at');
   const taskToDept = {}; (allTasks||[]).forEach(t => taskToDept[t.id]=t.department_id);
   const { data: taskLogs } = await supabaseClient.from('daily_task_logs').select('*').eq('log_date', date);
-  (allTasks||[]).forEach(t => bump(t.department_id, 1 * SHIFTS, 0, 'tasks'));
+  (allTasks||[]).forEach(t => { if (!neoIsOff(t.id)) bump(t.department_id, 1 * SHIFTS, 0, 'tasks'); });
   (taskLogs||[]).forEach(l => {
     const deptId = taskToDept[l.task_id];
     if (!deptId) return;
@@ -7745,7 +7749,7 @@ async function computeAllDeptsOverallPctRange(startDate, endDate){
   const { data: allLocations } = await cachedSelectResponse('locations_ref', 'locations', 'id, department_id, code, sort_order', 'sort_order');
   const locToDept = {}; (allLocations||[]).forEach(l => locToDept[l.id]=l.department_id);
   const { data: locLogs } = await supabaseClient.from('daily_logs').select('*').gte('log_date', startDate).lte('log_date', endDate);
-  (allLocations||[]).forEach(loc => bump(loc.department_id, FIELD_DEFS.length * SHIFTS * dayCount, 0));
+  (allLocations||[]).forEach(loc => { if (!neoIsOff(loc.id)) bump(loc.department_id, FIELD_DEFS.length * SHIFTS * dayCount, 0); });
   (locLogs||[]).forEach(l => {
     const deptId = locToDept[l.location_id];
     if (!deptId) return;
@@ -7756,7 +7760,7 @@ async function computeAllDeptsOverallPctRange(startDate, endDate){
   const { data: allStaff } = await cachedSelectResponse('staff_ref', 'staff', 'id, department_id, name, sort_order, created_at', 'sort_order');
   const staffToDept = {}; (allStaff||[]).forEach(s => staffToDept[s.id]=s.department_id);
   const { data: staffLogs } = await supabaseClient.from('staff_evaluations').select('*').gte('log_date', startDate).lte('log_date', endDate);
-  (allStaff||[]).forEach(s => bump(s.department_id, STAFF_FIELD_DEFS.length * SHIFTS * dayCount, 0));
+  (allStaff||[]).forEach(s => { if (!neoIsOff(s.id)) bump(s.department_id, STAFF_FIELD_DEFS.length * SHIFTS * dayCount, 0); });
   (staffLogs||[]).forEach(e => {
     const deptId = staffToDept[e.staff_id];
     if (!deptId) return;
@@ -7767,7 +7771,7 @@ async function computeAllDeptsOverallPctRange(startDate, endDate){
   const { data: allTasks } = await cachedSelectResponse('tasks_ref', 'daily_tasks', 'id, department_id, name, created_at', 'created_at');
   const taskToDept = {}; (allTasks||[]).forEach(t => taskToDept[t.id]=t.department_id);
   const { data: taskLogs } = await supabaseClient.from('daily_task_logs').select('*').gte('log_date', startDate).lte('log_date', endDate);
-  (allTasks||[]).forEach(t => bump(t.department_id, 1 * SHIFTS * dayCount, 0));
+  (allTasks||[]).forEach(t => { if (!neoIsOff(t.id)) bump(t.department_id, 1 * SHIFTS * dayCount, 0); });
   (taskLogs||[]).forEach(l => {
     const deptId = taskToDept[l.task_id];
     if (!deptId) return;
@@ -10942,7 +10946,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.01.01";
+const APP_VERSION = "2026.09.01.02";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
