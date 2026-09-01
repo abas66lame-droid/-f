@@ -1318,7 +1318,12 @@ function invalidateRefCache(cacheKey){
    ══════════════════════════════════════════════════════════════════ */
 const NEO_OFF_TAG = '⟦off⟧';
 /* الجداول التي يسري عليها التعطيل — تُرشَّح تلقائياً في cachedSelectResponse */
-const NEO_OFFABLE = { staff:1, locations:1, daily_tasks:1 };
+const NEO_OFFABLE = { staff:1, locations:1, daily_tasks:1,
+  ipads:1, serial_readers:1, ipad_reader_devices:1, laptops:1, pos_devices:1,
+  custom_sections:1, custom_section_rows:1,
+  staff_criteria:1, point_criteria:1 };
+/* المركبات مستثناة عمداً: نظام التوصيل عنده «أرشفة» تؤدي نفس الغرض
+   وتحفظ الرحلات — آليتان متنافستان على نفس الشيء تربك المستخدم. */
 let _neoOffSet = null, _neoOffTs = 0;
 const NEO_OFF_TTL_MS = 20000;   /* نفس عمر ذاكرة المراجع — تظهر التغييرات بسرعة على كل الأجهزة */
 
@@ -1371,13 +1376,27 @@ async function neoCountLogs(table, fk, itemId){
 }
 
 /* زر واحد يخدم الموظفين والمواقع والمهام — يقلب الحالة ويعيد رسم القسم */
+window.NEO_OFF_RENDER = {
+  staff:                'renderStaffSection',
+  locations:            'renderLocationsSection',
+  daily_tasks:          'renderTasksSection',
+  ipads:                'renderIpadSection',
+  serial_readers:       'renderReaderSection',
+  laptops:              'renderLaptopSection',
+  ipad_reader_devices:  'renderIpadReaderDeviceSection',
+  pos_devices:          'renderPosDeviceSection',
+  custom_sections:      'renderCustomSectionsManage',
+  custom_section_rows:  'renderCustomSectionsManage',
+  staff_criteria:       'renderStaffSection',
+  point_criteria:       'renderPointCriteriaManage'
+};
 window.neoToggleOff = async function(kind, itemId, deptId, name){
   const ok = await neoSetOff(deptId, itemId, !neoIsOff(itemId), name);
   if (!ok) return;
   try{
-    if (kind === 'staff')            await renderStaffSection(deptId);
-    else if (kind === 'locations')   await renderLocationsSection(deptId);
-    else if (kind === 'daily_tasks') await renderTasksSection(deptId);
+    /* دوال الرسم معرَّفة في النطاق العام فهي متاحة على window */
+    const fn = window[window.NEO_OFF_RENDER[kind] || ''];
+    if (typeof fn === 'function') await fn(deptId);
   }catch(e){}
 };
 
@@ -1423,9 +1442,11 @@ async function staffFieldDefsForDeptName(deptName, deptId){
   return [...base, ...extras];
 }
 
-async function getStaffCriteria(deptId){
+async function getStaffCriteria(deptId, includeOff){
+  await neoLoadOff();
   const { data } = await supabaseClient.from('staff_criteria').select('*').eq('department_id', deptId).order('created_at');
-  return data || [];
+  /* المعيار المعطَّل يختفي كعمود من كل الشاشات — والإدارة تمرّر includeOff لتراه وترجّعه */
+  return includeOff ? (data || []) : (data || []).filter(c => !neoIsOff(c.id));
 }
 
 async function addStaffCriterion(deptId, name){
@@ -2072,6 +2093,8 @@ async function addIpad(deptId){
 }
 
 async function deleteIpad(ipadId, deptId){
+  const _nm = ((await supabaseClient.from('ipads').select('code').eq('id', ipadId).maybeSingle()).data||{}).code || '';
+  if (!await neoGuardDelete('الجهاز', ipadId, _nm, 'ipad_logs', 'ipad_id')) return;
   const { error } = await supabaseClient.from('ipads').delete().eq('id', ipadId);
   if (error){ neoNotify('خطأ بالحذف: ' + error.message); return; }
   invalidateRefCache('ipads_ref');
@@ -2125,7 +2148,10 @@ async function renderIpadSection(deptId){
       cells += `<td><div class="check ${checked?'on':''}" id="ipadchk_${ip.id}_${f.key}" onclick="toggleIpadField('${ip.id}','${f.key}','${date}','${shift}')">${checked?'✓':''}</div></td>`;
     }
     const delBtn = canManage ? ` <span style="cursor:pointer;color:#ff7b7b;font-size:11px;" onclick="confirmDeleteClick(this, () => deleteIpad('${ip.id}','${deptId}'))">✕</span>` : '';
-    rowsHtml += `<tr><td class="code-cell">${esc(ip.code)}${delBtn}</td>${cells}</tr>`;
+    const _off = neoIsOff(ip.id);
+    const offBtn = canManage ? ` <span style="cursor:pointer;color:${_off?'#3ecf6b':'#ffcf5c'};font-size:12px;" onclick="neoToggleOff('ipads','${ip.id}','${deptId}','${String(ip.code||'').replace(/'/g,"\\'")}')" title="${_off?'إرجاعه للعمل':'تعطيل مؤقت — يظهر بلا مربعات ولا يُحتسب'}">${_off?'▶':'⏸'}</span>` : '';
+    const offTag = _off ? ` <span style="background:#5a4a12;color:#ffcf5c;font-size:10px;padding:2px 7px;border-radius:8px;">معطَّل</span>` : '';
+    rowsHtml += `<tr${_off?' style="opacity:.55;"':''}><td class="code-cell">${esc(ip.code)}${offTag}${offBtn}${delBtn}</td>${cells}</tr>`;
   }
 
   const manageHtml = canManage ? `
@@ -2163,6 +2189,8 @@ async function addReader(deptId){
 }
 
 async function deleteReader(readerId, deptId){
+  const _nm = ((await supabaseClient.from('serial_readers').select('code').eq('id', readerId).maybeSingle()).data||{}).code || '';
+  if (!await neoGuardDelete('القارئ', readerId, _nm, 'serial_reader_logs', 'serial_reader_id')) return;
   const { error } = await supabaseClient.from('serial_readers').delete().eq('id', readerId);
   if (error){ neoNotify('خطأ بالحذف: ' + error.message); return; }
   invalidateRefCache('readers_ref');
@@ -2216,7 +2244,10 @@ async function renderReaderSection(deptId){
       cells += `<td><div class="check ${checked?'on':''}" id="readerchk_${r.id}_${f.key}" onclick="toggleReaderField('${r.id}','${f.key}','${date}','${shift}')">${checked?'✓':''}</div></td>`;
     }
     const delBtn = canManage ? ` <span style="cursor:pointer;color:#ff7b7b;font-size:11px;" onclick="confirmDeleteClick(this, () => deleteReader('${r.id}','${deptId}'))">✕</span>` : '';
-    rowsHtml += `<tr><td class="code-cell">${esc(r.code)}${delBtn}</td>${cells}</tr>`;
+    const _off = neoIsOff(r.id);
+    const offBtn = canManage ? ` <span style="cursor:pointer;color:${_off?'#3ecf6b':'#ffcf5c'};font-size:12px;" onclick="neoToggleOff('serial_readers','${r.id}','${deptId}','${String(r.code||'').replace(/'/g,"\\'")}')" title="${_off?'إرجاعه للعمل':'تعطيل مؤقت — يظهر بلا مربعات ولا يُحتسب'}">${_off?'▶':'⏸'}</span>` : '';
+    const offTag = _off ? ` <span style="background:#5a4a12;color:#ffcf5c;font-size:10px;padding:2px 7px;border-radius:8px;">معطَّل</span>` : '';
+    rowsHtml += `<tr${_off?' style="opacity:.55;"':''}><td class="code-cell">${esc(r.code)}${offTag}${offBtn}${delBtn}</td>${cells}</tr>`;
   }
 
   const manageHtml = canManage ? `
@@ -2254,6 +2285,8 @@ async function addLaptop(deptId){
 }
 
 async function deleteLaptop(laptopId, deptId){
+  const _nm = ((await supabaseClient.from('laptops').select('code').eq('id', laptopId).maybeSingle()).data||{}).code || '';
+  if (!await neoGuardDelete('اللابتوب', laptopId, _nm, 'laptop_logs', 'laptop_id')) return;
   const { error } = await supabaseClient.from('laptops').delete().eq('id', laptopId);
   if (error){ neoNotify('خطأ بالحذف: ' + error.message); return; }
   invalidateRefCache('laptops_ref');
@@ -2307,7 +2340,10 @@ async function renderLaptopSection(deptId){
       cells += `<td><div class="check ${checked?'on':''}" id="laptopchk_${l.id}_${f.key}" onclick="toggleLaptopField('${l.id}','${f.key}','${date}','${shift}')">${checked?'✓':''}</div></td>`;
     }
     const delBtn = canManage ? ` <span style="cursor:pointer;color:#ff7b7b;font-size:11px;" onclick="confirmDeleteClick(this, () => deleteLaptop('${l.id}','${deptId}'))">✕</span>` : '';
-    rowsHtml += `<tr><td class="code-cell">${esc(l.code)}${delBtn}</td>${cells}</tr>`;
+    const _off = neoIsOff(l.id);
+    const offBtn = canManage ? ` <span style="cursor:pointer;color:${_off?'#3ecf6b':'#ffcf5c'};font-size:12px;" onclick="neoToggleOff('laptops','${l.id}','${deptId}','${String(l.code||'').replace(/'/g,"\\'")}')" title="${_off?'إرجاعه للعمل':'تعطيل مؤقت — يظهر بلا مربعات ولا يُحتسب'}">${_off?'▶':'⏸'}</span>` : '';
+    const offTag = _off ? ` <span style="background:#5a4a12;color:#ffcf5c;font-size:10px;padding:2px 7px;border-radius:8px;">معطَّل</span>` : '';
+    rowsHtml += `<tr${_off?' style="opacity:.55;"':''}><td class="code-cell">${esc(l.code)}${offTag}${offBtn}${delBtn}</td>${cells}</tr>`;
   }
 
   const manageHtml = canManage ? `
@@ -2345,6 +2381,8 @@ async function addIpadReaderDevice(deptId){
 }
 
 async function deleteIpadReaderDevice(deviceId, deptId){
+  const _nm = ((await supabaseClient.from('ipad_reader_devices').select('code').eq('id', deviceId).maybeSingle()).data||{}).code || '';
+  if (!await neoGuardDelete('الجهاز', deviceId, _nm, 'ipad_reader_device_logs', 'ipad_reader_device_id')) return;
   const { error } = await supabaseClient.from('ipad_reader_devices').delete().eq('id', deviceId);
   if (error){ neoNotify('خطأ بالحذف: ' + error.message); return; }
   invalidateRefCache('ipad_reader_devices_ref');
@@ -2398,7 +2436,10 @@ async function renderIpadReaderDeviceSection(deptId){
       cells += `<td><div class="check ${checked?'on':''}" id="ipadreaderchk_${dv.id}_${f.key}" onclick="toggleIpadReaderDeviceField('${dv.id}','${f.key}','${date}','${shift}')">${checked?'✓':''}</div></td>`;
     }
     const delBtn = canManage ? ` <span style="cursor:pointer;color:#ff7b7b;font-size:11px;" onclick="confirmDeleteClick(this, () => deleteIpadReaderDevice('${dv.id}','${deptId}'))">✕</span>` : '';
-    rowsHtml += `<tr><td class="code-cell">${esc(dv.code)}${delBtn}</td>${cells}</tr>`;
+    const _off = neoIsOff(dv.id);
+    const offBtn = canManage ? ` <span style="cursor:pointer;color:${_off?'#3ecf6b':'#ffcf5c'};font-size:12px;" onclick="neoToggleOff('ipad_reader_devices','${dv.id}','${deptId}','${String(dv.code||'').replace(/'/g,"\\'")}')" title="${_off?'إرجاعه للعمل':'تعطيل مؤقت — يظهر بلا مربعات ولا يُحتسب'}">${_off?'▶':'⏸'}</span>` : '';
+    const offTag = _off ? ` <span style="background:#5a4a12;color:#ffcf5c;font-size:10px;padding:2px 7px;border-radius:8px;">معطَّل</span>` : '';
+    rowsHtml += `<tr${_off?' style="opacity:.55;"':''}><td class="code-cell">${esc(dv.code)}${offTag}${offBtn}${delBtn}</td>${cells}</tr>`;
   }
 
   const manageHtml = canManage ? `
@@ -2436,6 +2477,8 @@ async function addPosDevice(deptId){
 }
 
 async function deletePosDevice(posDeviceId, deptId){
+  const _nm = ((await supabaseClient.from('pos_devices').select('code').eq('id', posDeviceId).maybeSingle()).data||{}).code || '';
+  if (!await neoGuardDelete('الجهاز', posDeviceId, _nm, 'pos_device_logs', 'pos_device_id')) return;
   const { error } = await supabaseClient.from('pos_devices').delete().eq('id', posDeviceId);
   if (error){ neoNotify('خطأ بالحذف: ' + error.message); return; }
   invalidateRefCache('pos_devices_ref');
@@ -2489,7 +2532,10 @@ async function renderPosDeviceSection(deptId){
       cells += `<td><div class="check ${checked?'on':''}" id="posdevicechk_${d.id}_${f.key}" onclick="togglePosDeviceField('${d.id}','${f.key}','${date}','${shift}')">${checked?'✓':''}</div></td>`;
     }
     const delBtn = canManage ? ` <span style="cursor:pointer;color:#ff7b7b;font-size:11px;" onclick="confirmDeleteClick(this, () => deletePosDevice('${d.id}','${deptId}'))">✕</span>` : '';
-    rowsHtml += `<tr><td class="code-cell">${esc(d.code)}${delBtn}</td>${cells}</tr>`;
+    const _off = neoIsOff(d.id);
+    const offBtn = canManage ? ` <span style="cursor:pointer;color:${_off?'#3ecf6b':'#ffcf5c'};font-size:12px;" onclick="neoToggleOff('pos_devices','${d.id}','${deptId}','${String(d.code||'').replace(/'/g,"\\'")}')" title="${_off?'إرجاعه للعمل':'تعطيل مؤقت — يظهر بلا مربعات ولا يُحتسب'}">${_off?'▶':'⏸'}</span>` : '';
+    const offTag = _off ? ` <span style="background:#5a4a12;color:#ffcf5c;font-size:10px;padding:2px 7px;border-radius:8px;">معطَّل</span>` : '';
+    rowsHtml += `<tr${_off?' style="opacity:.55;"':''}><td class="code-cell">${esc(d.code)}${offTag}${offBtn}${delBtn}</td>${cells}</tr>`;
   }
 
   const manageHtml = canManage ? `
@@ -2670,12 +2716,17 @@ async function toggleTaskLog(taskId, date, shift){
 async function renderPointCriteriaManage(deptId){
   const el = document.getElementById('pointCriteriaSection');
   if (!el) return;
-  const criteria = await getPointCriteria(deptId);
-  const rows = criteria.map(c => `
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 4px;border-bottom:1px solid rgba(122,167,255,0.12);">
-      <span style="color:#c8d4e2;">${esc(c.name)}</span>
-      <span style="cursor:pointer;color:#ff7b7b;font-size:12px;" onclick="confirmDeleteClick(this, async () => { await deletePointCriterionRow('${c.id}'); await renderPointCriteriaManage('${deptId}'); })">✕ حذف</span>
-    </div>`).join('');
+  const criteria = await getPointCriteria(deptId, true);
+  const rows = criteria.map(c => {
+    const co = neoIsOff(c.id);
+    return `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 4px;border-bottom:1px solid rgba(122,167,255,0.12);${co?'opacity:.55;':''}">
+      <span style="color:#c8d4e2;">${esc(c.name)}${co?' <span style="background:#5a4a12;color:#ffcf5c;font-size:10px;padding:1px 6px;border-radius:7px;">معطَّل</span>':''}</span>
+      <span>
+        <span style="cursor:pointer;color:${co?'#3ecf6b':'#ffcf5c'};font-size:12px;margin-inline-end:9px;" title="${co?'إرجاع المعيار':'تعطيل المعيار — يختفي كعمود ولا يُحتسب'}" onclick="neoToggleOff('point_criteria','${c.id}','${deptId}','${String(c.name||'').replace(/'/g,"\\'")}')">${co?'▶':'⏸'}</span>
+        <span style="cursor:pointer;color:#ff7b7b;font-size:12px;" onclick="confirmDeleteClick(this, async () => { await deletePointCriterionRow('${c.id}'); await renderPointCriteriaManage('${deptId}'); })">✕ حذف</span>
+      </span>
+    </div>`; }).join('');
   el.innerHTML = `
     <h3>🏆 معايير نقاط الموظفين</h3>
     <div style="color:#8fa3b8;font-size:12px;margin-bottom:8px;">الأعمدة التي يقيّم بها الموظفون في هذا القسم — أضف أو احذف بحرية</div>
@@ -2874,9 +2925,10 @@ async function getStaffPointsMap(staffIds, date){
 }
 
 // معايير النقاط الخاصة بقسم معيّن (يتحكم فيها مدير المبيعات — عدد وأسماء مختلفة لكل قسم)
-async function getPointCriteria(deptId){
+async function getPointCriteria(deptId, includeOff){
+  await neoLoadOff();
   const { data } = await supabaseClient.from('point_criteria').select('*').eq('department_id', deptId).order('created_at');
-  return data || [];
+  return includeOff ? (data || []) : (data || []).filter(c => !neoIsOff(c.id));
 }
 
 async function addPointCriterion(deptId, name){
@@ -3362,12 +3414,17 @@ async function renderStaffSection(deptId){
 
   let criteriaManagerHtml = '';
   if (canManage){
-    const customCriteria = fieldDefs.filter(f => f.isExtra);
-    const criteriaRows = customCriteria.map(f => `
-      <div style="display:flex; justify-content:space-between; align-items:center; padding:4px 0;">
-        <span>${f.label}</span>
-        <span style="cursor:pointer;color:#ff7b7b;font-size:12px;" onclick="confirmDeleteClick(this, () => deleteStaffCriterion('${f.criterionId}','${deptId}'))">✕ حذف</span>
-      </div>`).join('');
+    const allCriteria = await getStaffCriteria(deptId, true);
+    const criteriaRows = allCriteria.map(c => {
+      const co = neoIsOff(c.id);
+      return `
+      <div style="display:flex; justify-content:space-between; align-items:center; padding:4px 0;${co?'opacity:.55;':''}">
+        <span>${esc(c.name)}${co?' <span style="background:#5a4a12;color:#ffcf5c;font-size:10px;padding:1px 6px;border-radius:7px;">معطَّل</span>':''}</span>
+        <span>
+          <span style="cursor:pointer;color:${co?'#3ecf6b':'#ffcf5c'};font-size:12px;margin-inline-end:9px;" title="${co?'إرجاع المعيار':'تعطيل المعيار — يختفي كعمود ولا يُحتسب'}" onclick="neoToggleOff('staff_criteria','${c.id}','${deptId}','${String(c.name||'').replace(/'/g,"\\'")}')">${co?'▶':'⏸'}</span>
+          <span style="cursor:pointer;color:#ff7b7b;font-size:12px;" onclick="confirmDeleteClick(this, () => deleteStaffCriterion('${c.id}','${deptId}'))">✕ حذف</span>
+        </span>
+      </div>`; }).join('');
     criteriaManagerHtml = `
       <div style="margin-top:14px; border-top:1px solid #333; padding-top:10px;">
         <div style="color:#999; font-size:12px; margin-bottom:6px;">معايير تقييم إضافية خاصة بهذا القسم (فوق المعايير الستة الأساسية)</div>
@@ -4761,12 +4818,21 @@ async function renderCustomSectionsManage(deptId){
     const cols = await getSectionCols(sec.id);
     const rows = await getSectionRows(sec.id);
     const colsHtml = cols.map(c => `<span style="display:inline-block; background:#2b3140; padding:4px 10px; border-radius:14px; margin:2px; font-size:12px;">${esc(c.name)} <span style="cursor:pointer;color:#ff7b7b;" onclick="deleteSectionCol('${c.id}','${deptId}')">✕</span></span>`).join('') || '<span style="color:#777; font-size:11px;">لا أعمدة بعد</span>';
-    const rowsHtml = rows.map(r => `<div style="display:flex; justify-content:space-between; padding:3px 0; font-size:12px;"><span>${esc(r.name)}</span><span style="cursor:pointer;color:#ff7b7b;" onclick="deleteSectionRow('${r.id}','${deptId}')">✕</span></div>`).join('') || '<div style="color:#777; font-size:11px;">لا صفوف بعد</div>';
+    const rowsHtml = rows.map(r => {
+      const ro = neoIsOff(r.id);
+      return `<div style="display:flex; justify-content:space-between; align-items:center; padding:3px 0; font-size:12px;${ro?'opacity:.55;':''}">
+        <span>${esc(r.name)}${ro?' <span style="background:#5a4a12;color:#ffcf5c;font-size:10px;padding:1px 6px;border-radius:7px;">معطَّل</span>':''}</span>
+        <span><span style="cursor:pointer;color:${ro?'#3ecf6b':'#ffcf5c'};margin-inline-end:8px;" title="${ro?'إرجاع الصف':'تعطيل مؤقت — يظهر بلا مربعات ولا يُحتسب'}" onclick="neoToggleOff('custom_section_rows','${r.id}','${deptId}','${String(r.name||'').replace(/'/g,"\\'")}')">${ro?'▶':'⏸'}</span><span style="cursor:pointer;color:#ff7b7b;" onclick="deleteSectionRow('${r.id}','${deptId}')">✕</span></span>
+      </div>`;
+    }).join('') || '<div style="color:#777; font-size:11px;">لا صفوف بعد</div>';
     secsHtml += `
       <div style="border:1px solid #2a2e37; border-radius:10px; padding:12px; margin-bottom:12px;">
         <div style="display:flex; justify-content:space-between; align-items:center;">
-          <h3 style="margin:0;">🧾 ${esc(sec.title)}</h3>
-          <span style="cursor:pointer;color:#ff7b7b;font-size:12px;" onclick="confirmDeleteClick(this, () => deleteCustomSection('${sec.id}','${deptId}'))">✕ حذف الجدول</span>
+          <h3 style="margin:0;${neoIsOff(sec.id)?'opacity:.6;':''}">🧾 ${esc(sec.title)}${neoIsOff(sec.id)?' <span style="background:#5a4a12;color:#ffcf5c;font-size:10px;padding:2px 7px;border-radius:8px;">معطَّل</span>':''}</h3>
+          <span>
+            <span style="cursor:pointer;color:${neoIsOff(sec.id)?'#3ecf6b':'#ffcf5c'};font-size:12px;margin-inline-end:10px;" title="${neoIsOff(sec.id)?'إرجاع الجدول للعمل':'تعطيل الجدول كاملاً — يختفي عن الشفت والصالة وتبقى سجلاته'}" onclick="neoToggleOff('custom_sections','${sec.id}','${deptId}','${String(sec.title||'').replace(/'/g,"\\'")}')">${neoIsOff(sec.id)?'▶ إرجاع':'⏸ تعطيل'}</span>
+            <span style="cursor:pointer;color:#ff7b7b;font-size:12px;" onclick="confirmDeleteClick(this, () => deleteCustomSection('${sec.id}','${deptId}'))">✕ حذف الجدول</span>
+          </span>
         </div>
         <div style="color:#9fd3ff; font-size:12px; margin:8px 0 4px;">الأعمدة:</div>
         <div>${colsHtml}</div>
@@ -7584,6 +7650,7 @@ async function computeAllDeptsOverallPct(date){
     (rows.data||[]).forEach(r => { rowSec[r.id] = r.section_id; rowIds.push(r.id); });
     /* المتوقّع: كل صف × أعمدة قسمه × شفتين */
     (rows.data||[]).forEach(r => {
+      if (neoIsOff(r.id) || neoIsOff(rowSec[r.id])) return;   /* صف معطَّل أو جدوله معطَّل */
       const dep = secDept[rowSec[r.id]];
       const nCols = (colsBySec[rowSec[r.id]] || []).length;
       if (dep && nCols) bump(dep, nCols * SHIFTS, 0, 'customsec');
@@ -7645,7 +7712,7 @@ async function computeAllDeptsOverallPct(date){
   const { data: allIpads } = await cachedSelectResponse('ipads_ref', 'ipads', 'id, department_id, code, created_at', 'created_at');
   const ipadToDept = {}; (allIpads||[]).forEach(i => ipadToDept[i.id]=i.department_id);
   const { data: ipadLogs } = await supabaseClient.from('ipad_logs').select('*').eq('log_date', date);
-  (allIpads||[]).forEach(i => bump(i.department_id, colsOf(i.department_id,'ipad') * SHIFTS, 0));
+  (allIpads||[]).forEach(i => { if(!neoIsOff(i.id)) bump(i.department_id, colsOf(i.department_id,'ipad') * SHIFTS, 0); });
   (ipadLogs||[]).forEach(l => {
     const deptId = ipadToDept[l.ipad_id];
     if (!deptId) return;
@@ -7656,7 +7723,7 @@ async function computeAllDeptsOverallPct(date){
   const { data: allReaders } = await cachedSelectResponse('readers_ref', 'serial_readers', 'id, department_id, code, created_at', 'created_at');
   const readerToDept = {}; (allReaders||[]).forEach(r => readerToDept[r.id]=r.department_id);
   const { data: readerLogs } = await supabaseClient.from('serial_reader_logs').select('*').eq('log_date', date);
-  (allReaders||[]).forEach(r => bump(r.department_id, colsOf(r.department_id,'reader') * SHIFTS, 0));
+  (allReaders||[]).forEach(r => { if(!neoIsOff(r.id)) bump(r.department_id, colsOf(r.department_id,'reader') * SHIFTS, 0); });
   (readerLogs||[]).forEach(l => {
     const deptId = readerToDept[l.reader_id];
     if (!deptId) return;
@@ -7667,7 +7734,7 @@ async function computeAllDeptsOverallPct(date){
   const { data: allIpadReaderDevices } = await cachedSelectResponse('ipad_reader_devices_ref', 'ipad_reader_devices', 'id, department_id, code, created_at', 'created_at');
   const ipadReaderDeviceToDept = {}; (allIpadReaderDevices||[]).forEach(dv => ipadReaderDeviceToDept[dv.id]=dv.department_id);
   const { data: ipadReaderDeviceLogs } = await supabaseClient.from('ipad_reader_device_logs').select('*').eq('log_date', date);
-  (allIpadReaderDevices||[]).forEach(dv => bump(dv.department_id, colsOf(dv.department_id,'ipadreader') * SHIFTS, 0));
+  (allIpadReaderDevices||[]).forEach(dv => { if(!neoIsOff(dv.id)) bump(dv.department_id, colsOf(dv.department_id,'ipadreader') * SHIFTS, 0); });
   (ipadReaderDeviceLogs||[]).forEach(l => {
     const deptId = ipadReaderDeviceToDept[l.device_id];
     if (!deptId) return;
@@ -7678,7 +7745,7 @@ async function computeAllDeptsOverallPct(date){
   const { data: allLaptops } = await cachedSelectResponse('laptops_ref', 'laptops', 'id, department_id, code, created_at', 'created_at');
   const laptopToDept = {}; (allLaptops||[]).forEach(l => laptopToDept[l.id]=l.department_id);
   const { data: laptopLogs } = await supabaseClient.from('laptop_logs').select('*').eq('log_date', date);
-  (allLaptops||[]).forEach(l => bump(l.department_id, colsOf(l.department_id,'laptop') * SHIFTS, 0));
+  (allLaptops||[]).forEach(l => { if(!neoIsOff(l.id)) bump(l.department_id, colsOf(l.department_id,'laptop') * SHIFTS, 0); });
   (laptopLogs||[]).forEach(l => {
     const deptId = laptopToDept[l.laptop_id];
     if (!deptId) return;
@@ -7689,7 +7756,7 @@ async function computeAllDeptsOverallPct(date){
   const { data: allPosDevices } = await cachedSelectResponse('pos_devices_ref', 'pos_devices', 'id, department_id, code, created_at', 'created_at');
   const posDeviceToDept = {}; (allPosDevices||[]).forEach(p => posDeviceToDept[p.id]=p.department_id);
   const { data: posDeviceLogs } = await supabaseClient.from('pos_device_logs').select('*').eq('log_date', date);
-  (allPosDevices||[]).forEach(p => bump(p.department_id, colsOf(p.department_id,'pos') * SHIFTS, 0));
+  (allPosDevices||[]).forEach(p => { if(!neoIsOff(p.id)) bump(p.department_id, colsOf(p.department_id,'pos') * SHIFTS, 0); });
   (posDeviceLogs||[]).forEach(l => {
     const deptId = posDeviceToDept[l.pos_device_id];
     if (!deptId) return;
@@ -7781,7 +7848,7 @@ async function computeAllDeptsOverallPctRange(startDate, endDate){
   const { data: allIpads } = await cachedSelectResponse('ipads_ref', 'ipads', 'id, department_id, code, created_at', 'created_at');
   const ipadToDept = {}; (allIpads||[]).forEach(i => ipadToDept[i.id]=i.department_id);
   const { data: ipadLogs } = await supabaseClient.from('ipad_logs').select('*').gte('log_date', startDate).lte('log_date', endDate);
-  (allIpads||[]).forEach(i => bump(i.department_id, IPAD_FIELD_DEFS.length * SHIFTS * dayCount, 0));
+  (allIpads||[]).forEach(i => { if(!neoIsOff(i.id)) bump(i.department_id, IPAD_FIELD_DEFS.length * SHIFTS * dayCount, 0); });
   (ipadLogs||[]).forEach(l => {
     const deptId = ipadToDept[l.ipad_id];
     if (!deptId) return;
@@ -7792,7 +7859,7 @@ async function computeAllDeptsOverallPctRange(startDate, endDate){
   const { data: allReaders } = await cachedSelectResponse('readers_ref', 'serial_readers', 'id, department_id, code, created_at', 'created_at');
   const readerToDept = {}; (allReaders||[]).forEach(r => readerToDept[r.id]=r.department_id);
   const { data: readerLogs } = await supabaseClient.from('serial_reader_logs').select('*').gte('log_date', startDate).lte('log_date', endDate);
-  (allReaders||[]).forEach(r => bump(r.department_id, READER_FIELD_DEFS.length * SHIFTS * dayCount, 0));
+  (allReaders||[]).forEach(r => { if(!neoIsOff(r.id)) bump(r.department_id, READER_FIELD_DEFS.length * SHIFTS * dayCount, 0); });
   (readerLogs||[]).forEach(l => {
     const deptId = readerToDept[l.reader_id];
     if (!deptId) return;
@@ -7803,7 +7870,7 @@ async function computeAllDeptsOverallPctRange(startDate, endDate){
   const { data: allIpadReaderDevices } = await cachedSelectResponse('ipad_reader_devices_ref', 'ipad_reader_devices', 'id, department_id, code, created_at', 'created_at');
   const ipadReaderDeviceToDept = {}; (allIpadReaderDevices||[]).forEach(dv => ipadReaderDeviceToDept[dv.id]=dv.department_id);
   const { data: ipadReaderDeviceLogs } = await supabaseClient.from('ipad_reader_device_logs').select('*').gte('log_date', startDate).lte('log_date', endDate);
-  (allIpadReaderDevices||[]).forEach(dv => bump(dv.department_id, IPAD_READER_FIELD_DEFS.length * SHIFTS * dayCount, 0));
+  (allIpadReaderDevices||[]).forEach(dv => { if(!neoIsOff(dv.id)) bump(dv.department_id, IPAD_READER_FIELD_DEFS.length * SHIFTS * dayCount, 0); });
   (ipadReaderDeviceLogs||[]).forEach(l => {
     const deptId = ipadReaderDeviceToDept[l.device_id];
     if (!deptId) return;
@@ -7814,7 +7881,7 @@ async function computeAllDeptsOverallPctRange(startDate, endDate){
   const { data: allLaptops } = await cachedSelectResponse('laptops_ref', 'laptops', 'id, department_id, code, created_at', 'created_at');
   const laptopToDept = {}; (allLaptops||[]).forEach(l => laptopToDept[l.id]=l.department_id);
   const { data: laptopLogs } = await supabaseClient.from('laptop_logs').select('*').gte('log_date', startDate).lte('log_date', endDate);
-  (allLaptops||[]).forEach(l => bump(l.department_id, LAPTOP_FIELD_DEFS.length * SHIFTS * dayCount, 0));
+  (allLaptops||[]).forEach(l => { if(!neoIsOff(l.id)) bump(l.department_id, LAPTOP_FIELD_DEFS.length * SHIFTS * dayCount, 0); });
   (laptopLogs||[]).forEach(l => {
     const deptId = laptopToDept[l.laptop_id];
     if (!deptId) return;
@@ -7825,7 +7892,7 @@ async function computeAllDeptsOverallPctRange(startDate, endDate){
   const { data: allPosDevices } = await cachedSelectResponse('pos_devices_ref', 'pos_devices', 'id, department_id, code, created_at', 'created_at');
   const posDeviceToDept = {}; (allPosDevices||[]).forEach(p => posDeviceToDept[p.id]=p.department_id);
   const { data: posDeviceLogs } = await supabaseClient.from('pos_device_logs').select('*').gte('log_date', startDate).lte('log_date', endDate);
-  (allPosDevices||[]).forEach(p => bump(p.department_id, POS_FIELD_DEFS.length * SHIFTS * dayCount, 0));
+  (allPosDevices||[]).forEach(p => { if(!neoIsOff(p.id)) bump(p.department_id, POS_FIELD_DEFS.length * SHIFTS * dayCount, 0); });
   (posDeviceLogs||[]).forEach(l => {
     const deptId = posDeviceToDept[l.pos_device_id];
     if (!deptId) return;
@@ -10946,7 +11013,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.01.03";
+const APP_VERSION = "2026.09.01.04";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
