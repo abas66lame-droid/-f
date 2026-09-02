@@ -1309,6 +1309,7 @@ table tr:first-child th::after{
     <div id="salesView" class="hidden"></div>
     <div id="driverView" class="hidden"></div>
     <div id="fleetSupView" class="hidden"></div>
+    <div id="linkView" class="hidden"></div>
   </div>
 
 </div>
@@ -1995,7 +1996,7 @@ async function handleLoggedIn(){
     appScreen.classList.remove('hidden');
 
     document.getElementById('userNameLabel').textContent = profile.name || '';
-    const roleLabels = { shift: "مسؤول شفت", hall: "مسؤول صالة", sales: "مسؤول مبيعات", driver: "موظف توصيل", fleet: "مسؤول التوصيل" };
+    const roleLabels = { shift: "مسؤول شفت", hall: "مسؤول صالة", sales: "مسؤول مبيعات", driver: "موظف توصيل", fleet: "مسؤول التوصيل", clean: "مسؤول التنظيف العام", stock: "مسؤول الجرد العام" };
     /* أُزيلت shiftLabels — نظام الشفتات ملغى ولم تكن مستخدمة في أي مكان */
     document.getElementById('userRoleLabel').textContent = roleLabels[profile.role] || profile.role;
 
@@ -2003,6 +2004,7 @@ async function handleLoggedIn(){
     document.getElementById('hallView').classList.add('hidden');
     document.getElementById('salesView').classList.add('hidden');
     try{ document.getElementById('driverView').classList.add('hidden'); }catch(e){}
+  try{ document.getElementById('linkView').classList.add('hidden'); }catch(e){}
     try{ document.getElementById('fleetSupView').classList.add('hidden'); }catch(e){}
     try{ window.__fleetProfile = profile; }catch(e){}
 
@@ -2029,6 +2031,10 @@ async function handleLoggedIn(){
     } else if (profile.role === 'fleet'){
       document.getElementById('fleetSupView').classList.remove('hidden');
       await renderFleetSupView(profile);
+    } else if (profile.role === 'clean' || profile.role === 'stock'){
+      document.getElementById('linkView').classList.remove('hidden');
+      neoSetManageMode(false);
+      await renderLinkManagerView(profile, profile.role);
     }
   } catch (err) {
     try{ console.error('خطأ في handleLoggedIn:', err); }catch(e){}
@@ -6819,8 +6825,9 @@ async function renderSalesTrend(){
             </tr>
             ${deptSeries.map(d => `
             <tr onclick="trendDept='${d.id}'; renderSalesTrend();" style="cursor:pointer;">
-              <td style="position:sticky;inset-inline-end:0;background:#0a121e;color:#c8d4e2;padding:6px 10px;white-space:nowrap;
-                border-inline-end:2px solid ${d.color};">${esc(d.name)}</td>
+              <td onclick="event.stopPropagation(); renderDeptStaffMonth('${d.id}');" title="اضغط الاسم لمخطط أداء الموظفين الشهري"
+                style="position:sticky;inset-inline-end:0;background:#0a121e;color:#c8d4e2;padding:6px 10px;white-space:nowrap;cursor:pointer;
+                border-inline-end:2px solid ${d.color};">${esc(d.name)} <span style="color:#38d9b9;font-size:9px;">👥</span></td>
               ${d.series.map(v => v===null
                 ? `<td style="background:rgba(122,167,255,0.05);color:#3a4757;text-align:center;padding:5px 2px;">·</td>`
                 : `<td style="background:${bucket(v)}22;color:${bucket(v)};text-align:center;padding:5px 2px;font-weight:700;">${v}</td>`
@@ -8965,7 +8972,7 @@ async function resetManagerPassword(targetUserId, btnEl){
 async function renderSalesAccountTab(){
   const { data: { user } } = await supabaseClient.auth.getUser();
   const { data: profile } = await supabaseClient.from('profiles').select('*').eq('id', user.id).single();
-  const roleLabels = { shift: "مسؤول شفت", hall: "مسؤول صالة", sales: "مسؤول مبيعات", driver: "موظف توصيل", fleet: "مسؤول التوصيل" };
+  const roleLabels = { shift: "مسؤول شفت", hall: "مسؤول صالة", sales: "مسؤول مبيعات", driver: "موظف توصيل", fleet: "مسؤول التوصيل", clean: "مسؤول التنظيف العام", stock: "مسؤول الجرد العام" };
   mountSalesShell('account', `
     <div class="card" style="text-align:center; padding:30px 16px;">
       <img src="${document.getElementById('neoBrandLogo')?document.getElementById('neoBrandLogo').src:''}" alt="شركة الاماني" class="brand-logo" style="margin-bottom:10px;">
@@ -11122,7 +11129,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.01.08";
+const APP_VERSION = "2026.09.01.09";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -14670,6 +14677,305 @@ window.neoSoundBtn = function(){
 setTimeout(() => { try{ neoSoundBtn(); }catch(e){} }, 3000);
 </script>
 <script>
+
+/* ══════════════════════════════════════════════════════════════════
+   ربط الموظفين بالمواقع + المخطط الشهري للأداء
+   ──────────────────────────────────────────────────────────────────
+   إضافة بحتة: لا تغيّر أي سلوك قائم. مسؤول الشفت يواصل عمله كما هو،
+   والنِسب والحسابات الحالية لا تُمَسّ.
+
+   الفكرة: موقع + عمود واحد يُنسبان إلى موظف. فإذا أشّرت مسؤولة الشفت
+   ✗ على «تنظيف» في الموقع ٢٩٠، نزل ذلك من رصيد الموظف صاحب الموقع،
+   وإذا أشّرت ✓ حُسبت له. ونفس الموظف قد تكون له مواقع أخرى بأعمدة أخرى.
+
+   التخزين: صف علامة في custom_fields بنفس نمط ⟦off⟧ و⟦hide:⟧ المستعملين
+   أصلاً — فلا حاجة لأي عمود أو جدول جديد في قاعدة البيانات.
+   الصيغة: ⟦lnk⟧<staffId>|<locationId>|<fieldKey>
+   ══════════════════════════════════════════════════════════════════ */
+const NEO_LNK_TAG = '⟦lnk⟧';
+let _neoLnk = null, _neoLnkTs = 0;
+const NEO_LNK_TTL_MS = 20000;
+
+async function neoLoadLinks(force){
+  if (!force && _neoLnk && (Date.now() - _neoLnkTs) < NEO_LNK_TTL_MS) return _neoLnk;
+  const idx = { byStaff:{}, byCell:{}, all:[] };
+  try{
+    const { data, error } = await supabaseClient.from('custom_fields')
+      .select('id,name,department_id').like('name', NEO_LNK_TAG + '%');
+    if (error) throw error;
+    (data || []).forEach(r => {
+      const parts = String(r.name || '').slice(NEO_LNK_TAG.length).split('|');
+      if (parts.length !== 3) return;
+      const rec = { rowId:r.id, deptId:r.department_id, staffId:parts[0], locId:parts[1], field:parts[2] };
+      idx.all.push(rec);
+      (idx.byStaff[rec.staffId] = idx.byStaff[rec.staffId] || []).push(rec);
+      idx.byCell[rec.locId + '|' + rec.field] = rec.staffId;
+    });
+    _neoLnk = idx; _neoLnkTs = Date.now();
+  }catch(e){ if (!_neoLnk) _neoLnk = idx; }
+  return _neoLnk;
+}
+function neoLinksOf(staffId){ return (_neoLnk && _neoLnk.byStaff[String(staffId)]) || []; }
+function neoIsLinked(staffId, locId, field){
+  return neoLinksOf(staffId).some(l => String(l.locId) === String(locId) && l.field === field);
+}
+window.neoIsLinked = neoIsLinked;
+
+async function neoLinkToggle(deptId, staffId, locId, field){
+  await neoLoadLinks();
+  const marker = NEO_LNK_TAG + staffId + '|' + locId + '|' + field;
+  const existing = (_neoLnk.all || []).find(l =>
+    String(l.staffId) === String(staffId) && String(l.locId) === String(locId) && l.field === field);
+  let error;
+  if (existing){
+    ({ error } = await supabaseClient.from('custom_fields').delete().eq('id', existing.rowId));
+  } else {
+    /* الموقع+العمود لموظف واحد فقط — نُزيل أي ربط سابق لنفس الخانة */
+    const taken = (_neoLnk.all || []).filter(l => String(l.locId) === String(locId) && l.field === field);
+    for (const t of taken){
+      try{ await supabaseClient.from('custom_fields').delete().eq('id', t.rowId); }catch(e){}
+    }
+    ({ error } = await supabaseClient.from('custom_fields')
+      .insert({ department_id: deptId, name: marker }));
+  }
+  if (error){ neoNotify('تعذّر الحفظ: ' + error.message); return false; }
+  await neoLoadLinks(true);
+  return true;
+}
+
+/* ══ واجهة الربط — حساب مسؤول التنظيف العام وحساب مسؤول الجرد العام ══
+   واجهة واحدة يحدّد الدورُ عمودَها، فلا يرى كلٌّ منهما إلا ما يخصّه. */
+const NEO_LINK_ROLES = {
+  clean: { field:'cleaning',  title:'🧹 ربط التنظيف',  label:'التنظيف' },
+  stock: { field:'inventory', title:'📦 ربط الجرد',    label:'الجرد'   }
+};
+let _lnkDept = '';
+
+window.renderLinkManagerView = async function(profile, roleKey){
+  const el = document.getElementById('linkView');
+  if (!el) return;
+  const cfg = NEO_LINK_ROLES[roleKey];
+  if (!cfg){ el.innerHTML = '<div class="card">دور غير معروف</div>'; return; }
+  window.__lnkProfile = profile; window.__lnkRole = roleKey;
+  el.innerHTML = '<div class="status neoLoad">جاري التحميل…</div>';
+  try{
+    await neoLoadLinks(true); await neoLoadOff();
+    const { data: depts } = await supabaseClient.from('departments').select('id,name').order('name');
+    const list = depts || [];
+    if (!_lnkDept && list.length) _lnkDept = String(list[0].id);
+
+    let h = '<div class="card"><h2>' + cfg.title + ' — ' + esc(profile.name || '') + '</h2>'
+      + '<div style="color:#8fa3b8;font-size:12px;line-height:1.9;">'
+      + 'اربط كل موظف بالمواقع التي يتحمّل مسؤولية <b>' + cfg.label + '</b> فيها.'
+      + '<br>عندما يؤشّر مسؤول الشفت ✓ أو ✗ على عمود ' + cfg.label + ' في موقعٍ مرتبط، '
+      + 'يُحتسب ذلك في مخطط أداء الموظف الشهري.</div>'
+      + '<select id="lnkDeptSel" onchange="neoLnkPickDept(this.value)" style="width:100%;font-size:14px;margin-top:10px;">'
+      + list.map(d => '<option value="' + d.id + '"' + (String(_lnkDept) === String(d.id) ? ' selected' : '') + '>'
+          + esc(d.name) + '</option>').join('')
+      + '</select></div>';
+
+    if (_lnkDept){
+      const [staff, locs] = await Promise.all([getStaffList(_lnkDept), getLocations(_lnkDept)]);
+      const active = staff.filter(s => !neoIsOff(s.id));
+      const locsActive = locs.filter(l => !neoIsOff(l.id));
+      if (!active.length) h += '<div class="card" style="color:#8fa3b8;">لا يوجد موظفون في هذا القسم</div>';
+      if (!locsActive.length) h += '<div class="card" style="color:#8fa3b8;">لا توجد مواقع في هذا القسم</div>';
+
+      for (const s of active){
+        const mine = neoLinksOf(s.id).filter(l => l.field === cfg.field).map(l => String(l.locId));
+        h += '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">'
+          + '<h3 style="margin:0;">' + esc(s.name) + '</h3>'
+          + '<span style="background:' + (mine.length ? 'rgba(56,217,185,0.14)' : 'rgba(122,167,255,0.08)')
+          + ';color:' + (mine.length ? '#38d9b9' : '#7487a0') + ';font-size:12px;font-weight:700;'
+          + 'padding:3px 11px;border-radius:10px;">' + mine.length + ' موقع</span></div>'
+          + '<div style="display:flex;flex-wrap:wrap;gap:7px;">';
+        for (const l of locsActive){
+          const owner = (_neoLnk.byCell || {})[l.id + '|' + cfg.field];
+          const isMine = String(owner || '') === String(s.id);
+          const takenByOther = owner && !isMine;
+          const otherName = takenByOther ? ((active.find(x => String(x.id) === String(owner)) || {}).name || 'موظف آخر') : '';
+          h += '<span onclick="' + (takenByOther ? '' : 'neoLnkTap(\'' + s.id + '\',\'' + l.id + '\')') + '" '
+            + 'title="' + (takenByOther ? 'مرتبط بـ ' + esc(otherName) : (isMine ? 'اضغط لفكّ الربط' : 'اضغط للربط')) + '" '
+            + 'style="font-size:14px;padding:9px 13px;border-radius:10px;'
+            + (takenByOther
+                ? 'background:rgba(122,167,255,0.05);color:#4a5768;border:1px dashed rgba(122,167,255,0.2);cursor:not-allowed;'
+                : isMine
+                  ? 'background:rgba(56,217,185,0.16);color:#38d9b9;border:1px solid rgba(56,217,185,0.45);cursor:pointer;font-weight:700;'
+                  : 'background:rgba(122,167,255,0.07);color:#c8d4e2;border:1px solid rgba(122,167,255,0.22);cursor:pointer;')
+            + '">' + (isMine ? '✓ ' : '') + esc(l.code)
+            + (takenByOther ? ' <span style="font-size:10px;">(' + esc(otherName) + ')</span>' : '')
+            + '</span>';
+        }
+        h += '</div></div>';
+      }
+    }
+    h += '<div class="card"><button class="secondary" style="width:100%;font-size:13px;padding:11px;" '
+      + 'onclick="renderLinkManagerView(window.__lnkProfile, window.__lnkRole)">↻ تحديث</button></div>';
+    el.innerHTML = h;
+  }catch(e){
+    el.innerHTML = '<div class="card" style="color:#ff7b7b;">تعذّر التحميل: ' + esc(e && e.message) + '</div>';
+  }
+};
+window.neoLnkPickDept = function(v){ _lnkDept = v; renderLinkManagerView(window.__lnkProfile, window.__lnkRole); };
+window.neoLnkTap = async function(staffId, locId){
+  const cfg = NEO_LINK_ROLES[window.__lnkRole]; if (!cfg) return;
+  if (await neoLinkToggle(_lnkDept, staffId, locId, cfg.field))
+    await renderLinkManagerView(window.__lnkProfile, window.__lnkRole);
+};
+
+/* ══ المخطط الشهري لأداء موظفي قسم — دورة ٢٥ إلى ٢٤ ══
+   ثلاثة مصادر تُدمج في درجة يومية واحدة، ويُحتسب المتوفّر منها فقط:
+     • التقييم اليومي   — خانات تقييم الموظف المؤشَّرة ÷ مجموعها
+     • المواقع المرتبطة — خانات مواقعه المؤشَّرة ✓ ÷ مجموع خاناته
+     • النقاط           — مجموع نقاطه ÷ الحد الأعلى (إن وُجدت معايير) */
+window.renderDeptStaffMonth = async function(deptId){
+  mountSalesShell('trend', '<div class="card"><div class="neoLoadBox">جاري بناء المخطط…<div class="neoBarLoad"></div></div></div>');
+  try{
+    const cycle = neoBillingMonth(typeof trendCycleOffset !== 'undefined' ? trendCycleOffset : 0);
+    await neoLoadLinks(true); await neoLoadOff();
+
+    const { data: dps } = await supabaseClient.from('departments').select('id,name').eq('id', deptId);
+    const deptName = ((dps || [])[0] || {}).name || '';
+    const staff = (await getStaffList(deptId)).filter(s => !neoIsOff(s.id));
+    const fieldDefs = await staffFieldDefsForDeptName(deptName, deptId);
+    const nEvalCols = fieldDefs.length;
+
+    /* أيام الدورة حتى اليوم فقط — لا نُظهر أياماً لم تأتِ بعد */
+    const today = (typeof todayStr === 'function') ? todayStr() : new Date().toISOString().slice(0,10);
+    const days = [];
+    for (let d = new Date(cycle.from + 'T12:00:00'); ; d.setDate(d.getDate() + 1)){
+      const iso = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+      if (iso > cycle.to || iso > today) break;
+      days.push(iso);
+    }
+
+    const staffIds = staff.map(s => s.id);
+    const [evR, ptR, critR] = await Promise.all([
+      staffIds.length ? supabaseClient.from('staff_evaluations').select('*')
+        .in('staff_id', staffIds).gte('log_date', cycle.from).lte('log_date', cycle.to) : { data: [] },
+      staffIds.length ? supabaseClient.from('staff_points').select('staff_id,log_date,scores')
+        .in('staff_id', staffIds).gte('log_date', cycle.from).lte('log_date', cycle.to) : { data: [] },
+      getPointCriteria(deptId)
+    ]);
+    const maxPts = (critR || []).length * 10;
+
+    /* سجلات المواقع المرتبطة بموظفي هذا القسم */
+    const linkedLocIds = [...new Set(staff.flatMap(s => neoLinksOf(s.id).map(l => String(l.locId))))];
+    let locLogs = [];
+    if (linkedLocIds.length){
+      const r = await supabaseClient.from('daily_logs').select('*')
+        .in('location_id', linkedLocIds).gte('log_date', cycle.from).lte('log_date', cycle.to);
+      locLogs = r.data || [];
+    }
+    const locDefs = await neoUnifiedDefs(deptId, 'loc');
+    const defByKey = {}; locDefs.forEach(d => { defByKey[d.key] = d; });
+
+    /* فهرسة: staff|day -> مجاميع */
+    const evBy = {}, ptBy = {}, lkBy = {};
+    (evR.data || []).forEach(e => {
+      const k = e.staff_id + '|' + e.log_date;
+      const cur = evBy[k] || (evBy[k] = { on:0, tot:0 });
+      /* الشفتان يُدمجان: الخانة تُعدّ مؤشَّرة إن أُشّرت في أيّهما */
+      const flat = { ...e, ...(e.extra_evaluations ? Object.fromEntries(
+        Object.entries(e.extra_evaluations).map(([c,v]) => ['extra_' + c, v])) : {}) };
+      fieldDefs.forEach(f => {
+        if (typeof neoCellDisabled === 'function' && neoCellDisabled({ id:e.staff_id }, f.key)) return;
+        cur.tot++; if (flat[f.key] === true) cur.on++;
+      });
+    });
+    (ptR.data || []).forEach(p => {
+      const sc = p.scores || {};
+      ptBy[p.staff_id + '|' + p.log_date] = Object.values(sc).reduce((a, b) => a + (Number(b) || 0), 0);
+    });
+    /* لكل ربط: هل خانته مؤشَّرة ✓ في يومها */
+    const logByLocDay = {};
+    locLogs.forEach(l => { (logByLocDay[l.location_id + '|' + l.log_date] = logByLocDay[l.location_id + '|' + l.log_date] || []).push(l); });
+    staff.forEach(s => {
+      neoLinksOf(s.id).forEach(link => {
+        days.forEach(day => {
+          const rows = logByLocDay[link.locId + '|' + day] || [];
+          if (!rows.length) return;
+          const def = defByKey[link.field] || { key: link.field };
+          const on = rows.some(r => (typeof neoReadCell === 'function') ? neoReadCell(r, def) : r[link.field] === true);
+          const k = s.id + '|' + day;
+          const cur = lkBy[k] || (lkBy[k] = { on:0, tot:0 });
+          cur.tot++; if (on) cur.on++;
+        });
+      });
+    });
+
+    const dayScore = (sid, day) => {
+      const parts = [];
+      const ev = evBy[sid + '|' + day];   if (ev && ev.tot) parts.push(ev.on / ev.tot * 100);
+      const lk = lkBy[sid + '|' + day];   if (lk && lk.tot) parts.push(lk.on / lk.tot * 100);
+      const pt = ptBy[sid + '|' + day];   if (maxPts && pt !== undefined) parts.push(Math.min(100, pt / maxPts * 100));
+      if (!parts.length) return null;
+      return Math.round(parts.reduce((a, b) => a + b, 0) / parts.length);
+    };
+    const bucket = v => v >= 90 ? '#3ecf6b' : v >= 80 ? '#d3a04f' : v >= 70 ? '#e08b4f' : '#e15b64';
+    const dLabel = iso => String(Number(iso.slice(8,10)));
+
+    const rowsData = staff.map(s => {
+      const series = days.map(d => dayScore(s.id, d));
+      const vals = series.filter(v => v !== null);
+      const avg = vals.length ? Math.round(vals.reduce((a,b) => a+b, 0) / vals.length) : null;
+      const nLinks = neoLinksOf(s.id).length;
+      const ptTot = days.reduce((a,d) => a + (ptBy[s.id + '|' + d] || 0), 0);
+      return { s, series, avg, nLinks, ptTot };
+    }).sort((a,b) => (b.avg === null ? -1 : b.avg) - (a.avg === null ? -1 : a.avg));
+
+    const anyData = rowsData.some(r => r.avg !== null);
+    let h = '<div class="card">'
+      + '<button class="secondary" style="font-size:12px;padding:8px 14px;margin-bottom:10px;" onclick="renderSalesTrend()">↩ رجوع للاتجاه</button>'
+      + '<h2 style="margin:0 0 4px;">👥 أداء موظفي ' + esc(deptName) + '</h2>'
+      + '<div style="color:#8fa3b8;font-size:12px;">دورة ' + cycle.label + ' · ' + cycle.from + ' إلى ' + cycle.to
+      + ' · ' + days.length + ' من ' + cycle.days + ' يوماً</div>'
+      + '<div style="color:#7487a0;font-size:11px;margin-top:6px;line-height:1.8;">'
+      + 'الدرجة اليومية متوسط ما توفّر من: التقييم اليومي · المواقع المرتبطة · النقاط</div></div>';
+
+    if (!staff.length){
+      h += '<div class="card" style="color:#8fa3b8;">لا يوجد موظفون في هذا القسم</div>';
+    } else if (!anyData){
+      h += '<div class="card" style="color:#8fa3b8;">لا توجد بيانات في هذه الدورة بعد</div>';
+    } else {
+      h += '<div class="card"><div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:9px;background:#0a121e;">'
+        + '<table style="border-collapse:collapse;font-size:10px;width:max-content;min-width:100%;">'
+        + '<tr><th style="position:sticky;inset-inline-end:0;background:#0a121e;color:#8fa3b8;padding:6px 10px;text-align:start;z-index:1;">الموظف</th>'
+        + '<th style="color:#8fa3b8;padding:5px 6px;">المعدّل</th>'
+        + days.map(d => '<th style="color:#5d6d80;padding:5px 3px;min-width:26px;font-weight:600;">' + dLabel(d) + '</th>').join('')
+        + '</tr>'
+        + rowsData.map(r => '<tr>'
+            + '<td style="position:sticky;inset-inline-end:0;background:#0a121e;color:#c8d4e2;padding:6px 10px;white-space:nowrap;">'
+              + esc(r.s.name)
+              + (r.nLinks ? '<span style="color:#38d9b9;font-size:9px;margin-inline-start:5px;">🔗' + r.nLinks + '</span>' : '')
+            + '</td>'
+            + '<td style="text-align:center;padding:5px 6px;font-weight:800;color:'
+              + (r.avg === null ? '#3a4757' : bucket(r.avg)) + ';">' + (r.avg === null ? '·' : r.avg) + '</td>'
+            + r.series.map(v => v === null
+                ? '<td style="background:rgba(122,167,255,0.05);color:#3a4757;text-align:center;padding:5px 2px;">·</td>'
+                : '<td style="background:' + bucket(v) + '22;color:' + bucket(v) + ';text-align:center;padding:5px 2px;font-weight:700;">' + v + '</td>'
+              ).join('')
+          + '</tr>').join('')
+        + '</table></div>'
+        + '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:9px;font-size:10px;color:#7487a0;">'
+        + '<span>🟩 ٩٠+</span><span>🟨 ٨٠-٨٩</span><span>🟧 ٧٠-٧٩</span><span>🟥 أقل من ٧٠</span>'
+        + '<span>· لا بيانات</span><span style="color:#38d9b9;">🔗 عدد مواقعه المرتبطة</span></div></div>';
+
+      if (maxPts){
+        h += '<div class="card"><h3 style="margin:0 0 8px;">🏆 مجموع النقاط في الدورة</h3>'
+          + rowsData.slice().sort((a,b) => b.ptTot - a.ptTot).map(r =>
+              '<div style="display:flex;justify-content:space-between;padding:7px 2px;border-bottom:1px solid rgba(122,167,255,0.1);font-size:13px;">'
+              + '<span style="color:#c8d4e2;">' + esc(r.s.name) + '</span>'
+              + '<b style="color:#8fb8d8;">' + r.ptTot + '</b></div>').join('')
+          + '</div>';
+      }
+    }
+    mountSalesShell('trend', h);
+  }catch(e){
+    mountSalesShell('trend', '<div class="card" style="color:#ff7b7b;">تعذّر بناء المخطط: ' + esc(e && e.message) + '</div>');
+  }
+};
+
 /* ══ نظام التوصيل — المركبات والمهام والرحلات (وحدة مستقلة، إضافية بالكامل) ══ */
 (function(){
 'use strict';
