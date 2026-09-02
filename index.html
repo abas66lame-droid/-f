@@ -1532,7 +1532,11 @@ async function toggleStaffExtraField(staffId, criterionId, date, shift, deptId){
     .eq('staff_id', staffId).eq('log_date', date).eq('shift', shift).maybeSingle();
   const extraEvaluations = { ...(existing?.extra_evaluations || {}) };
   extraEvaluations[criterionId] = willBeOn;
-  const payload = { staff_id: staffId, log_date: date, shift: shift, extra_evaluations: extraEvaluations };
+  /* ختم الزمن بنفس مفتاح العمود extra_<id> ليطابق def.key في جداول التدقيق */
+  const _ft = await neoStampField('staff_evaluations',
+    { staff_id: staffId, log_date: date, shift: shift }, 'extra_' + criterionId, willBeOn);
+  const payload = { staff_id: staffId, log_date: date, shift: shift, extra_evaluations: extraEvaluations,
+    ...(_ft !== undefined ? { field_times: _ft } : {}) };
   await neoSafeUpsert('staff_evaluations', payload, 'staff_id,log_date,shift');
 }
 
@@ -1626,7 +1630,14 @@ window.neoReadCell = neoReadCell;
 /* قراءة وقت خانة أياً كان مفتاحها */
 function neoReadCellTime(log, def, hall){
   const t = (log && (hall ? log.hall_field_times : log.field_times)) || {};
-  return t[def.key] || (def.cfId ? t[def.cfId] : null) || null;
+  if (!def) return null;
+  /* الزمن يُخزَّن بمفاتيح مختلفة حسب نوع العمود:
+     الأساسي بمفتاحه، والمضاف للمواقع بمُعرّفه الخام، ومعيار الموظف
+     بـ extra_<id>. نجرّبها كلها بدل افتراض صيغة واحدة. */
+  return t[def.key]
+      || (def.cfId ? (t[def.cfId] || t['extra_' + def.cfId]) : null)
+      || (def.criterionId ? (t['extra_' + def.criterionId] || t[def.criterionId]) : null)
+      || null;
 }
 window.neoReadCellTime = neoReadCellTime;
 
@@ -2774,13 +2785,17 @@ async function toggleTaskLog(taskId, date, shift){
     box.textContent = willBeOn ? '✓' : '';
   }
   const { data: { user } } = await supabaseClient.auth.getUser();
+  /* ختم الزمن — كان ناقصاً فلا يظهر وقت إنجاز المهمة في التدقيق المفصّل */
+  const _ft = await neoStampField('daily_task_logs',
+    { task_id: taskId, log_date: date, shift: shift }, 'checked', willBeOn);
   await neoSafeUpsert('daily_task_logs', {
     task_id: taskId,
     log_date: date,
     shift: shift,
     checked: willBeOn,
     updated_by: user.id,
-    updated_at: new Date().toISOString()
+    updated_at: new Date().toISOString(),
+    ...(_ft !== undefined ? { field_times: _ft } : {})
   }, 'task_id,log_date,shift');
 }
 
@@ -4556,7 +4571,11 @@ async function toggleExtraField(locationId, fieldId, date, shift){
   const existing = await getDailyLog(locationId, date, shift);
   const extraFields = { ...(existing?.extra_fields || {}) };
   extraFields[fieldId] = willBeOn;
-  const payload = { location_id: locationId, log_date: date, shift: shift, extra_fields: extraFields, updated_by: user.id, updated_at: new Date().toISOString() };
+  /* ختم الزمن تحت مُعرّف العمود نفسه — neoReadCellTime تقرأه عبر cfId */
+  const _ft = await neoStampField('daily_logs',
+    { location_id: locationId, log_date: date, shift: shift }, fieldId, willBeOn);
+  const payload = { location_id: locationId, log_date: date, shift: shift, extra_fields: extraFields, updated_by: user.id, updated_at: new Date().toISOString(),
+    ...(_ft !== undefined ? { field_times: _ft } : {}) };
   await neoSafeUpsert('daily_logs', payload, 'location_id,log_date,shift');
 }
 
@@ -4754,10 +4773,12 @@ function buildStatusTable(items, fieldDefs, rowLabelFn, logsById){
       if (typeof neoCellDisabled === 'function' && neoCellDisabled(item, f.key)){
         return '<td><span style="color:#5d6d80;" title="لا ينطبق">—</span></td>';
       }
-      const done = (typeof neoReadCell === 'function' && f.src) ? neoReadCell(log, f) : (log ? !!log[f.key] : false);
+      /* بلا شرط f.src — التعريفات القادمة من staffFieldDefsForDeptName والجداول
+         المخصّصة تصل بلا وسم، فكان الشرط يُسقطها إلى قراءة بمفتاح واحد فقط */
+      const done = (typeof neoReadCell === 'function') ? neoReadCell(log, f) : (log ? !!log[f.key] : false);
       if (!done) missing++;
-      const _t  = (typeof neoReadCellTime === 'function' && f.src) ? neoReadCellTime(log, f, false) : ((log && log.field_times) ? log.field_times[f.key] : null);
-      const _ht = (typeof neoReadCellTime === 'function' && f.src) ? neoReadCellTime(log, f, true)  : ((log && log.hall_field_times) ? log.hall_field_times[f.key] : null);
+      const _t  = (typeof neoReadCellTime === 'function') ? neoReadCellTime(log, f, false) : ((log && log.field_times) ? log.field_times[f.key] : null);
+      const _ht = (typeof neoReadCellTime === 'function') ? neoReadCellTime(log, f, true)  : ((log && log.hall_field_times) ? log.hall_field_times[f.key] : null);
       const t = _t ? neoFmtTime(_t) : '';
       const ht = _ht ? neoFmtTime(_ht) : '';
       const tip = [t ? '👷 ' + t : '', ht ? '🏬 ' + ht : ''].filter(Boolean).join(' · ');
@@ -11101,7 +11122,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.01.07";
+const APP_VERSION = "2026.09.01.08";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
