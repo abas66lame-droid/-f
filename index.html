@@ -11129,7 +11129,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.01.09";
+const APP_VERSION = "2026.09.01.10";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -14705,38 +14705,68 @@ async function neoLoadLinks(force){
     if (error) throw error;
     (data || []).forEach(r => {
       const parts = String(r.name || '').slice(NEO_LNK_TAG.length).split('|');
-      if (parts.length !== 3) return;
-      const rec = { rowId:r.id, deptId:r.department_id, staffId:parts[0], locId:parts[1], field:parts[2] };
+      if (parts.length < 3) return;
+      /* الصيغة: staff|loc|field[|from[|to]]
+         ثلاثة أجزاء = ربط قديم بلا تاريخ، يُعامل مفتوحاً من الأزل (توافق خلفي).
+         to مملوء = ربط منتهٍ، يبقى محفوظاً للتاريخ ولا يظهر كربط حالي. */
+      const rec = { rowId:r.id, deptId:r.department_id, staffId:parts[0], locId:parts[1],
+                    field:parts[2], from:parts[3] || '', to:parts[4] || '' };
       idx.all.push(rec);
       (idx.byStaff[rec.staffId] = idx.byStaff[rec.staffId] || []).push(rec);
-      idx.byCell[rec.locId + '|' + rec.field] = rec.staffId;
+      if (!rec.to) idx.byCell[rec.locId + '|' + rec.field] = rec.staffId;   /* المالك الحالي فقط */
     });
     _neoLnk = idx; _neoLnkTs = Date.now();
   }catch(e){ if (!_neoLnk) _neoLnk = idx; }
   return _neoLnk;
 }
 function neoLinksOf(staffId){ return (_neoLnk && _neoLnk.byStaff[String(staffId)]) || []; }
+/* الروابط السارية الآن — للواجهة */
+function neoLinksNow(staffId){ return neoLinksOf(staffId).filter(l => !l.to); }
+/* الروابط التي كانت سارية في يوم معيّن — للحساب التاريخي.
+   بهذا لا يغيّر تعديلُ اليوم نتائجَ الأيام الماضية. */
+function neoLinksOnDay(staffId, day){
+  return neoLinksOf(staffId).filter(l => (!l.from || day >= l.from) && (!l.to || day <= l.to));
+}
 function neoIsLinked(staffId, locId, field){
-  return neoLinksOf(staffId).some(l => String(l.locId) === String(locId) && l.field === field);
+  return neoLinksNow(staffId).some(l => String(l.locId) === String(locId) && l.field === field);
 }
 window.neoIsLinked = neoIsLinked;
+window.neoLinksOnDay = neoLinksOnDay;
+
+/* إنهاء ربط ساريٍ بتاريخ بدل حذفه — فيبقى أثره في الأيام التي كان فيها سارياً.
+   يُدرَج الصف المنتهي أولاً ثم يُحذف المفتوح: لو انقطع الاتصال بينهما بقي
+   الأثر مزدوجاً لا مفقوداً. ويستعمل insert/delete فقط لا update، ليعمل مع
+   سياسات RLS المقيَّدة بـ ⟦lnk⟧ بلا صلاحية تعديل. */
+async function neoLinkClose(rec, lastDay){
+  const closed = NEO_LNK_TAG + rec.staffId + '|' + rec.locId + '|' + rec.field
+               + '|' + (rec.from || '') + '|' + lastDay;
+  const ins = await supabaseClient.from('custom_fields')
+    .insert({ department_id: rec.deptId, name: closed });
+  if (ins.error) return ins.error;
+  const del = await supabaseClient.from('custom_fields').delete().eq('id', rec.rowId);
+  return del.error || null;
+}
 
 async function neoLinkToggle(deptId, staffId, locId, field){
   await neoLoadLinks();
-  const marker = NEO_LNK_TAG + staffId + '|' + locId + '|' + field;
-  const existing = (_neoLnk.all || []).find(l =>
+  const today = (typeof todayStr === 'function') ? todayStr() : new Date().toISOString().slice(0,10);
+  const yest = (function(){ const d = new Date(today + 'T12:00:00'); d.setDate(d.getDate() - 1);
+    return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); })();
+  const active = (_neoLnk.all || []).filter(l => !l.to);
+  const mine = active.find(l =>
     String(l.staffId) === String(staffId) && String(l.locId) === String(locId) && l.field === field);
-  let error;
-  if (existing){
-    ({ error } = await supabaseClient.from('custom_fields').delete().eq('id', existing.rowId));
+  let error = null;
+  if (mine){
+    error = await neoLinkClose(mine, yest);        /* فكّ الربط — يسري من اليوم */
   } else {
-    /* الموقع+العمود لموظف واحد فقط — نُزيل أي ربط سابق لنفس الخانة */
-    const taken = (_neoLnk.all || []).filter(l => String(l.locId) === String(locId) && l.field === field);
-    for (const t of taken){
-      try{ await supabaseClient.from('custom_fields').delete().eq('id', t.rowId); }catch(e){}
+    /* الخانة لموظف واحد — نُنهي ربط المالك السابق ولا نمحوه */
+    for (const t of active.filter(l => String(l.locId) === String(locId) && l.field === field)){
+      const e = await neoLinkClose(t, yest); if (e) error = e;
     }
-    ({ error } = await supabaseClient.from('custom_fields')
-      .insert({ department_id: deptId, name: marker }));
+    if (!error){
+      ({ error } = await supabaseClient.from('custom_fields')
+        .insert({ department_id: deptId, name: NEO_LNK_TAG + staffId + '|' + locId + '|' + field + '|' + today }));
+    }
   }
   if (error){ neoNotify('تعذّر الحفظ: ' + error.message); return false; }
   await neoLoadLinks(true);
@@ -14782,7 +14812,7 @@ window.renderLinkManagerView = async function(profile, roleKey){
       if (!locsActive.length) h += '<div class="card" style="color:#8fa3b8;">لا توجد مواقع في هذا القسم</div>';
 
       for (const s of active){
-        const mine = neoLinksOf(s.id).filter(l => l.field === cfg.field).map(l => String(l.locId));
+        const mine = neoLinksNow(s.id).filter(l => l.field === cfg.field).map(l => String(l.locId));
         h += '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">'
           + '<h3 style="margin:0;">' + esc(s.name) + '</h3>'
           + '<span style="background:' + (mine.length ? 'rgba(56,217,185,0.14)' : 'rgba(122,167,255,0.08)')
@@ -14860,7 +14890,11 @@ window.renderDeptStaffMonth = async function(deptId){
     const maxPts = (critR || []).length * 10;
 
     /* سجلات المواقع المرتبطة بموظفي هذا القسم */
-    const linkedLocIds = [...new Set(staff.flatMap(s => neoLinksOf(s.id).map(l => String(l.locId))))];
+    /* كل موقع ارتبط بأي موظف خلال الدورة — لا المرتبط الآن فقط،
+       وإلا غابت سجلات موقع فُكّ ربطه في منتصف الدورة */
+    const linkedLocIds = [...new Set(staff.flatMap(s =>
+      neoLinksOf(s.id).filter(l => (!l.to || l.to >= cycle.from) && (!l.from || l.from <= cycle.to))
+                      .map(l => String(l.locId))))];
     let locLogs = [];
     if (linkedLocIds.length){
       const r = await supabaseClient.from('daily_logs').select('*')
@@ -14891,8 +14925,9 @@ window.renderDeptStaffMonth = async function(deptId){
     const logByLocDay = {};
     locLogs.forEach(l => { (logByLocDay[l.location_id + '|' + l.log_date] = logByLocDay[l.location_id + '|' + l.log_date] || []).push(l); });
     staff.forEach(s => {
-      neoLinksOf(s.id).forEach(link => {
-        days.forEach(day => {
+      days.forEach(day => {
+        /* روابط ذلك اليوم لا الروابط الحالية — فتعديل اليوم لا يمسّ الماضي */
+        neoLinksOnDay(s.id, day).forEach(link => {
           const rows = logByLocDay[link.locId + '|' + day] || [];
           if (!rows.length) return;
           const def = defByKey[link.field] || { key: link.field };
@@ -14919,7 +14954,7 @@ window.renderDeptStaffMonth = async function(deptId){
       const series = days.map(d => dayScore(s.id, d));
       const vals = series.filter(v => v !== null);
       const avg = vals.length ? Math.round(vals.reduce((a,b) => a+b, 0) / vals.length) : null;
-      const nLinks = neoLinksOf(s.id).length;
+      const nLinks = neoLinksNow(s.id).length;
       const ptTot = days.reduce((a,d) => a + (ptBy[s.id + '|' + d] || 0), 0);
       return { s, series, avg, nLinks, ptTot };
     }).sort((a,b) => (b.avg === null ? -1 : b.avg) - (a.avg === null ? -1 : a.avg));
