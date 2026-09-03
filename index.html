@@ -1740,6 +1740,34 @@ function neoReadCell(log, def){
 }
 window.neoReadCell = neoReadCell;
 
+/* ══ حالة الخانة الثلاثية ══
+   ✓ أشّر المسؤول إنجازاً · ✗ أشّر عدم إنجاز · فارغ لم يلمسها أصلاً.
+   كان عرض التدقيق ثنائياً فيُظهر ما لم يُلمَس ✗، فيبدو المسؤول رافضاً
+   لا غافلاً — وهذا يُحمّله خطأً لم يرتكبه.
+   دليل الـ✗ الصريح: مدخل ملاحظة للخانة، فدورة progCycle تُنشئه عند ✗
+   وتحذفه عند غيره. وفي الخانات ذات التبديل الثنائي، false صريحة تعني
+   مُطفأة وغيابها يعني لم تُلمَس. */
+function neoCellState(log, def, hall){
+  if (!log || !def) return 'empty';                     /* لا سجل لهذا اليوم أصلاً */
+  if (typeof neoReadCell === 'function' && neoReadCell(log, def)) return 'yes';
+  const n = (hall ? log.hall_field_notes : log.field_notes) || {};
+  if (n[def.key] !== undefined) return 'no';
+  if (def.cfId && n['extra_' + def.cfId] !== undefined) return 'no';
+  if (def.criterionId && n['extra_' + def.criterionId] !== undefined) return 'no';
+  const ex = log.extra_fields || {};
+  if (log[def.key] === false || ex[def.key] === false) return 'no';
+  return 'empty';
+}
+window.neoCellState = neoCellState;
+
+/* رسم موحّد للخانة في جداول التدقيق */
+function neoCellMark(state){
+  if (state === 'yes') return '<span style="color:#3ecf6b;">✓</span>';
+  if (state === 'no')  return '<span style="color:#ff7b7b;">✗</span>';
+  return '<span style="color:#5d6d80;" title="لم يُؤشَّر عليها">—</span>';
+}
+window.neoCellMark = neoCellMark;
+
 /* قراءة وقت خانة أياً كان مفتاحها */
 function neoReadCellTime(log, def, hall){
   const t = (log && (hall ? log.hall_field_times : log.field_times)) || {};
@@ -4902,7 +4930,8 @@ function buildStatusTable(items, fieldDefs, rowLabelFn, logsById){
       }
       /* بلا شرط f.src — التعريفات القادمة من staffFieldDefsForDeptName والجداول
          المخصّصة تصل بلا وسم، فكان الشرط يُسقطها إلى قراءة بمفتاح واحد فقط */
-      const done = (typeof neoReadCell === 'function') ? neoReadCell(log, f) : (log ? !!log[f.key] : false);
+      const state = neoCellState(log, f, false);
+      const done = (state === 'yes');
       if (!done) missing++;
       const _t  = (typeof neoReadCellTime === 'function') ? neoReadCellTime(log, f, false) : ((log && log.field_times) ? log.field_times[f.key] : null);
       const _ht = (typeof neoReadCellTime === 'function') ? neoReadCellTime(log, f, true)  : ((log && log.hall_field_times) ? log.hall_field_times[f.key] : null);
@@ -4912,7 +4941,7 @@ function buildStatusTable(items, fieldDefs, rowLabelFn, logsById){
       if (done){
         return `<td><span style="color:#3ecf6b;cursor:pointer;" onclick="neoToast('${(labelByKey[f.key]||'').replace(/'/g,'')}${tip ? ': ' + tip : ' — لا وقت'}', true)">✓${tip ? ' 🕐' : ''}</span></td>`;
       }
-      return `<td><span style="color:#ff7b7b;">✗</span></td>`;
+      return `<td>${neoCellMark(state)}</td>`;
     }).join('');
     // ملاحظات مسؤول الشفت (👷) + ملاحظات مسؤول الصالة على النواقص (🏬)
     const parts = [];
@@ -4957,9 +4986,9 @@ function missRowsHtml(table){
     const openSet = cfg.open[it.id] || [];
     let cells = '';
     for (const f of cfg.fields){
-      const done = !!log[f.key];
+      const st = neoCellState(log, f, false);
       const hasNote = (hallFn[f.key]||'').trim();
-      cells += `<td onclick="hallMissOpenNote('${table}','${it.id}','${f.key}')" style="cursor:pointer;">${done?'<span style="color:#3ecf6b;">✓</span>':'<span style="color:#ff7b7b;">✗</span>'}${hasNote?' <span style="font-size:10px;">📝</span>':''}</td>`;
+      cells += `<td onclick="hallMissOpenNote('${table}','${it.id}','${f.key}')" style="cursor:pointer;">${neoCellMark(st)}${hasNote?' <span style="font-size:10px;">📝</span>':''}</td>`;
     }
     rows += `<tr><td class="code-cell">${esc(cfg.rowLabelFn(it))}</td>${cells}</tr>`;
     // ملاحظات مسؤول الشفت (عرض فقط)
@@ -8831,13 +8860,14 @@ async function renderSalesDeptMissingDetail(deptId, profileId){
     let tasksMissing = 0;
     const taskRows = tasksInDept.map(t => {
       const tl = taskLogsById[t.id];
-      const done = !!tl?.checked;
+      const tSt = neoCellState(tl, { key:'checked' }, false);
+      const done = (tSt === 'yes');
       if (!done) tasksMissing++;
       const np = [];
       const sN = ((tl?.field_notes||{})['checked']||'').trim(); if (sN) np.push('👷 ' + sN.replace(/</g,'&lt;'));
       const hN = ((tl?.hall_missing_notes||{})['checked']||'').trim(); if (hN) np.push('🏬 ' + hN.replace(/</g,'&lt;'));
       const noteHtml = np.length ? `<div style="color:#ffb84d; font-size:11px;">${np.join('<br>')}</div>` : '';
-      return `<tr><td class="code-cell">${esc(t.name)}</td><td>${done ? '<span style="color:#3ecf6b;">✓</span>' : '<span style="color:#ff7b7b;">✗</span>'}${noteHtml}</td></tr>`;
+      return `<tr><td class="code-cell">${esc(t.name)}</td><td>${neoCellMark(tSt)}${noteHtml}</td></tr>`;
     }).join('');
     const tasksTable = tasksInDept.length ? `<div class="table-wrap roomy-table"><table><tr><th>المهمة</th><th>الحالة</th></tr>${taskRows}</table></div>` : '';
 
@@ -8968,8 +8998,10 @@ async function renderSalesHallAuditDetail(deptId, profileId){
       const verified = !!tl?.hall_verified;
       const tNote = ((tl?.hall_field_notes||{})['__task']||'').trim();
       if (!verified && !tNote) tasksNotVerified++;
+      /* لم يراجعها ولم يكتب ملاحظة ⇒ لم يلمسها، لا رفضها */
+      const vSt = verified ? 'yes' : (tNote ? 'no' : 'empty');
       const noteHtml = tNote ? `<div style="color:#ffb84d; font-size:11px;">⚠️ ${tNote.replace(/</g,'&lt;')}</div>` : '';
-      return `<tr><td class="code-cell">${esc(t.name)}</td><td>${verified ? '<span style="color:#3ecf6b;">✓</span>' : '<span style="color:#ff7b7b;">✗</span>'}${noteHtml}</td></tr>`;
+      return `<tr><td class="code-cell">${esc(t.name)}</td><td>${neoCellMark(vSt)}${noteHtml}</td></tr>`;
     }).join('');
     const tasksTable = tasksInDept.length ? `<div class="table-wrap roomy-table"><table><tr><th>المهمة</th><th>راجعها مسؤول الصالة؟</th></tr>${taskRows}</table></div>` : '';
 
@@ -11261,7 +11293,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.03.02";
+const APP_VERSION = "2026.09.03.03";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
