@@ -1484,6 +1484,72 @@ async function neoCountLogs(table, fk, itemId){
   }catch(e){ return 0; }
 }
 
+/* ══ إعادة تسمية أي عنصر — الاسم وحده ══
+   يُحدَّث عمود الاسم على الصف نفسه ولا يُمَسّ المُعرّف. وبما أن كل شيء
+   مرتبط بالمُعرّف لا بالاسم — السجلات اليومية، وروابط الموظفين ⟦lnk⟧،
+   وعلامة التعطيل ⟦off⟧، والنقاط، والصور — فلا شيء ينفصل ولا يُفقد.
+   هذا هو البديل الآمن لـ«احذف وأنشئ من جديد» التي تمحو التاريخ. */
+const NEO_NAMEABLE = {
+  locations:              { col:'code',  kind:'الموقع',   render:'renderLocationsSection' },
+  daily_tasks:            { col:'name',  kind:'المهمة',   render:'renderTasksSection' },
+  ipads:                  { col:'code',  kind:'الآيباد',  render:'renderIpadSection' },
+  serial_readers:         { col:'code',  kind:'القارئ',   render:'renderReaderSection' },
+  ipad_reader_devices:    { col:'code',  kind:'الجهاز',   render:'renderIpadReaderDeviceSection' },
+  laptops:                { col:'code',  kind:'اللابتوب', render:'renderLaptopSection' },
+  pos_devices:            { col:'code',  kind:'الجهاز',   render:'renderPosDeviceSection' },
+  custom_sections:        { col:'title', kind:'الجدول',   render:'renderCustomSectionsManage' },
+  custom_section_rows:    { col:'name',  kind:'الصف',     render:'renderCustomSectionsManage' },
+  custom_section_columns: { col:'name',  kind:'العمود',   render:'renderCustomSectionsManage' },
+  staff_criteria:         { col:'name',  kind:'المعيار',  render:'renderStaffSection' },
+  point_criteria:         { col:'name',  kind:'المعيار',  render:'renderPointCriteriaManage' },
+  departments:            { col:'name',  kind:'القسم',    render:'' }
+};
+
+window.neoRenameItem = async function(table, id, current, deptId){
+  const cfg = NEO_NAMEABLE[table];
+  if (!cfg){ neoNotify('نوع غير معروف: ' + table); return; }
+  const v = await neoPrompt('✏️ إعادة تسمية ' + cfg.kind,
+    'الاسم وحده يتغيّر. كل السجلات والنقاط والروابط تبقى مرتبطة كما هي.', current || '');
+  if (v === null) return;
+  const t = String(v).trim();
+  if (!t){ neoNotify('الاسم لا يصلح فارغاً'); return; }
+  if (t === String(current || '')) return;
+  const patch = {}; patch[cfg.col] = t;
+  const { error } = await supabaseClient.from(table).update(patch).eq('id', id);
+  if (error){ neoNotify('تعذّرت التسمية: ' + error.message); return; }
+  try{ invalidateRefCache(); }catch(e){}
+  try{ window.__extraColsCache = {}; }catch(e){}
+  try{ if (typeof neoInvalidateCols === 'function') neoInvalidateCols(); }catch(e){}
+  neoToast('✏️ صار الاسم «' + t + '»', true);
+  try{ const fn = window[cfg.render]; if (typeof fn === 'function') await fn(deptId); }catch(e){}
+};
+
+/* الأعمدة التي أضافها المدير: اسمها مخزَّن مسبوقاً بالنطاق ⟦scope⟧،
+   ومفتاحها مشتقّ من مُعرّف الصف لا من اسمه — فالتسمية لا تفصل القيم. */
+window.neoRenameAddedCol = async function(deptId, rowId, scope, current){
+  const v = await neoPrompt('✏️ إعادة تسمية العمود',
+    'الاسم وحده يتغيّر — القيم المسجّلة في هذا العمود تبقى كما هي.', current || '');
+  if (v === null) return;
+  const t = String(v).trim();
+  if (!t){ neoNotify('الاسم لا يصلح فارغاً'); return; }
+  if (t === String(current || '')) return;
+  const { error } = await supabaseClient.from('custom_fields')
+    .update({ name: '⟦' + scope + '⟧' + t }).eq('id', rowId);
+  if (error){ neoNotify('تعذّرت التسمية: ' + error.message); return; }
+  try{ neoInvalidateCols(); }catch(e){}
+  try{ await neoLoadExtraCols(deptId); }catch(e){}
+  neoToast('✏️ صار اسم العمود «' + t + '»', true);
+  try{ renderNeoAdminTools(deptId); }catch(e){}
+};
+
+/* زر ✏️ موحّد — نفس الشكل في كل الأقسام */
+function neoRenBtn(table, id, name, deptId, size){
+  const safe = String(name || '').replace(/\\/g,'\\\\').replace(/'/g, "\\'").replace(/"/g,'&quot;');
+  return ' <span style="cursor:pointer;color:#8fb8d8;font-size:' + (size || 12) + 'px;" '
+    + 'onclick="neoRenameItem(\'' + table + '\',\'' + id + '\',\'' + safe + '\',\'' + deptId + '\')" '
+    + 'title="إعادة تسمية — الاسم وحده يتغيّر">✏️</span>';
+}
+
 /* زر واحد يخدم الموظفين والمواقع والمهام — يقلب الحالة ويعيد رسم القسم */
 window.NEO_OFF_RENDER = {
   staff:                'renderStaffSection',
@@ -2134,10 +2200,11 @@ async function renderLocationsSection(deptId){
     const offBtn = canManage ? ` <span style="cursor:pointer;color:${isOff ? '#3ecf6b' : '#ffcf5c'};font-size:13px;" onclick="neoToggleOff('locations','${loc.id}','${deptId}','${safeCode}')" title="${isOff ? 'إرجاع الموقع للعمل' : 'تعطيل مؤقت — يختفي عن مسؤولي الشفتات والصالة وتبقى سجلاته'}">${isOff ? '▶ إرجاع' : '⏸ تعطيل'}</span>` : '';
     const delBtn = canManage ? ` <span style="cursor:pointer;color:#ff7b7b;font-size:13px;" onclick="confirmDeleteClick(this, () => deleteLocation('${loc.id}','${deptId}'))">✕ حذف</span>` : '';
     const offTag = isOff ? ` <span style="background:#5a4a12;color:#ffcf5c;font-size:10px;padding:2px 7px;border-radius:8px;">معطَّل مؤقتاً</span>` : '';
+    const renBtn = canManage ? neoRenBtn('locations', loc.id, loc.code, deptId, 13) : '';
     rowsHtml += `
       <div class="item-row"${isOff ? ' style="opacity:.55;"' : ''}>
         <div class="item-name">${esc(loc.code)}${offTag}</div>
-        ${offBtn}${delBtn}
+        ${renBtn}${offBtn}${delBtn}
       </div>`;
   }
   const manageHtml = canManage ? `
@@ -2286,7 +2353,8 @@ async function renderIpadSection(deptId){
     const _off = neoIsOff(ip.id);
     const offBtn = canManage ? ` <span style="cursor:pointer;color:${_off?'#3ecf6b':'#ffcf5c'};font-size:12px;" onclick="neoToggleOff('ipads','${ip.id}','${deptId}','${String(ip.code||'').replace(/'/g,"\\'")}')" title="${_off?'إرجاعه للعمل':'تعطيل مؤقت — يظهر بلا مربعات ولا يُحتسب'}">${_off?'▶':'⏸'}</span>` : '';
     const offTag = _off ? ` <span style="background:#5a4a12;color:#ffcf5c;font-size:10px;padding:2px 7px;border-radius:8px;">معطَّل</span>` : '';
-    rowsHtml += `<tr${_off?' style="opacity:.55;"':''}><td class="code-cell">${esc(ip.code)}${offTag}${offBtn}${delBtn}</td>${cells}</tr>`;
+    const renBtn = canManage ? neoRenBtn('ipads', ip.id, ip.code, deptId, 12) : '';
+    rowsHtml += `<tr${_off?' style="opacity:.55;"':''}><td class="code-cell">${esc(ip.code)}${offTag}${renBtn}${offBtn}${delBtn}</td>${cells}</tr>`;
   }
 
   const manageHtml = canManage ? `
@@ -2382,7 +2450,8 @@ async function renderReaderSection(deptId){
     const _off = neoIsOff(r.id);
     const offBtn = canManage ? ` <span style="cursor:pointer;color:${_off?'#3ecf6b':'#ffcf5c'};font-size:12px;" onclick="neoToggleOff('serial_readers','${r.id}','${deptId}','${String(r.code||'').replace(/'/g,"\\'")}')" title="${_off?'إرجاعه للعمل':'تعطيل مؤقت — يظهر بلا مربعات ولا يُحتسب'}">${_off?'▶':'⏸'}</span>` : '';
     const offTag = _off ? ` <span style="background:#5a4a12;color:#ffcf5c;font-size:10px;padding:2px 7px;border-radius:8px;">معطَّل</span>` : '';
-    rowsHtml += `<tr${_off?' style="opacity:.55;"':''}><td class="code-cell">${esc(r.code)}${offTag}${offBtn}${delBtn}</td>${cells}</tr>`;
+    const renBtn = canManage ? neoRenBtn('serial_readers', r.id, r.code, deptId, 12) : '';
+    rowsHtml += `<tr${_off?' style="opacity:.55;"':''}><td class="code-cell">${esc(r.code)}${offTag}${renBtn}${offBtn}${delBtn}</td>${cells}</tr>`;
   }
 
   const manageHtml = canManage ? `
@@ -2478,7 +2547,8 @@ async function renderLaptopSection(deptId){
     const _off = neoIsOff(l.id);
     const offBtn = canManage ? ` <span style="cursor:pointer;color:${_off?'#3ecf6b':'#ffcf5c'};font-size:12px;" onclick="neoToggleOff('laptops','${l.id}','${deptId}','${String(l.code||'').replace(/'/g,"\\'")}')" title="${_off?'إرجاعه للعمل':'تعطيل مؤقت — يظهر بلا مربعات ولا يُحتسب'}">${_off?'▶':'⏸'}</span>` : '';
     const offTag = _off ? ` <span style="background:#5a4a12;color:#ffcf5c;font-size:10px;padding:2px 7px;border-radius:8px;">معطَّل</span>` : '';
-    rowsHtml += `<tr${_off?' style="opacity:.55;"':''}><td class="code-cell">${esc(l.code)}${offTag}${offBtn}${delBtn}</td>${cells}</tr>`;
+    const renBtn = canManage ? neoRenBtn('laptops', l.id, l.code, deptId, 12) : '';
+    rowsHtml += `<tr${_off?' style="opacity:.55;"':''}><td class="code-cell">${esc(l.code)}${offTag}${renBtn}${offBtn}${delBtn}</td>${cells}</tr>`;
   }
 
   const manageHtml = canManage ? `
@@ -2574,7 +2644,8 @@ async function renderIpadReaderDeviceSection(deptId){
     const _off = neoIsOff(dv.id);
     const offBtn = canManage ? ` <span style="cursor:pointer;color:${_off?'#3ecf6b':'#ffcf5c'};font-size:12px;" onclick="neoToggleOff('ipad_reader_devices','${dv.id}','${deptId}','${String(dv.code||'').replace(/'/g,"\\'")}')" title="${_off?'إرجاعه للعمل':'تعطيل مؤقت — يظهر بلا مربعات ولا يُحتسب'}">${_off?'▶':'⏸'}</span>` : '';
     const offTag = _off ? ` <span style="background:#5a4a12;color:#ffcf5c;font-size:10px;padding:2px 7px;border-radius:8px;">معطَّل</span>` : '';
-    rowsHtml += `<tr${_off?' style="opacity:.55;"':''}><td class="code-cell">${esc(dv.code)}${offTag}${offBtn}${delBtn}</td>${cells}</tr>`;
+    const renBtn = canManage ? neoRenBtn('ipad_reader_devices', dv.id, dv.code, deptId, 12) : '';
+    rowsHtml += `<tr${_off?' style="opacity:.55;"':''}><td class="code-cell">${esc(dv.code)}${offTag}${renBtn}${offBtn}${delBtn}</td>${cells}</tr>`;
   }
 
   const manageHtml = canManage ? `
@@ -2670,7 +2741,8 @@ async function renderPosDeviceSection(deptId){
     const _off = neoIsOff(d.id);
     const offBtn = canManage ? ` <span style="cursor:pointer;color:${_off?'#3ecf6b':'#ffcf5c'};font-size:12px;" onclick="neoToggleOff('pos_devices','${d.id}','${deptId}','${String(d.code||'').replace(/'/g,"\\'")}')" title="${_off?'إرجاعه للعمل':'تعطيل مؤقت — يظهر بلا مربعات ولا يُحتسب'}">${_off?'▶':'⏸'}</span>` : '';
     const offTag = _off ? ` <span style="background:#5a4a12;color:#ffcf5c;font-size:10px;padding:2px 7px;border-radius:8px;">معطَّل</span>` : '';
-    rowsHtml += `<tr${_off?' style="opacity:.55;"':''}><td class="code-cell">${esc(d.code)}${offTag}${offBtn}${delBtn}</td>${cells}</tr>`;
+    const renBtn = canManage ? neoRenBtn('pos_devices', d.id, d.code, deptId, 12) : '';
+    rowsHtml += `<tr${_off?' style="opacity:.55;"':''}><td class="code-cell">${esc(d.code)}${offTag}${renBtn}${offBtn}${delBtn}</td>${cells}</tr>`;
   }
 
   const manageHtml = canManage ? `
@@ -2862,6 +2934,7 @@ async function renderPointCriteriaManage(deptId){
     <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 4px;border-bottom:1px solid rgba(122,167,255,0.12);${co?'opacity:.55;':''}">
       <span style="color:#c8d4e2;">${esc(c.name)}${co?' <span style="background:#5a4a12;color:#ffcf5c;font-size:10px;padding:1px 6px;border-radius:7px;">معطَّل</span>':''}</span>
       <span>
+        <span style="cursor:pointer;color:#8fb8d8;font-size:12px;margin-inline-end:9px;" title="إعادة تسمية المعيار" onclick="neoRenameItem('point_criteria','${c.id}','${String(c.name||'').replace(/'/g,"\\'")}','${deptId}')">✏️</span>
         <span style="cursor:pointer;color:${co?'#3ecf6b':'#ffcf5c'};font-size:12px;margin-inline-end:9px;" title="${co?'إرجاع المعيار':'تعطيل المعيار — يختفي كعمود ولا يُحتسب'}" onclick="neoToggleOff('point_criteria','${c.id}','${deptId}','${String(c.name||'').replace(/'/g,"\\'")}')">${co?'▶':'⏸'}</span>
         <span style="cursor:pointer;color:#ff7b7b;font-size:12px;" onclick="confirmDeleteClick(this, async () => { await deletePointCriterionRow('${c.id}'); await renderPointCriteriaManage('${deptId}'); })">✕ حذف</span>
       </span>
@@ -3009,9 +3082,10 @@ async function renderTasksSection(deptId){
     const offBtn = canManage ? ` <span style="cursor:pointer;color:${isOff ? '#3ecf6b' : '#ffcf5c'};font-size:12px;" onclick="neoToggleOff('daily_tasks','${t.id}','${deptId}','${safeTask}')" title="${isOff ? 'إرجاع المهمة' : 'تعطيل مؤقت — تختفي عن مسؤولي الشفتات والصالة وتبقى سجلاتها'}">${isOff ? '▶' : '⏸'}</span>` : '';
     const delBtn = canManage ? ` <span style="cursor:pointer;color:#ff7b7b;font-size:11px;" onclick="confirmDeleteClick(this, () => deleteDailyTask('${t.id}','${deptId}'))">✕</span>` : '';
     const offTag = isOff ? ` <span style="background:#5a4a12;color:#ffcf5c;font-size:10px;padding:2px 7px;border-radius:8px;">معطَّلة</span>` : '';
+    const renBtn = canManage ? neoRenBtn('daily_tasks', t.id, t.name, deptId, 12) : '';
     rowsHtml += `
       <div class="item-row ${checked?'checked':'unchecked'}"${isOff ? ' style="opacity:.55;"' : ''}>
-        <div class="item-name">${esc(t.name)}${offTag}${offBtn}${delBtn}</div>
+        <div class="item-name">${esc(t.name)}${offTag}${renBtn}${offBtn}${delBtn}</div>
         <div class="check ${checked?'on':''}" id="taskchk_${t.id}" onclick="toggleTaskLog('${t.id}','${date}','${shift}')">${checked?'✓':''}</div>
       </div>`;
   }
@@ -3560,6 +3634,7 @@ async function renderStaffSection(deptId){
       <div style="display:flex; justify-content:space-between; align-items:center; padding:4px 0;${co?'opacity:.55;':''}">
         <span>${esc(c.name)}${co?' <span style="background:#5a4a12;color:#ffcf5c;font-size:10px;padding:1px 6px;border-radius:7px;">معطَّل</span>':''}</span>
         <span>
+          <span style="cursor:pointer;color:#8fb8d8;font-size:12px;margin-inline-end:9px;" title="إعادة تسمية المعيار" onclick="neoRenameItem('staff_criteria','${c.id}','${String(c.name||'').replace(/'/g,"\\'")}','${deptId}')">✏️</span>
           <span style="cursor:pointer;color:${co?'#3ecf6b':'#ffcf5c'};font-size:12px;margin-inline-end:9px;" title="${co?'إرجاع المعيار':'تعطيل المعيار — يختفي كعمود ولا يُحتسب'}" onclick="neoToggleOff('staff_criteria','${c.id}','${deptId}','${String(c.name||'').replace(/'/g,"\\'")}')">${co?'▶':'⏸'}</span>
           <span style="cursor:pointer;color:#ff7b7b;font-size:12px;" onclick="confirmDeleteClick(this, () => deleteStaffCriterion('${c.id}','${deptId}'))">✕ حذف</span>
         </span>
@@ -4962,12 +5037,12 @@ async function renderCustomSectionsManage(deptId){
   for (const sec of secs){
     const cols = await getSectionCols(sec.id);
     const rows = await getSectionRows(sec.id);
-    const colsHtml = cols.map(c => `<span style="display:inline-block; background:#2b3140; padding:4px 10px; border-radius:14px; margin:2px; font-size:12px;">${esc(c.name)} <span style="cursor:pointer;color:#ff7b7b;" onclick="deleteSectionCol('${c.id}','${deptId}')">✕</span></span>`).join('') || '<span style="color:#777; font-size:11px;">لا أعمدة بعد</span>';
+    const colsHtml = cols.map(c => `<span style="display:inline-block; background:#2b3140; padding:4px 10px; border-radius:14px; margin:2px; font-size:12px;">${esc(c.name)} <span style="cursor:pointer;color:#8fb8d8;margin-inline-start:4px;" title="إعادة تسمية العمود" onclick="neoRenameItem('custom_section_columns','${c.id}','${String(c.name||'').replace(/'/g,"\\'")}','${deptId}')">✏️</span> <span style="cursor:pointer;color:#ff7b7b;" onclick="deleteSectionCol('${c.id}','${deptId}')">✕</span></span>`).join('') || '<span style="color:#777; font-size:11px;">لا أعمدة بعد</span>';
     const rowsHtml = rows.map(r => {
       const ro = neoIsOff(r.id);
       return `<div style="display:flex; justify-content:space-between; align-items:center; padding:3px 0; font-size:12px;${ro?'opacity:.55;':''}">
         <span>${esc(r.name)}${ro?' <span style="background:#5a4a12;color:#ffcf5c;font-size:10px;padding:1px 6px;border-radius:7px;">معطَّل</span>':''}</span>
-        <span><span style="cursor:pointer;color:${ro?'#3ecf6b':'#ffcf5c'};margin-inline-end:8px;" title="${ro?'إرجاع الصف':'تعطيل مؤقت — يظهر بلا مربعات ولا يُحتسب'}" onclick="neoToggleOff('custom_section_rows','${r.id}','${deptId}','${String(r.name||'').replace(/'/g,"\\'")}')">${ro?'▶':'⏸'}</span><span style="cursor:pointer;color:#ff7b7b;" onclick="deleteSectionRow('${r.id}','${deptId}')">✕</span></span>
+        <span><span style="cursor:pointer;color:#8fb8d8;margin-inline-end:8px;" title="إعادة تسمية الصف" onclick="neoRenameItem('custom_section_rows','${r.id}','${String(r.name||'').replace(/'/g,"\\'")}','${deptId}')">✏️</span><span style="cursor:pointer;color:${ro?'#3ecf6b':'#ffcf5c'};margin-inline-end:8px;" title="${ro?'إرجاع الصف':'تعطيل مؤقت — يظهر بلا مربعات ولا يُحتسب'}" onclick="neoToggleOff('custom_section_rows','${r.id}','${deptId}','${String(r.name||'').replace(/'/g,"\\'")}')">${ro?'▶':'⏸'}</span><span style="cursor:pointer;color:#ff7b7b;" onclick="deleteSectionRow('${r.id}','${deptId}')">✕</span></span>
       </div>`;
     }).join('') || '<div style="color:#777; font-size:11px;">لا صفوف بعد</div>';
     secsHtml += `
@@ -4976,6 +5051,7 @@ async function renderCustomSectionsManage(deptId){
           <h3 style="margin:0;${neoIsOff(sec.id)?'opacity:.6;':''}">🧾 ${esc(sec.title)}${neoIsOff(sec.id)?' <span style="background:#5a4a12;color:#ffcf5c;font-size:10px;padding:2px 7px;border-radius:8px;">معطَّل</span>':''}</h3>
           <span>
             <span style="cursor:pointer;color:${neoIsOff(sec.id)?'#3ecf6b':'#ffcf5c'};font-size:12px;margin-inline-end:10px;" title="${neoIsOff(sec.id)?'إرجاع الجدول للعمل':'تعطيل الجدول كاملاً — يختفي عن الشفت والصالة وتبقى سجلاته'}" onclick="neoToggleOff('custom_sections','${sec.id}','${deptId}','${String(sec.title||'').replace(/'/g,"\\'")}')">${neoIsOff(sec.id)?'▶ إرجاع':'⏸ تعطيل'}</span>
+            <span style="cursor:pointer;color:#8fb8d8;font-size:12px;margin-inline-end:10px;" onclick="neoRenameItem('custom_sections','${sec.id}','${String(sec.title||'').replace(/'/g,"\\'")}','${deptId}')" title="إعادة تسمية الجدول">✏️</span>
             <span style="cursor:pointer;color:#ff7b7b;font-size:12px;" onclick="confirmDeleteClick(this, () => deleteCustomSection('${sec.id}','${deptId}'))">✕ حذف الجدول</span>
           </span>
         </div>
@@ -10668,6 +10744,7 @@ async function renderNeoAdminTools(deptId){
       const nm = (r.name||'').replace('⟦'+s+'⟧','');
       return `<span style="font-size:13px;background:rgba(56,217,185,0.1);border:1px solid rgba(56,217,185,0.3);border-radius:10px;padding:6px 10px;display:inline-flex;align-items:center;gap:8px;margin:3px;">
         ${esc(nm)}
+        <b onclick="neoRenameAddedCol('${deptId}','${r.id}','${s}','${String(nm).replace(/'/g,"\\'")}')" style="color:#8fb8d8;font-size:15px;cursor:pointer;padding:5px 8px;line-height:1;border-radius:6px;background:rgba(143,184,216,0.12);" title="إعادة تسمية">✏️</b>
         <b data-neoact="hide" data-dept="${deptId}" data-scope="${s}" data-key="${xk}" data-label="${String(nm).replace(/"/g,'&quot;')}" style="color:#ffcf5c;font-size:15px;cursor:pointer;padding:5px 8px;line-height:1;border-radius:6px;background:rgba(255,207,92,0.14);" title="تعطيل مؤقت — يبقى العمود وبياناته">⏸</b>
         <b data-neoact="del" data-dept="${deptId}" data-key="${r.id}" style="color:#e15b64;font-size:17px;cursor:pointer;padding:5px 8px;line-height:1;border-radius:6px;background:rgba(225,91,100,0.14);" title="حذف نهائي">✕</b>
       </span>`; }).join('');
@@ -11183,7 +11260,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.01.11";
+const APP_VERSION = "2026.09.03.01";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
