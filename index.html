@@ -9368,6 +9368,7 @@ async function renderSalesDeptManage(deptId){
   }
   if (LAPTOP_ENABLED_DEPTS.includes(dn)) panels.push({ key:'lap', icon:'💻', title:'اللابتوبات', id:'laptopSection', fn:renderLaptopSection });
   if (POS_ENABLED_DEPTS.includes(dn))    panels.push({ key:'pos', icon:'💳', title:'أجهزة POS',  id:'posDeviceSection', fn:renderPosDeviceSection });
+  panels.push({ key:'devlnk',icon:'🔗', title:'ربط الأجهزة بالموظفين', id:'devLinkSection', fn:renderDeviceLinkSection });
   panels.push({ key:'cust',  icon:'🗂', title:'الجداول المخصصة', id:'customSectionsArea', fn:renderCustomSectionsManage });
   panels.push({ key:'tools', icon:'🛠', title:'أدوات إدارية',   id:'neoAdminTools',      fn:renderNeoAdminTools });
 
@@ -11260,7 +11261,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.03.01";
+const APP_VERSION = "2026.09.03.02";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -14824,6 +14825,16 @@ setTimeout(() => { try{ neoSoundBtn(); }catch(e){} }, 3000);
    الصيغة: ⟦lnk⟧<staffId>|<locationId>|<fieldKey>
    ══════════════════════════════════════════════════════════════════ */
 const NEO_LNK_TAG = '⟦lnk⟧';
+/* الجداول القابلة للربط، وأين تُسجَّل خاناتها، وأي نطاق أعمدة تتبع.
+   الحقل '*' في الرابط يعني «كل أعمدة هذا العنصر» — يُستعمل للأجهزة،
+   حيث يتحمّل الموظف الجهاز كاملاً لا عموداً منه. */
+const NEO_LNK_SRC = {
+  locations:           { logs:'daily_logs',              fk:'location_id',           scope:'loc',        label:'📍 المواقع' },
+  ipads:               { logs:'ipad_logs',               fk:'ipad_id',               scope:'ipad',       label:'📱 الآيباد' },
+  serial_readers:      { logs:'serial_reader_logs',      fk:'serial_reader_id',      scope:'reader',     label:'🔍 قارئ السيريال' },
+  ipad_reader_devices: { logs:'ipad_reader_device_logs', fk:'ipad_reader_device_id', scope:'ipadreader', label:'📲 الآيباد والقارئ' }
+};
+function neoRefKey(table, id, field){ return table + ':' + id + '|' + field; }
 let _neoLnk = null, _neoLnkTs = 0;
 const NEO_LNK_TTL_MS = 20000;
 
@@ -14840,11 +14851,16 @@ async function neoLoadLinks(force){
       /* الصيغة: staff|loc|field[|from[|to]]
          ثلاثة أجزاء = ربط قديم بلا تاريخ، يُعامل مفتوحاً من الأزل (توافق خلفي).
          to مملوء = ربط منتهٍ، يبقى محفوظاً للتاريخ ولا يظهر كربط حالي. */
-      const rec = { rowId:r.id, deptId:r.department_id, staffId:parts[0], locId:parts[1],
+      /* المرجع: "<table>:<id>" — والمجرَّد بلا نقطتين يعني locations (روابط سابقة) */
+      const ref = parts[1]; const ci = ref.indexOf(':');
+      const table  = ci < 0 ? 'locations' : ref.slice(0, ci);
+      const itemId = ci < 0 ? ref : ref.slice(ci + 1);
+      const rec = { rowId:r.id, deptId:r.department_id, staffId:parts[0],
+                    table:table, itemId:itemId, locId:itemId,
                     field:parts[2], from:parts[3] || '', to:parts[4] || '' };
       idx.all.push(rec);
       (idx.byStaff[rec.staffId] = idx.byStaff[rec.staffId] || []).push(rec);
-      if (!rec.to) idx.byCell[rec.locId + '|' + rec.field] = rec.staffId;   /* المالك الحالي فقط */
+      if (!rec.to) idx.byCell[neoRefKey(rec.table, rec.itemId, rec.field)] = rec.staffId;   /* المالك الحالي فقط */
     });
     _neoLnk = idx; _neoLnkTs = Date.now();
   }catch(e){ if (!_neoLnk) _neoLnk = idx; }
@@ -14858,8 +14874,10 @@ function neoLinksNow(staffId){ return neoLinksOf(staffId).filter(l => !l.to); }
 function neoLinksOnDay(staffId, day){
   return neoLinksOf(staffId).filter(l => (!l.from || day >= l.from) && (!l.to || day <= l.to));
 }
-function neoIsLinked(staffId, locId, field){
-  return neoLinksNow(staffId).some(l => String(l.locId) === String(locId) && l.field === field);
+function neoIsLinked(staffId, itemId, field, table){
+  const tb = table || 'locations';
+  return neoLinksNow(staffId).some(l => (l.table || 'locations') === tb
+    && String(l.itemId) === String(itemId) && l.field === field);
 }
 window.neoIsLinked = neoIsLinked;
 window.neoLinksOnDay = neoLinksOnDay;
@@ -14869,8 +14887,8 @@ window.neoLinksOnDay = neoLinksOnDay;
    الأثر مزدوجاً لا مفقوداً. ويستعمل insert/delete فقط لا update، ليعمل مع
    سياسات RLS المقيَّدة بـ ⟦lnk⟧ بلا صلاحية تعديل. */
 async function neoLinkClose(rec, lastDay){
-  const closed = NEO_LNK_TAG + rec.staffId + '|' + rec.locId + '|' + rec.field
-               + '|' + (rec.from || '') + '|' + lastDay;
+  const closed = NEO_LNK_TAG + rec.staffId + '|' + (rec.table || 'locations') + ':' + rec.itemId
+               + '|' + rec.field + '|' + (rec.from || '') + '|' + lastDay;
   const ins = await supabaseClient.from('custom_fields')
     .insert({ department_id: rec.deptId, name: closed });
   if (ins.error) return ins.error;
@@ -14878,25 +14896,27 @@ async function neoLinkClose(rec, lastDay){
   return del.error || null;
 }
 
-async function neoLinkToggle(deptId, staffId, locId, field){
+async function neoLinkToggle(deptId, staffId, itemId, field, table){
+  const TB = table || 'locations';
   await neoLoadLinks();
   const today = (typeof todayStr === 'function') ? todayStr() : new Date().toISOString().slice(0,10);
   const yest = (function(){ const d = new Date(today + 'T12:00:00'); d.setDate(d.getDate() - 1);
     return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); })();
   const active = (_neoLnk.all || []).filter(l => !l.to);
-  const mine = active.find(l =>
-    String(l.staffId) === String(staffId) && String(l.locId) === String(locId) && l.field === field);
+  const same = l => (l.table || 'locations') === TB && String(l.itemId) === String(itemId) && l.field === field;
+  const mine = active.find(l => String(l.staffId) === String(staffId) && same(l));
   let error = null;
   if (mine){
     error = await neoLinkClose(mine, yest);        /* فكّ الربط — يسري من اليوم */
   } else {
     /* الخانة لموظف واحد — نُنهي ربط المالك السابق ولا نمحوه */
-    for (const t of active.filter(l => String(l.locId) === String(locId) && l.field === field)){
+    for (const t of active.filter(same)){
       const e = await neoLinkClose(t, yest); if (e) error = e;
     }
     if (!error){
       ({ error } = await supabaseClient.from('custom_fields')
-        .insert({ department_id: deptId, name: NEO_LNK_TAG + staffId + '|' + locId + '|' + field + '|' + today }));
+        .insert({ department_id: deptId,
+                  name: NEO_LNK_TAG + staffId + '|' + TB + ':' + itemId + '|' + field + '|' + today }));
     }
   }
   if (error){ neoNotify('تعذّر الحفظ: ' + error.message); return false; }
@@ -14943,7 +14963,7 @@ window.renderLinkManagerView = async function(profile, roleKey){
       if (!locsActive.length) h += '<div class="card" style="color:#8fa3b8;">لا توجد مواقع في هذا القسم</div>';
 
       for (const s of active){
-        const mine = neoLinksNow(s.id).filter(l => l.field === cfg.field).map(l => String(l.locId));
+        const mine = neoLinksNow(s.id).filter(l => (l.table||'locations')==='locations' && l.field === cfg.field).map(l => String(l.itemId));
         h += '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">'
           + '<h3 style="margin:0;">' + esc(s.name) + '</h3>'
           + '<span style="background:' + (mine.length ? 'rgba(56,217,185,0.14)' : 'rgba(122,167,255,0.08)')
@@ -14951,7 +14971,7 @@ window.renderLinkManagerView = async function(profile, roleKey){
           + 'padding:3px 11px;border-radius:10px;">' + mine.length + ' موقع</span></div>'
           + '<div style="display:flex;flex-wrap:wrap;gap:7px;">';
         for (const l of locsActive){
-          const owner = (_neoLnk.byCell || {})[l.id + '|' + cfg.field];
+          const owner = (_neoLnk.byCell || {})[neoRefKey('locations', l.id, cfg.field)];
           const isMine = String(owner || '') === String(s.id);
           const takenByOther = owner && !isMine;
           const otherName = takenByOther ? ((active.find(x => String(x.id) === String(owner)) || {}).name || 'موظف آخر') : '';
@@ -14980,8 +15000,85 @@ window.renderLinkManagerView = async function(profile, roleKey){
 window.neoLnkPickDept = function(v){ _lnkDept = v; renderLinkManagerView(window.__lnkProfile, window.__lnkRole); };
 window.neoLnkTap = async function(staffId, locId){
   const cfg = NEO_LINK_ROLES[window.__lnkRole]; if (!cfg) return;
-  if (await neoLinkToggle(_lnkDept, staffId, locId, cfg.field))
+  if (await neoLinkToggle(_lnkDept, staffId, locId, cfg.field, 'locations'))
     await renderLinkManagerView(window.__lnkProfile, window.__lnkRole);
+};
+
+/* ══ ربط الأجهزة بالموظفين ══
+   يعرض ما يملكه القسم فعلاً: الجهاز المدمج، أو الآيباد والقارئ منفصلَين
+   حسب IPAD_READER_SEPARATE_DEPT. الرابط هنا بحقل '*' أي الجهاز كاملاً
+   بكل أعمدته — لأن الموظف يتحمّل الجهاز لا عموداً منه. */
+function neoDeviceGroups(deptName){
+  return (deptName === IPAD_READER_SEPARATE_DEPT)
+    ? [{ table:'ipads',          get:getIpads,          label:'📱 الآيباد' },
+       { table:'serial_readers', get:getReaders,        label:'🔍 قارئ السيريال' }]
+    : [{ table:'ipad_reader_devices', get:getIpadReaderDevices, label:'📲 الآيباد والقارئ' }];
+}
+
+async function renderDeviceLinkSection(deptId){
+  const el = document.getElementById('devLinkSection');
+  if (!el) return;
+  el.innerHTML = '<div style="color:#8fa3b8;font-size:12px;">جاري التحميل…</div>';
+  try{
+    await neoLoadLinks(true); await neoLoadOff();
+    const { data: dps } = await cachedSelectResponse('departments', 'departments', '*', 'id');
+    const deptName = ((dps||[]).find(d => String(d.id) === String(deptId)) || {}).name || '';
+    const staff = (await getStaffList(deptId)).filter(x => !neoIsOff(x.id));
+    const groups = neoDeviceGroups(deptName);
+    for (const g of groups) g.items = (await g.get(deptId)).filter(x => !neoIsOff(x.id));
+
+    let h = '<h3 style="margin-top:0;">🔗 ربط الأجهزة بالموظفين</h3>'
+      + '<div style="color:#8fa3b8;font-size:12px;line-height:1.9;margin-bottom:12px;">'
+      + 'اربط كل جهاز بالموظف المسؤول عنه. عندما يؤشّر مسؤول الشفت على خانات ذلك الجهاز '
+      + 'تُحتسب له في مخطط الأداء الشهري.<br>الجهاز يُربط <b>كاملاً بكل أعمدته</b>، ولموظف واحد فقط.</div>';
+
+    if (!staff.length) h += '<div style="color:#8fa3b8;font-size:12px;">لا يوجد موظفون في هذا القسم</div>';
+    const any = groups.some(g => g.items.length);
+    if (!any) h += '<div style="color:#8fa3b8;font-size:12px;">لا توجد أجهزة مسجّلة في هذا القسم</div>';
+
+    for (const s of staff){
+      if (!any) break;
+      const nMine = groups.reduce((a, g) => a + g.items.filter(it =>
+        neoIsLinked(s.id, it.id, '*', g.table)).length, 0);
+      h += '<div style="border:1px solid #2a2e37;border-radius:10px;padding:12px;margin-bottom:10px;">'
+        + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">'
+        + '<b style="font-size:15px;">' + esc(s.name) + '</b>'
+        + '<span style="background:' + (nMine ? 'rgba(56,217,185,0.14)' : 'rgba(122,167,255,0.08)')
+        + ';color:' + (nMine ? '#38d9b9' : '#7487a0') + ';font-size:12px;font-weight:700;'
+        + 'padding:3px 11px;border-radius:10px;">' + nMine + ' جهاز</span></div>';
+      for (const g of groups){
+        if (!g.items.length) continue;
+        h += '<div style="color:#a9c4ff;font-size:12px;margin:8px 0 5px;">' + g.label + '</div>'
+          + '<div style="display:flex;flex-wrap:wrap;gap:7px;">';
+        for (const it of g.items){
+          const owner = (_neoLnk.byCell || {})[neoRefKey(g.table, it.id, '*')];
+          const isMine = String(owner || '') === String(s.id);
+          const taken = owner && !isMine;
+          const otherName = taken ? ((staff.find(x => String(x.id) === String(owner)) || {}).name || 'موظف آخر') : '';
+          h += '<span onclick="' + (taken ? '' : "neoDevLnkTap('" + s.id + "','" + g.table + "','" + it.id + "','" + deptId + "')") + '" '
+            + 'title="' + (taken ? 'مرتبط بـ ' + esc(otherName) : (isMine ? 'اضغط لفكّ الربط' : 'اضغط للربط')) + '" '
+            + 'style="font-size:14px;padding:9px 13px;border-radius:10px;'
+            + (taken
+                ? 'background:rgba(122,167,255,0.05);color:#4a5768;border:1px dashed rgba(122,167,255,0.2);cursor:not-allowed;'
+                : isMine
+                  ? 'background:rgba(56,217,185,0.16);color:#38d9b9;border:1px solid rgba(56,217,185,0.45);cursor:pointer;font-weight:700;'
+                  : 'background:rgba(122,167,255,0.07);color:#c8d4e2;border:1px solid rgba(122,167,255,0.22);cursor:pointer;')
+            + '">' + (isMine ? '✓ ' : '') + esc(it.code)
+            + (taken ? ' <span style="font-size:10px;">(' + esc(otherName) + ')</span>' : '') + '</span>';
+        }
+        h += '</div>';
+      }
+      h += '</div>';
+    }
+    el.innerHTML = h;
+  }catch(e){
+    el.innerHTML = '<div style="color:#ff7b7b;">تعذّر التحميل: ' + esc(e && e.message) + '</div>';
+  }
+}
+window.renderDeviceLinkSection = renderDeviceLinkSection;
+window.neoDevLnkTap = async function(staffId, table, itemId, deptId){
+  if (await neoLinkToggle(deptId, staffId, itemId, '*', table))
+    await renderDeviceLinkSection(deptId);
 };
 
 /* ══ المخطط الشهري لأداء موظفي قسم — دورة ٢٥ إلى ٢٤ ══
@@ -15021,19 +15118,29 @@ window.renderDeptStaffMonth = async function(deptId){
     const maxPts = (critR || []).length * 10;
 
     /* سجلات المواقع المرتبطة بموظفي هذا القسم */
-    /* كل موقع ارتبط بأي موظف خلال الدورة — لا المرتبط الآن فقط،
-       وإلا غابت سجلات موقع فُكّ ربطه في منتصف الدورة */
-    const linkedLocIds = [...new Set(staff.flatMap(s =>
-      neoLinksOf(s.id).filter(l => (!l.to || l.to >= cycle.from) && (!l.from || l.from <= cycle.to))
-                      .map(l => String(l.locId))))];
-    let locLogs = [];
-    if (linkedLocIds.length){
-      const r = await supabaseClient.from('daily_logs').select('*')
-        .in('location_id', linkedLocIds).gte('log_date', cycle.from).lte('log_date', cycle.to);
-      locLogs = r.data || [];
+    /* كل عنصر ارتبط بأي موظف خلال الدورة — مواقع وأجهزة معاً، ولا المرتبط
+       الآن فقط، وإلا غابت سجلات عنصر فُكّ ربطه في منتصف الدورة. */
+    const inCycle = l => (!l.to || l.to >= cycle.from) && (!l.from || l.from <= cycle.to);
+    const byTable = {};
+    staff.forEach(s => neoLinksOf(s.id).filter(inCycle).forEach(l => {
+      const tb = l.table || 'locations';
+      (byTable[tb] = byTable[tb] || new Set()).add(String(l.itemId));
+    }));
+
+    /* سجلات كل جدول على حدة، وتعريفات أعمدة نطاقه */
+    const logByKeyDay = {};          /* "<table>:<item>|<day>" -> [سجلات] */
+    const defsByScope = {};          /* نطاق -> تعريفات أعمدته */
+    for (const tb of Object.keys(byTable)){
+      const src = NEO_LNK_SRC[tb]; if (!src) continue;
+      const ids = [...byTable[tb]]; if (!ids.length) continue;
+      const r = await supabaseClient.from(src.logs).select('*')
+        .in(src.fk, ids).gte('log_date', cycle.from).lte('log_date', cycle.to);
+      (r.data || []).forEach(row => {
+        const k = tb + ':' + row[src.fk] + '|' + row.log_date;
+        (logByKeyDay[k] = logByKeyDay[k] || []).push(row);
+      });
+      if (!defsByScope[src.scope]) defsByScope[src.scope] = await neoUnifiedDefs(deptId, src.scope);
     }
-    const locDefs = await neoUnifiedDefs(deptId, 'loc');
-    const defByKey = {}; locDefs.forEach(d => { defByKey[d.key] = d; });
 
     /* فهرسة: staff|day -> مجاميع */
     const evBy = {}, ptBy = {}, lkBy = {};
@@ -15052,20 +15159,27 @@ window.renderDeptStaffMonth = async function(deptId){
       const sc = p.scores || {};
       ptBy[p.staff_id + '|' + p.log_date] = Object.values(sc).reduce((a, b) => a + (Number(b) || 0), 0);
     });
-    /* لكل ربط: هل خانته مؤشَّرة ✓ في يومها */
-    const logByLocDay = {};
-    locLogs.forEach(l => { (logByLocDay[l.location_id + '|' + l.log_date] = logByLocDay[l.location_id + '|' + l.log_date] || []).push(l); });
+    /* لكل ربط: خاناته المؤشَّرة ✓ في يومها.
+       الحقل '*' يعني الجهاز كاملاً فتُحسب كل أعمدة نطاقه؛ وغيره عمود واحد. */
     staff.forEach(s => {
       days.forEach(day => {
         /* روابط ذلك اليوم لا الروابط الحالية — فتعديل اليوم لا يمسّ الماضي */
         neoLinksOnDay(s.id, day).forEach(link => {
-          const rows = logByLocDay[link.locId + '|' + day] || [];
+          const tb = link.table || 'locations';
+          const src = NEO_LNK_SRC[tb]; if (!src) return;
+          const rows = logByKeyDay[tb + ':' + link.itemId + '|' + day] || [];
           if (!rows.length) return;
-          const def = defByKey[link.field] || { key: link.field };
-          const on = rows.some(r => (typeof neoReadCell === 'function') ? neoReadCell(r, def) : r[link.field] === true);
+          const scopeDefs = defsByScope[src.scope] || [];
+          const defs = (link.field === '*')
+            ? scopeDefs
+            : [ scopeDefs.find(d => d.key === link.field) || { key: link.field } ];
           const k = s.id + '|' + day;
           const cur = lkBy[k] || (lkBy[k] = { on:0, tot:0 });
-          cur.tot++; if (on) cur.on++;
+          defs.forEach(def => {
+            if (typeof neoCellDisabled === 'function' && neoCellDisabled({ id: link.itemId }, def.key)) return;
+            const on = rows.some(r => (typeof neoReadCell === 'function') ? neoReadCell(r, def) : r[def.key] === true);
+            cur.tot++; if (on) cur.on++;
+          });
         });
       });
     });
@@ -15097,7 +15211,7 @@ window.renderDeptStaffMonth = async function(deptId){
       + '<div style="color:#8fa3b8;font-size:12px;">دورة ' + cycle.label + ' · ' + cycle.from + ' إلى ' + cycle.to
       + ' · ' + days.length + ' من ' + cycle.days + ' يوماً</div>'
       + '<div style="color:#7487a0;font-size:11px;margin-top:6px;line-height:1.8;">'
-      + 'الدرجة اليومية متوسط ما توفّر من: التقييم اليومي · المواقع المرتبطة · النقاط</div></div>';
+      + 'الدرجة اليومية متوسط ما توفّر من: التقييم اليومي · النقاط · المواقع المرتبطة (جرد وتنظيف) · الأجهزة المرتبطة</div></div>';
 
     if (!staff.length){
       h += '<div class="card" style="color:#8fa3b8;">لا يوجد موظفون في هذا القسم</div>';
