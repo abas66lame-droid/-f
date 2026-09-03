@@ -11293,7 +11293,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.03.03";
+const APP_VERSION = "2026.09.03.04";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -14887,12 +14887,19 @@ async function neoLoadLinks(force){
       const ref = parts[1]; const ci = ref.indexOf(':');
       const table  = ci < 0 ? 'locations' : ref.slice(0, ci);
       const itemId = ci < 0 ? ref : ref.slice(ci + 1);
+      /* الجزء السادس: أيام الأسبوع "0,3" — فارغ يعني كل الأيام.
+         الجرد أسبوعي يدور حسب اليوم، فالرابط الدائم كان يحمّل الموظف
+         مواقعَ ليست مسؤوليته إلا يوماً واحداً في الأسبوع. */
       const rec = { rowId:r.id, deptId:r.department_id, staffId:parts[0],
                     table:table, itemId:itemId, locId:itemId,
-                    field:parts[2], from:parts[3] || '', to:parts[4] || '' };
+                    field:parts[2], from:parts[3] || '', to:parts[4] || '',
+                    days:parts[5] || '' };
       idx.all.push(rec);
       (idx.byStaff[rec.staffId] = idx.byStaff[rec.staffId] || []).push(rec);
-      if (!rec.to) idx.byCell[neoRefKey(rec.table, rec.itemId, rec.field)] = rec.staffId;   /* المالك الحالي فقط */
+      if (!rec.to){   /* المالكون الحاليون — أكثر من واحد إن اختلفت أيامهم */
+        const k = neoRefKey(rec.table, rec.itemId, rec.field);
+        (idx.byCell[k] = idx.byCell[k] || []).push({ staffId: rec.staffId, days: rec.days });
+      }
     });
     _neoLnk = idx; _neoLnkTs = Date.now();
   }catch(e){ if (!_neoLnk) _neoLnk = idx; }
@@ -14901,15 +14908,41 @@ async function neoLoadLinks(force){
 function neoLinksOf(staffId){ return (_neoLnk && _neoLnk.byStaff[String(staffId)]) || []; }
 /* الروابط السارية الآن — للواجهة */
 function neoLinksNow(staffId){ return neoLinksOf(staffId).filter(l => !l.to); }
-/* الروابط التي كانت سارية في يوم معيّن — للحساب التاريخي.
-   بهذا لا يغيّر تعديلُ اليوم نتائجَ الأيام الماضية. */
-function neoLinksOnDay(staffId, day){
-  return neoLinksOf(staffId).filter(l => (!l.from || day >= l.from) && (!l.to || day <= l.to));
+
+/* ── أيام الأسبوع: 0 الأحد … 6 السبت، والفراغ يعني كل الأيام ── */
+const NEO_DAY_AR = ['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
+const NEO_DAY_L  = ['ح','ن','ث','ر','خ','ج','س'];
+function neoWeekdayOf(iso){ try{ return new Date(iso + 'T12:00:00').getDay(); }catch(e){ return -1; } }
+function neoDaysHit(days, wd){ return !days || days.split(',').indexOf(String(wd)) !== -1; }
+/* هل يتقاطع مجموعا أيام؟ الفراغ = كل الأيام فيتقاطع مع أي شيء */
+function neoDaysOverlap(a, b){
+  if (!a || !b) return true;
+  const B = b.split(',');
+  return a.split(',').some(x => B.indexOf(x) !== -1);
 }
-function neoIsLinked(staffId, itemId, field, table){
+function neoDaysLabel(days){
+  if (!days) return '';
+  return days.split(',').map(d => NEO_DAY_L[+d] || '').join('');
+}
+
+/* الروابط السارية في يوم معيّن — تاريخاً ويومَ أسبوع معاً.
+   بهذا لا يغيّر تعديلُ اليوم نتائجَ الأيام الماضية، ولا يُحمَّل موظفُ
+   الجرد مواقعَ يومٍ ليس يومه. */
+function neoLinksOnDay(staffId, day){
+  const wd = neoWeekdayOf(day);
+  return neoLinksOf(staffId).filter(l =>
+    (!l.from || day >= l.from) && (!l.to || day <= l.to) && neoDaysHit(l.days, wd));
+}
+/* من يملك هذه الخانة في أيامٍ تتقاطع مع المطلوبة؟ */
+function neoCellOwners(table, itemId, field, days){
+  const arr = (_neoLnk && _neoLnk.byCell[neoRefKey(table, itemId, field)]) || [];
+  return arr.filter(o => neoDaysOverlap(o.days, days || ''));
+}
+function neoIsLinked(staffId, itemId, field, table, days){
   const tb = table || 'locations';
   return neoLinksNow(staffId).some(l => (l.table || 'locations') === tb
-    && String(l.itemId) === String(itemId) && l.field === field);
+    && String(l.itemId) === String(itemId) && l.field === field
+    && (days === undefined || (l.days || '') === (days || '')));
 }
 window.neoIsLinked = neoIsLinked;
 window.neoLinksOnDay = neoLinksOnDay;
@@ -14920,7 +14953,8 @@ window.neoLinksOnDay = neoLinksOnDay;
    سياسات RLS المقيَّدة بـ ⟦lnk⟧ بلا صلاحية تعديل. */
 async function neoLinkClose(rec, lastDay){
   const closed = NEO_LNK_TAG + rec.staffId + '|' + (rec.table || 'locations') + ':' + rec.itemId
-               + '|' + rec.field + '|' + (rec.from || '') + '|' + lastDay;
+               + '|' + rec.field + '|' + (rec.from || '') + '|' + lastDay
+               + (rec.days ? '|' + rec.days : '');
   const ins = await supabaseClient.from('custom_fields')
     .insert({ department_id: rec.deptId, name: closed });
   if (ins.error) return ins.error;
@@ -14928,27 +14962,33 @@ async function neoLinkClose(rec, lastDay){
   return del.error || null;
 }
 
-async function neoLinkToggle(deptId, staffId, itemId, field, table){
+async function neoLinkToggle(deptId, staffId, itemId, field, table, days){
   const TB = table || 'locations';
+  const DY = days || '';
   await neoLoadLinks();
   const today = (typeof todayStr === 'function') ? todayStr() : new Date().toISOString().slice(0,10);
   const yest = (function(){ const d = new Date(today + 'T12:00:00'); d.setDate(d.getDate() - 1);
     return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); })();
   const active = (_neoLnk.all || []).filter(l => !l.to);
-  const same = l => (l.table || 'locations') === TB && String(l.itemId) === String(itemId) && l.field === field;
-  const mine = active.find(l => String(l.staffId) === String(staffId) && same(l));
+  const sameCell = l => (l.table || 'locations') === TB
+    && String(l.itemId) === String(itemId) && l.field === field;
+  /* فكّ الربط يطابق نفس مجموعة الأيام بالضبط — حتى لا يفكّ ربطَ يومٍ آخر */
+  const mine = active.find(l => String(l.staffId) === String(staffId)
+    && sameCell(l) && (l.days || '') === DY);
   let error = null;
   if (mine){
     error = await neoLinkClose(mine, yest);        /* فكّ الربط — يسري من اليوم */
   } else {
-    /* الخانة لموظف واحد — نُنهي ربط المالك السابق ولا نمحوه */
-    for (const t of active.filter(same)){
+    /* الحصرية لكل يوم لا للخانة كلها: موظفان قد يتقاسمان الموقع نفسه
+       بيومين مختلفين، فلا نُنهي إلا الروابط التي تتقاطع أيامها فعلاً. */
+    for (const t of active.filter(l => sameCell(l) && neoDaysOverlap(l.days || '', DY))){
       const e = await neoLinkClose(t, yest); if (e) error = e;
     }
     if (!error){
       ({ error } = await supabaseClient.from('custom_fields')
         .insert({ department_id: deptId,
-                  name: NEO_LNK_TAG + staffId + '|' + TB + ':' + itemId + '|' + field + '|' + today }));
+                  name: NEO_LNK_TAG + staffId + '|' + TB + ':' + itemId + '|' + field
+                        + '|' + today + (DY ? '||' + DY : '') }));
     }
   }
   if (error){ neoNotify('تعذّر الحفظ: ' + error.message); return false; }
@@ -14963,6 +15003,8 @@ const NEO_LINK_ROLES = {
   stock: { field:'inventory', title:'📦 ربط الجرد',    label:'الجرد'   }
 };
 let _lnkDept = '';
+let _lnkDays = '';        /* أيام الربط المختارة — فارغ = كل الأيام */
+let _lnkExtra = '';       /* قسم إضافي تُعرض مواقعه للربط عبر الأقسام */
 
 window.renderLinkManagerView = async function(profile, roleKey){
   const el = document.getElementById('linkView');
@@ -14987,39 +15029,99 @@ window.renderLinkManagerView = async function(profile, roleKey){
           + esc(d.name) + '</option>').join('')
       + '</select></div>';
 
+    /* ── أيام الربط ──
+       الجرد يدور أسبوعياً، فالمسؤول يختار اليوم أولاً ثم يضغط المواقع.
+       الافتراضي «كل الأيام» ليبقى سلوك التنظيف اليومي كما هو. */
+    h += '<div class="card"><div style="color:#a9c4ff;font-size:13px;margin-bottom:8px;">'
+      + '🗓 أيام هذا الربط</div>'
+      + '<div style="color:#8fa3b8;font-size:12px;line-height:1.8;margin-bottom:9px;">'
+      + 'اختر الأيام أولاً ثم اضغط المواقع. الموقع نفسه يمكن أن يكون لموظف يوم الأحد '
+      + 'ولآخر يوم الثلاثاء.</div>'
+      + '<div style="display:flex;flex-wrap:wrap;gap:6px;">'
+      + '<span onclick="neoLnkDays(\'\')" style="font-size:14px;padding:8px 14px;border-radius:10px;cursor:pointer;'
+      + (!_lnkDays ? 'background:rgba(56,217,185,0.18);color:#38d9b9;border:1px solid rgba(56,217,185,0.5);font-weight:700;'
+                   : 'background:rgba(122,167,255,0.07);color:#c8d4e2;border:1px solid rgba(122,167,255,0.22);')
+      + '">كل الأيام</span>'
+      + NEO_DAY_AR.map((nm, i) => {
+          const on = (_lnkDays || '').split(',').indexOf(String(i)) !== -1;
+          return '<span onclick="neoLnkDayTap(' + i + ')" style="font-size:14px;padding:8px 13px;border-radius:10px;cursor:pointer;'
+            + (on ? 'background:rgba(56,217,185,0.18);color:#38d9b9;border:1px solid rgba(56,217,185,0.5);font-weight:700;'
+                  : 'background:rgba(122,167,255,0.07);color:#c8d4e2;border:1px solid rgba(122,167,255,0.22);')
+            + '">' + nm + '</span>';
+        }).join('')
+      + '</div></div>';
+
+    /* ── قسم إضافي: موظفو هذا القسم قد يتحمّلون مواقع من قسم آخر ── */
+    h += '<div class="card"><div style="color:#a9c4ff;font-size:13px;margin-bottom:7px;">'
+      + '➕ مواقع من قسم آخر</div>'
+      + '<div style="color:#8fa3b8;font-size:12px;line-height:1.8;margin-bottom:8px;">'
+      + 'بعض الموظفين مسؤولون عن مواقع خارج قسمهم. اختر القسم فتظهر مواقعه '
+      + 'تحت كل موظف بجانب مواقع قسمه.</div>'
+      + '<select onchange="neoLnkExtra(this.value)" style="width:100%;font-size:14px;">'
+      + '<option value="">— بلا —</option>'
+      + list.filter(d => String(d.id) !== String(_lnkDept))
+            .map(d => '<option value="' + d.id + '"' + (String(_lnkExtra) === String(d.id) ? ' selected' : '') + '>'
+              + esc(d.name) + '</option>').join('')
+      + '</select></div>';
+
     if (_lnkDept){
       const [staff, locs] = await Promise.all([getStaffList(_lnkDept), getLocations(_lnkDept)]);
       const active = staff.filter(s => !neoIsOff(s.id));
       const locsActive = locs.filter(l => !neoIsOff(l.id));
+      let extraLocs = [], extraName = '';
+      if (_lnkExtra){
+        extraLocs = (await getLocations(_lnkExtra)).filter(l => !neoIsOff(l.id));
+        extraName = ((list.find(d => String(d.id) === String(_lnkExtra)) || {}).name) || '';
+      }
       if (!active.length) h += '<div class="card" style="color:#8fa3b8;">لا يوجد موظفون في هذا القسم</div>';
       if (!locsActive.length) h += '<div class="card" style="color:#8fa3b8;">لا توجد مواقع في هذا القسم</div>';
 
+      /* شريحة موقع واحدة — تُستعمل لمواقع القسم ولمواقع القسم الآخر */
+      const chip = (s, l, ownerDept) => {
+        const owners  = neoCellOwners('locations', l.id, cfg.field, _lnkDays);
+        const mineRec = neoLinksNow(s.id).find(x => (x.table||'locations') === 'locations'
+          && String(x.itemId) === String(l.id) && x.field === cfg.field && (x.days||'') === (_lnkDays||''));
+        const isMine  = !!mineRec;
+        const other   = owners.find(o => String(o.staffId) !== String(s.id));
+        const blocked = !isMine && !!other;
+        const otherName = blocked
+          ? ((active.find(x => String(x.id) === String(other.staffId)) || {}).name || 'موظف آخر')
+          : '';
+        const dayTag = isMine && mineRec.days
+          ? ' <span style="font-size:10px;opacity:.85;">' + neoDaysLabel(mineRec.days) + '</span>' : '';
+        const blockTag = blocked
+          ? ' <span style="font-size:10px;">(' + esc(otherName)
+            + (other.days ? ' · ' + neoDaysLabel(other.days) : '') + ')</span>' : '';
+        return '<span onclick="' + (blocked ? '' : "neoLnkTap('" + s.id + "','" + l.id + "','" + (ownerDept || _lnkDept) + "')") + '" '
+          + 'title="' + (blocked ? 'مرتبط بـ ' + esc(otherName) : (isMine ? 'اضغط لفكّ الربط' : 'اضغط للربط')) + '" '
+          + 'style="font-size:14px;padding:9px 13px;border-radius:10px;'
+          + (blocked
+              ? 'background:rgba(122,167,255,0.05);color:#4a5768;border:1px dashed rgba(122,167,255,0.2);cursor:not-allowed;'
+              : isMine
+                ? 'background:rgba(56,217,185,0.16);color:#38d9b9;border:1px solid rgba(56,217,185,0.45);cursor:pointer;font-weight:700;'
+                : 'background:rgba(122,167,255,0.07);color:#c8d4e2;border:1px solid rgba(122,167,255,0.22);cursor:pointer;')
+          + '">' + (isMine ? '✓ ' : '') + esc(l.code) + dayTag + blockTag + '</span>';
+      };
+
       for (const s of active){
-        const mine = neoLinksNow(s.id).filter(l => (l.table||'locations')==='locations' && l.field === cfg.field).map(l => String(l.itemId));
+        const mine = neoLinksNow(s.id).filter(l => (l.table||'locations')==='locations' && l.field === cfg.field);
+        const nOut = mine.filter(l => !locsActive.some(x => String(x.id) === String(l.itemId))).length;
         h += '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">'
           + '<h3 style="margin:0;">' + esc(s.name) + '</h3>'
           + '<span style="background:' + (mine.length ? 'rgba(56,217,185,0.14)' : 'rgba(122,167,255,0.08)')
           + ';color:' + (mine.length ? '#38d9b9' : '#7487a0') + ';font-size:12px;font-weight:700;'
-          + 'padding:3px 11px;border-radius:10px;">' + mine.length + ' موقع</span></div>'
-          + '<div style="display:flex;flex-wrap:wrap;gap:7px;">';
-        for (const l of locsActive){
-          const owner = (_neoLnk.byCell || {})[neoRefKey('locations', l.id, cfg.field)];
-          const isMine = String(owner || '') === String(s.id);
-          const takenByOther = owner && !isMine;
-          const otherName = takenByOther ? ((active.find(x => String(x.id) === String(owner)) || {}).name || 'موظف آخر') : '';
-          h += '<span onclick="' + (takenByOther ? '' : 'neoLnkTap(\'' + s.id + '\',\'' + l.id + '\')') + '" '
-            + 'title="' + (takenByOther ? 'مرتبط بـ ' + esc(otherName) : (isMine ? 'اضغط لفكّ الربط' : 'اضغط للربط')) + '" '
-            + 'style="font-size:14px;padding:9px 13px;border-radius:10px;'
-            + (takenByOther
-                ? 'background:rgba(122,167,255,0.05);color:#4a5768;border:1px dashed rgba(122,167,255,0.2);cursor:not-allowed;'
-                : isMine
-                  ? 'background:rgba(56,217,185,0.16);color:#38d9b9;border:1px solid rgba(56,217,185,0.45);cursor:pointer;font-weight:700;'
-                  : 'background:rgba(122,167,255,0.07);color:#c8d4e2;border:1px solid rgba(122,167,255,0.22);cursor:pointer;')
-            + '">' + (isMine ? '✓ ' : '') + esc(l.code)
-            + (takenByOther ? ' <span style="font-size:10px;">(' + esc(otherName) + ')</span>' : '')
-            + '</span>';
+          + 'padding:3px 11px;border-radius:10px;">' + mine.length + ' موقع'
+          + (nOut ? ' · ' + nOut + ' خارج قسمه' : '') + '</span></div>'
+          + '<div style="display:flex;flex-wrap:wrap;gap:7px;">'
+          + locsActive.map(l => chip(s, l, _lnkDept)).join('')
+          + '</div>';
+        if (extraLocs.length){
+          h += '<div style="color:#a9c4ff;font-size:12px;margin:11px 0 6px;">➕ من ' + esc(extraName) + '</div>'
+            + '<div style="display:flex;flex-wrap:wrap;gap:7px;">'
+            + extraLocs.map(l => chip(s, l, _lnkExtra)).join('')
+            + '</div>';
         }
-        h += '</div></div>';
+        h += '</div>';
       }
     }
     h += '<div class="card"><button class="secondary" style="width:100%;font-size:13px;padding:11px;" '
@@ -15029,11 +15131,21 @@ window.renderLinkManagerView = async function(profile, roleKey){
     el.innerHTML = '<div class="card" style="color:#ff7b7b;">تعذّر التحميل: ' + esc(e && e.message) + '</div>';
   }
 };
-window.neoLnkPickDept = function(v){ _lnkDept = v; renderLinkManagerView(window.__lnkProfile, window.__lnkRole); };
-window.neoLnkTap = async function(staffId, locId){
+const neoLnkRedraw = () => renderLinkManagerView(window.__lnkProfile, window.__lnkRole);
+window.neoLnkPickDept = function(v){ _lnkDept = v; _lnkExtra = ''; neoLnkRedraw(); };
+window.neoLnkExtra    = function(v){ _lnkExtra = v; neoLnkRedraw(); };
+window.neoLnkDays     = function(v){ _lnkDays = v; neoLnkRedraw(); };
+window.neoLnkDayTap   = function(i){
+  const set = new Set((_lnkDays || '').split(',').filter(Boolean));
+  set.has(String(i)) ? set.delete(String(i)) : set.add(String(i));
+  _lnkDays = [...set].sort((a,b) => a - b).join(',');
+  neoLnkRedraw();
+};
+window.neoLnkTap = async function(staffId, locId, ownerDept){
   const cfg = NEO_LINK_ROLES[window.__lnkRole]; if (!cfg) return;
-  if (await neoLinkToggle(_lnkDept, staffId, locId, cfg.field, 'locations'))
-    await renderLinkManagerView(window.__lnkProfile, window.__lnkRole);
+  /* صف العلامة يُنسب لقسم الموقع لا لقسم الموظف — فيبقى مرتبطاً بمصدره */
+  if (await neoLinkToggle(ownerDept || _lnkDept, staffId, locId, cfg.field, 'locations', _lnkDays))
+    await neoLnkRedraw();
 };
 
 /* ══ ربط الأجهزة بالموظفين ══
@@ -15083,7 +15195,7 @@ async function renderDeviceLinkSection(deptId){
         h += '<div style="color:#a9c4ff;font-size:12px;margin:8px 0 5px;">' + g.label + '</div>'
           + '<div style="display:flex;flex-wrap:wrap;gap:7px;">';
         for (const it of g.items){
-          const owner = (_neoLnk.byCell || {})[neoRefKey(g.table, it.id, '*')];
+          const owner = (neoCellOwners(g.table, it.id, '*', '')[0] || {}).staffId;
           const isMine = String(owner || '') === String(s.id);
           const taken = owner && !isMine;
           const otherName = taken ? ((staff.find(x => String(x.id) === String(owner)) || {}).name || 'موظف آخر') : '';
@@ -15109,7 +15221,7 @@ async function renderDeviceLinkSection(deptId){
 }
 window.renderDeviceLinkSection = renderDeviceLinkSection;
 window.neoDevLnkTap = async function(staffId, table, itemId, deptId){
-  if (await neoLinkToggle(deptId, staffId, itemId, '*', table))
+  if (await neoLinkToggle(deptId, staffId, itemId, '*', table, ''))
     await renderDeviceLinkSection(deptId);
 };
 
@@ -15154,14 +15266,19 @@ window.renderDeptStaffMonth = async function(deptId){
        الآن فقط، وإلا غابت سجلات عنصر فُكّ ربطه في منتصف الدورة. */
     const inCycle = l => (!l.to || l.to >= cycle.from) && (!l.from || l.from <= cycle.to);
     const byTable = {};
+    /* أعمدة العنصر تتبع قسمَ العنصر نفسه لا قسمَ الموظف — فبعض موظفي
+       التنظيف لهم مواقع من أقسام أخرى، وأعمدة ذلك القسم قد تختلف. */
+    const needDefs = new Set();
     staff.forEach(s => neoLinksOf(s.id).filter(inCycle).forEach(l => {
       const tb = l.table || 'locations';
       (byTable[tb] = byTable[tb] || new Set()).add(String(l.itemId));
+      const src = NEO_LNK_SRC[tb];
+      if (src) needDefs.add((l.deptId || deptId) + '|' + src.scope);
     }));
 
     /* سجلات كل جدول على حدة، وتعريفات أعمدة نطاقه */
     const logByKeyDay = {};          /* "<table>:<item>|<day>" -> [سجلات] */
-    const defsByScope = {};          /* نطاق -> تعريفات أعمدته */
+    const defsByScope = {};          /* "<قسم>|<نطاق>" -> تعريفات أعمدته */
     for (const tb of Object.keys(byTable)){
       const src = NEO_LNK_SRC[tb]; if (!src) continue;
       const ids = [...byTable[tb]]; if (!ids.length) continue;
@@ -15171,7 +15288,10 @@ window.renderDeptStaffMonth = async function(deptId){
         const k = tb + ':' + row[src.fk] + '|' + row.log_date;
         (logByKeyDay[k] = logByKeyDay[k] || []).push(row);
       });
-      if (!defsByScope[src.scope]) defsByScope[src.scope] = await neoUnifiedDefs(deptId, src.scope);
+    }
+    for (const key of needDefs){
+      const i = key.indexOf('|');
+      defsByScope[key] = await neoUnifiedDefs(key.slice(0, i), key.slice(i + 1));
     }
 
     /* فهرسة: staff|day -> مجاميع */
@@ -15201,7 +15321,7 @@ window.renderDeptStaffMonth = async function(deptId){
           const src = NEO_LNK_SRC[tb]; if (!src) return;
           const rows = logByKeyDay[tb + ':' + link.itemId + '|' + day] || [];
           if (!rows.length) return;
-          const scopeDefs = defsByScope[src.scope] || [];
+          const scopeDefs = defsByScope[(link.deptId || deptId) + '|' + src.scope] || [];
           const defs = (link.field === '*')
             ? scopeDefs
             : [ scopeDefs.find(d => d.key === link.field) || { key: link.field } ];
