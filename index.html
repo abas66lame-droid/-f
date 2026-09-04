@@ -1671,6 +1671,100 @@ function flattenStaffExtraEvaluations(logsById){
    ══════════════════════════════════════════════════════════════ */
 /* ══ خانات معطّلة لصفوف معيّنة: لا تظهر ولا تُحتسب ══
    مثال: موظفة أنثى → «شعر/لحية» معطّلة لها وحدها */
+/* ══ مطابقة مفاتيح الخانات — مصدر واحد لكل قراءة وكتابة ══
+   الخانة الواحدة تُخزَّن بمفاتيح مختلفة حسب المسار الذي كتبها: المفتاح
+   الأساسي (inventory)، أو مُعرّف العمود خاماً، أو extra_<id> أو cf_<id>
+   أو المختصر x_<12>. ومطاردةُ كل صيغة على حدة أنتجت أخطاءً متكرّرة:
+   وقتٌ يُكتب بصيغة ويُقرأ بأخرى فيضيع.
+
+   فبدل التعداد، نطابق على «الجذر»: المفتاح الذي يحمل مُعرّفاً (uuid أو
+   سلسلة ستّ عشرية) يُطابَق بأول ١٢ خانة منه مهما كانت بادئته، والمفتاح
+   النصّي يُطابَق حرفياً. وبهذا تعمل أي صيغة تُضاف مستقبلاً بلا تعديل
+   سطر واحد هنا. */
+/* البادئات المعروفة — مسار سريع للمطابقة المباشرة فقط. ليست هي القاعدة:
+   ما لا يوافقها يُطابَق بالجذر أدناه، فلا حاجة لتحديثها عند كل صيغة جديدة. */
+const NEO_KEY_PREFIX = /^(cf_|extra_|x_|col_|fld_)/;
+function neoShortKey(id){ return 'x_' + String(id).replace(/-/g,'').slice(0,12); }
+/* جذر المفتاح: أطول سلسلة ستّ عشرية بداخله — أي المُعرّف مهما كانت
+   بادئته. لا قائمة بادئات هنا عمداً: بادئة تُخترع غداً (v2col_ مثلاً)
+   تُطابَق كما تُطابَق القديمة. والمفتاح النصّي (inventory) لا جذر له
+   فيُطابَق حرفياً ولا يلتبس بغيره. */
+function neoKeyCore(k){
+  const s = String(k == null ? '' : k).toLowerCase().replace(/-/g, '');
+  const runs = s.match(/[0-9a-f]{12,}/g);
+  if (!runs) return null;
+  let best = runs[0];
+  for (const r of runs) if (r.length >= best.length) best = r;   /* الأطول، وعند التساوي الأخير */
+  return best.slice(0, 12);
+}
+/* كل المفاتيح المرشَّحة لتعريف خانة، بترتيب الأولوية.
+   تُحفظ بالذاكرة لكل تعريف — الجداول تستدعيها آلاف المرات في الرسمة. */
+const _neoKeyMemo = (typeof WeakMap === 'function') ? new WeakMap() : null;
+function neoCellKeys(def){
+  if (_neoKeyMemo && def && typeof def === 'object'){
+    const hit = _neoKeyMemo.get(def);
+    if (hit) return hit.keys;
+    const built = _neoCellKeysBuild(def);
+    _neoKeyMemo.set(def, { keys: built, cores: built.map(neoKeyCore).filter(Boolean) });
+    return built;
+  }
+  return _neoCellKeysBuild(def);
+}
+function neoCellCores(def){
+  if (_neoKeyMemo && def && typeof def === 'object'){
+    neoCellKeys(def);
+    const hit = _neoKeyMemo.get(def);
+    if (hit) return hit.cores;
+  }
+  return _neoCellKeysBuild(def).map(neoKeyCore).filter(Boolean);
+}
+function _neoCellKeysBuild(def){
+  const out = [];
+  const push = k => { if (k !== undefined && k !== null && k !== '' && out.indexOf(k) === -1) out.push(k); };
+  if (def === null || def === undefined) return out;
+  if (typeof def === 'string' || typeof def === 'number'){ push(String(def)); }
+  else {
+    push(def.key);
+    [def.cfId, def.criterionId, def.colId, def.id].forEach(id => {
+      if (!id) return;
+      push(id); push('extra_' + id); push('cf_' + id); push(neoShortKey(id));
+    });
+  }
+  /* المفتاح نفسه قد يكون مركّباً — نشتقّ منه الصيغ الأخرى */
+  const first = typeof def === 'object' ? def.key : def;
+  const bare = String(first == null ? '' : first).replace(NEO_KEY_PREFIX, '');
+  if (bare && bare !== String(first)){
+    push(bare); push('extra_' + bare); push('cf_' + bare); push(neoShortKey(bare));
+  }
+  return out;
+}
+/* هل يشير المفتاحان إلى الخانة نفسها؟ */
+function neoSameKey(a, b){
+  if (a === b) return true;
+  const ca = neoKeyCore(a), cb = neoKeyCore(b);
+  return !!(ca && cb && ca === cb);
+}
+/* قيمة الخانة داخل كائن مفاتيحه قد تكون بأي صيغة (أوقات، ملاحظات، extra_fields) */
+function neoPick(obj, def){
+  if (!obj || typeof obj !== 'object') return undefined;
+  const keys = neoCellKeys(def);
+  for (const k of keys) if (obj[k] !== undefined) return obj[k];
+  /* لم تُطابق أي صيغة معروفة — نبحث بالجذر، فتعمل الصيغ المستقبلية */
+  const cores = neoCellCores(def);
+  if (!cores.length) return undefined;
+  for (const k in obj){
+    const c = neoKeyCore(k);
+    if (c && cores.indexOf(c) !== -1) return obj[k];
+  }
+  return undefined;
+}
+window.neoShortKey = neoShortKey;
+window.neoKeyCore  = neoKeyCore;
+window.neoCellKeys = neoCellKeys;
+window.neoCellCores = neoCellCores;
+window.neoSameKey  = neoSameKey;
+window.neoPick     = neoPick;
+
 function neoCellDisabled(item, fieldKey){
   if (!item) return false;
   /* المعطَّل مؤقتاً = كل خاناته معطّلة: يظهر اسمه للمسؤولين بلا مربعات،
@@ -1679,7 +1773,7 @@ function neoCellDisabled(item, fieldKey){
   const d = item.disabled_fields;
   if (!d) return false;
   const arr = Array.isArray(d) ? d : (typeof d === 'string' ? (function(){ try{ return JSON.parse(d); }catch(e){ return []; } })() : []);
-  return arr.indexOf(fieldKey) !== -1;
+  return arr.some(k => neoSameKey(k, fieldKey));
 }
 window.neoCellDisabled = neoCellDisabled;
 
@@ -1690,7 +1784,7 @@ function neoDisabledCount(item, fieldKeys){
   if (!item.disabled_fields) return 0;
   const d = item.disabled_fields;
   const arr = Array.isArray(d) ? d : (typeof d === 'string' ? (function(){ try{ return JSON.parse(d); }catch(e){ return []; } })() : []);
-  return (fieldKeys || []).filter(k => arr.indexOf(k) !== -1).length;
+  return (fieldKeys || []).filter(f => arr.some(k => neoSameKey(k, f))).length;
 }
 window.neoDisabledCount = neoDisabledCount;
 
@@ -1728,14 +1822,11 @@ window.neoUnifiedDefs = neoUnifiedDefs;
 /* قراءة قيمة خانة أياً كان مكان تخزينها */
 function neoReadCell(log, def){
   if (!log || !def) return false;
-  const ex = log.extra_fields || {};
-  /* نقرأ من كل الأماكن المحتملة — لا نعتمد على وسم src وحده،
-     فالأعمدة المضافة تصل أحياناً بلا وسم فتُقرأ فارغة خطأً */
-  if (def.cfId && ex[def.cfId] === true) return true;
-  if (def.key !== undefined){
-    if (ex[def.key] === true) return true;
-    if (log[def.key] === true) return true;
-  }
+  /* المطابقة بالجذر لا بالصيغة — أي مسار كتب الخانة، تُقرأ */
+  if (neoPick(log.extra_fields, def) === true) return true;
+  if (neoPick(log.extra_evaluations, def) === true) return true;
+  if (neoPick(log.col_values, def) === true) return true;
+  if (def.key !== undefined && log[def.key] === true) return true;
   return false;
 }
 window.neoReadCell = neoReadCell;
@@ -1751,11 +1842,11 @@ function neoCellState(log, def, hall){
   if (!log || !def) return 'empty';                     /* لا سجل لهذا اليوم أصلاً */
   if (typeof neoReadCell === 'function' && neoReadCell(log, def)) return 'yes';
   const n = (hall ? log.hall_field_notes : log.field_notes) || {};
-  if (n[def.key] !== undefined) return 'no';
-  if (def.cfId && n['extra_' + def.cfId] !== undefined) return 'no';
-  if (def.criterionId && n['extra_' + def.criterionId] !== undefined) return 'no';
-  const ex = log.extra_fields || {};
-  if (log[def.key] === false || ex[def.key] === false) return 'no';
+  if (neoPick(n, def) !== undefined) return 'no';       /* دليل ✗ صريح: ملاحظة للخانة */
+  if (log[def.key] === false) return 'no';
+  if (neoPick(log.extra_fields, def) === false) return 'no';
+  if (neoPick(log.extra_evaluations, def) === false) return 'no';
+  if (neoPick(log.col_values, def) === false) return 'no';
   return 'empty';
 }
 window.neoCellState = neoCellState;
@@ -1768,30 +1859,20 @@ function neoCellMark(state){
 }
 window.neoCellMark = neoCellMark;
 
-/* قراءة وقت خانة أياً كان مفتاحها */
-/* الصيغة المختصرة التي تُشتقّ منها مفاتيح الأعمدة المضافة */
-function neoShortKey(id){ return 'x_' + String(id).replace(/-/g,'').slice(0,12); }
-window.neoShortKey = neoShortKey;
-
+/* وقت الخانة أياً كانت الصيغة التي كُتب بها */
 function neoReadCellTime(log, def, hall){
   const t = (log && (hall ? log.hall_field_times : log.field_times)) || {};
   if (!def) return null;
-  /* الزمن يُخزَّن بمفاتيح مختلفة حسب نوع العمود:
-     الأساسي بمفتاحه، والمضاف للمواقع بمُعرّفه الخام، ومعيار الموظف
-     بـ extra_<id>. نجرّبها كلها بدل افتراض صيغة واحدة. */
-  /* المفتاح المختصر x_<12> كان يكتبه جدول الشفت للأعمدة القديمة، فيُقرأ
-     هنا أيضاً وإلا ضاع وقتُ كل عمود مخصّص للمواقع سبق تأشيره. */
-  return t[def.key]
-      || (def.cfId ? (t[def.cfId] || t['extra_' + def.cfId] || t[neoShortKey(def.cfId)]) : null)
-      || (def.criterionId ? (t['extra_' + def.criterionId] || t[def.criterionId]) : null)
-      || null;
+  const v = neoPick(t, def);
+  return v === undefined ? null : v;
 }
 window.neoReadCellTime = neoReadCellTime;
 
 /* قراءة ملاحظة خانة */
 function neoReadCellNote(log, def, hall){
   const n = (log && (hall ? log.hall_field_notes : log.field_notes)) || {};
-  return n[def.key] || (def.cfId ? n['extra_' + def.cfId] : null) || null;
+  const v = neoPick(n, def);
+  return (v === undefined || v === null) ? null : v;
 }
 window.neoReadCellNote = neoReadCellNote;
 
@@ -4561,13 +4642,9 @@ function shiftExtraState(log, cfId){
   return 'empty';
 }
 // الصف مكتمل إذا كل خاناته ✓ أو (✗ مع ملاحظة غير فارغة)
-/* العمود المخصّص للموقع يُعطَّل بمفتاح cf_<id> في واجهة الإدارة، وقد يصل
-   بصيغة extra_<id> من مسارات أخرى — نقبل الاثنين فلا تفلت خانة معطّلة. */
+/* لم تعد تحتاج تجريب الصيغ — neoCellDisabled يطابق بالجذر */
 function neoCfDisabled(loc, cfId){
-  if (!loc || typeof neoCellDisabled !== 'function') return false;
-  return neoCellDisabled(loc, 'cf_' + cfId)
-      || neoCellDisabled(loc, 'extra_' + cfId)
-      || neoCellDisabled(loc, String(cfId));
+  return !!loc && typeof neoCellDisabled === 'function' && neoCellDisabled(loc, String(cfId));
 }
 /* الخانة المعطّلة لا تُطلب لإكمال الصف — وإلا قُفل الجدول التدريجي على
    المسؤول ولم يستطع إكمال يومه أبداً. */
@@ -11610,7 +11687,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.04.05";
+const APP_VERSION = "2026.09.04.06";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
