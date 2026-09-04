@@ -3740,6 +3740,7 @@ function neoComputeShiftPct(){
           if (s === 'yes' || (s === 'no' && (fn[f.key]||'').trim())) done++;
         });
         (st.customFields||[]).forEach(cf => {
+          if (neoCfDisabled(loc, cf.id)) return;
           total++;
           const s = shiftExtraState(log, cf.id);
           if (s === 'yes' || (s === 'no' && (fn['extra_'+cf.id]||'').trim())) done++;
@@ -4554,14 +4555,26 @@ function shiftExtraState(log, cfId){
   return 'empty';
 }
 // الصف مكتمل إذا كل خاناته ✓ أو (✗ مع ملاحظة غير فارغة)
-function shiftRowComplete(log, customFields){
+/* العمود المخصّص للموقع يُعطَّل بمفتاح cf_<id> في واجهة الإدارة، وقد يصل
+   بصيغة extra_<id> من مسارات أخرى — نقبل الاثنين فلا تفلت خانة معطّلة. */
+function neoCfDisabled(loc, cfId){
+  if (!loc || typeof neoCellDisabled !== 'function') return false;
+  return neoCellDisabled(loc, 'cf_' + cfId)
+      || neoCellDisabled(loc, 'extra_' + cfId)
+      || neoCellDisabled(loc, String(cfId));
+}
+/* الخانة المعطّلة لا تُطلب لإكمال الصف — وإلا قُفل الجدول التدريجي على
+   المسؤول ولم يستطع إكمال يومه أبداً. */
+function shiftRowComplete(log, customFields, loc){
   const fn = log?.field_notes || {};
   for (const f of FIELD_DEFS){
+    if (loc && typeof neoCellDisabled === 'function' && neoCellDisabled(loc, f.key)) continue;
     const s = shiftFieldState(log, f.key);
     if (s === 'empty') return false;
     if (s === 'no' && !(fn[f.key]||'').trim()) return false;
   }
   for (const cf of customFields){
+    if (neoCfDisabled(loc, cf.id)) continue;
     const s = shiftExtraState(log, cf.id);
     if (s === 'empty') return false;
     if (s === 'no' && !(fn['extra_'+cf.id]||'').trim()) return false;
@@ -4581,16 +4594,26 @@ function buildShiftProgressiveRows(){
     let cells = '';
     const wrongList = [];
     for (const f of FIELD_DEFS){
+      if (typeof neoCellDisabled === 'function' && neoCellDisabled(loc, f.key)){
+        cells += '<td><span style="color:#5d6d80;font-size:15px;" title="لا ينطبق">—</span></td>';
+        continue;
+      }
       const s = shiftFieldState(log, f.key);
       cells += `<td><div class="check ${s==='yes'?'on':s==='no'?'bad':''}" onclick="shiftCycleField('${loc.id}','${f.key}',false)">${s==='yes'?'✓':s==='no'?'✗':''}</div></td>`;
       if (s === 'no') wrongList.push({ key: f.key, label: f.label });
     }
     for (const cf of st.customFields){
+      if (neoCfDisabled(loc, cf.id)){
+        cells += '<td><span style="color:#5d6d80;font-size:15px;" title="لا ينطبق">—</span></td>';
+        continue;
+      }
       const s = shiftExtraState(log, cf.id);
       cells += `<td><div class="check ${s==='yes'?'on':s==='no'?'bad':''}" onclick="shiftCycleField('${loc.id}','${String(cf.id)}',true)">${s==='yes'?'✓':s==='no'?'✗':''}</div></td>`;
       if (s === 'no') wrongList.push({ key: 'extra_'+cf.id, label: cf.name });
     }
-    html += `<tr><td class="code-cell">${esc(loc.code)}</td>${cells}</tr>`;
+    const locOff = (typeof neoIsOff === 'function' && neoIsOff(loc.id))
+      ? ' <span style="background:#5a4a12;color:#ffcf5c;font-size:10px;padding:2px 7px;border-radius:8px;white-space:nowrap;">معطَّل</span>' : '';
+    html += `<tr${locOff ? ' style="opacity:.6;"' : ''}><td class="code-cell">${esc(loc.code)}${locOff}</td>${cells}</tr>`;
     // مربع ملاحظة إجباري مباشرة تحت الصف لكل خانة ✗
     for (const w of wrongList){
       const val = (fn[w.key]||'').replace(/"/g,'&quot;');
@@ -4601,7 +4624,7 @@ function buildShiftProgressiveRows(){
       </td></tr>`;
     }
     // لا نعرض الصف التالي إلا بعد اكتمال هذا الصف
-    if (!shiftRowComplete(log, st.customFields)){
+    if (!shiftRowComplete(log, st.customFields, loc)){
       allDone = false;
       const remaining = st.locations.length - i - 1;
       if (remaining > 0) html += `<tr><td colspan="${totalCols}" style="color:#777; font-size:11px;">🔒 يتبقى ${remaining} موقع — أكمل هذا الصف ليظهر التالي</td></tr>`;
@@ -5086,21 +5109,21 @@ async function computeHallAuditProgressForUser(userId, depts, date, onlyMine){
     { data: allPosDevices }, { data: posDeviceLogs },
     { data: cleanLogs }
   ] = await Promise.all([
-    cachedSelectResponse('locations_ref', 'locations', 'id, department_id, code, sort_order, created_at', 'sort_order'),
+    cachedSelectResponse('locations_ref', 'locations', 'id, department_id, code, sort_order, created_at, disabled_fields', 'sort_order'),
     supabaseClient.from('daily_logs').select('*').eq('log_date', date),
-    cachedSelectResponse('staff_ref', 'staff', 'id, department_id, name, sort_order, created_at', 'sort_order'),
+    cachedSelectResponse('staff_ref', 'staff', 'id, department_id, name, sort_order, created_at, disabled_fields', 'sort_order'),
     supabaseClient.from('staff_evaluations').select('*').eq('log_date', date),
     cachedSelectResponse('tasks_ref', 'daily_tasks', 'id, department_id, name, created_at', 'created_at'),
     supabaseClient.from('daily_task_logs').select('*').eq('log_date', date),
-    cachedSelectResponse('ipads_ref', 'ipads', 'id, department_id, code, created_at', 'created_at'),
+    cachedSelectResponse('ipads_ref', 'ipads', 'id, department_id, code, created_at, disabled_fields', 'created_at'),
     supabaseClient.from('ipad_logs').select('*').eq('log_date', date),
-    cachedSelectResponse('readers_ref', 'serial_readers', 'id, department_id, code, created_at', 'created_at'),
+    cachedSelectResponse('readers_ref', 'serial_readers', 'id, department_id, code, created_at, disabled_fields', 'created_at'),
     supabaseClient.from('serial_reader_logs').select('*').eq('log_date', date),
-    cachedSelectResponse('ipad_reader_devices_ref', 'ipad_reader_devices', 'id, department_id, code, created_at', 'created_at'),
+    cachedSelectResponse('ipad_reader_devices_ref', 'ipad_reader_devices', 'id, department_id, code, created_at, disabled_fields', 'created_at'),
     supabaseClient.from('ipad_reader_device_logs').select('*').eq('log_date', date),
-    cachedSelectResponse('laptops_ref', 'laptops', 'id, department_id, code, created_at', 'created_at'),
+    cachedSelectResponse('laptops_ref', 'laptops', 'id, department_id, code, created_at, disabled_fields', 'created_at'),
     supabaseClient.from('laptop_logs').select('*').eq('log_date', date),
-    cachedSelectResponse('pos_devices_ref', 'pos_devices', 'id, department_id, code, created_at', 'created_at'),
+    cachedSelectResponse('pos_devices_ref', 'pos_devices', 'id, department_id, code, created_at, disabled_fields', 'created_at'),
     supabaseClient.from('pos_device_logs').select('*').eq('log_date', date),
     supabaseClient.from('department_cleanliness_logs').select('*').eq('log_date', date)
   ]);
@@ -5223,7 +5246,11 @@ function buildMissingTable(items, fieldDefs, rowLabelFn, logsById, table, idFiel
   const rk = regKey || table;
   hallMissSections[rk] = { items, fields: fieldDefs, rowLabelFn, logsById, table, idField, open: {} };
   let missing = 0;
-  items.forEach(it => { const log = logsById[it.id]; fieldDefs.forEach(f => { if (!log || !log[f.key]) missing++; }); });
+  /* الخانة المعطّلة ليست نقصاً، والعدّ يوافق ما تُظهره العلامات نفسها */
+  items.forEach(it => { const log = logsById[it.id]; fieldDefs.forEach(f => {
+    if (typeof neoCellDisabled === 'function' && neoCellDisabled(it, f.key)) return;
+    if (neoCellState(log, f, false) !== 'yes') missing++;
+  }); });
   const html = `<div class="table-wrap roomy-table"><table id="missT_${rk}">${missRowsHtml(rk)}</table></div>`;
   return { html, missing };
 }
@@ -5239,6 +5266,10 @@ function missRowsHtml(table){
     const openSet = cfg.open[it.id] || [];
     let cells = '';
     for (const f of cfg.fields){
+      if (typeof neoCellDisabled === 'function' && neoCellDisabled(it, f.key)){
+        cells += '<td><span style="color:#5d6d80;" title="لا ينطبق">—</span></td>';
+        continue;
+      }
       const st = neoCellState(log, f, false);
       const hasNote = (hallFn[f.key]||'').trim();
       cells += `<td onclick="hallMissOpenNote('${table}','${it.id}','${f.key}')" style="cursor:pointer;">${neoCellMark(st)}${hasNote?' <span style="font-size:10px;">📝</span>':''}</td>`;
@@ -5541,21 +5572,21 @@ async function loadHallMissing(){
       { data: allPosDevices }, { data: posDeviceLogs },
       { data: cleanLogs }
     ] = await Promise.all([
-      cachedSelectResponse('locations_ref', 'locations', 'id, department_id, code, sort_order, created_at', 'sort_order'),
+      cachedSelectResponse('locations_ref', 'locations', 'id, department_id, code, sort_order, created_at, disabled_fields', 'sort_order'),
       supabaseClient.from('daily_logs').select('*').eq('log_date', date),
-      cachedSelectResponse('staff_ref', 'staff', 'id, department_id, name, sort_order, created_at', 'sort_order'),
+      cachedSelectResponse('staff_ref', 'staff', 'id, department_id, name, sort_order, created_at, disabled_fields', 'sort_order'),
       supabaseClient.from('staff_evaluations').select('*').eq('log_date', date),
       cachedSelectResponse('tasks_ref', 'daily_tasks', 'id, department_id, name, created_at', 'created_at'),
       supabaseClient.from('daily_task_logs').select('*').eq('log_date', date),
-      cachedSelectResponse('ipads_ref', 'ipads', 'id, department_id, code, created_at', 'created_at'),
+      cachedSelectResponse('ipads_ref', 'ipads', 'id, department_id, code, created_at, disabled_fields', 'created_at'),
       supabaseClient.from('ipad_logs').select('*').eq('log_date', date),
-      cachedSelectResponse('readers_ref', 'serial_readers', 'id, department_id, code, created_at', 'created_at'),
+      cachedSelectResponse('readers_ref', 'serial_readers', 'id, department_id, code, created_at, disabled_fields', 'created_at'),
       supabaseClient.from('serial_reader_logs').select('*').eq('log_date', date),
-      cachedSelectResponse('ipad_reader_devices_ref', 'ipad_reader_devices', 'id, department_id, code, created_at', 'created_at'),
+      cachedSelectResponse('ipad_reader_devices_ref', 'ipad_reader_devices', 'id, department_id, code, created_at, disabled_fields', 'created_at'),
       supabaseClient.from('ipad_reader_device_logs').select('*').eq('log_date', date),
-      cachedSelectResponse('laptops_ref', 'laptops', 'id, department_id, code, created_at', 'created_at'),
+      cachedSelectResponse('laptops_ref', 'laptops', 'id, department_id, code, created_at, disabled_fields', 'created_at'),
       supabaseClient.from('laptop_logs').select('*').eq('log_date', date),
-      cachedSelectResponse('pos_devices_ref', 'pos_devices', 'id, department_id, code, created_at', 'created_at'),
+      cachedSelectResponse('pos_devices_ref', 'pos_devices', 'id, department_id, code, created_at, disabled_fields', 'created_at'),
       supabaseClient.from('pos_device_logs').select('*').eq('log_date', date),
       supabaseClient.from('department_cleanliness_logs').select('*').eq('log_date', date)
     ]);
@@ -6165,21 +6196,21 @@ async function loadHallAudit(){
       { data: allPosDevices }, { data: posDeviceLogs },
       { data: cleanLogs }
     ] = await Promise.all([
-      cachedSelectResponse('locations_ref', 'locations', 'id, department_id, code, sort_order, created_at', 'sort_order'),
+      cachedSelectResponse('locations_ref', 'locations', 'id, department_id, code, sort_order, created_at, disabled_fields', 'sort_order'),
       supabaseClient.from('daily_logs').select('*').eq('log_date', date),
-      cachedSelectResponse('staff_ref', 'staff', 'id, department_id, name, sort_order, created_at', 'sort_order'),
+      cachedSelectResponse('staff_ref', 'staff', 'id, department_id, name, sort_order, created_at, disabled_fields', 'sort_order'),
       supabaseClient.from('staff_evaluations').select('*').eq('log_date', date),
       cachedSelectResponse('tasks_ref', 'daily_tasks', 'id, department_id, name, created_at', 'created_at'),
       supabaseClient.from('daily_task_logs').select('*').eq('log_date', date),
-      cachedSelectResponse('ipads_ref', 'ipads', 'id, department_id, code, created_at', 'created_at'),
+      cachedSelectResponse('ipads_ref', 'ipads', 'id, department_id, code, created_at, disabled_fields', 'created_at'),
       supabaseClient.from('ipad_logs').select('*').eq('log_date', date),
-      cachedSelectResponse('readers_ref', 'serial_readers', 'id, department_id, code, created_at', 'created_at'),
+      cachedSelectResponse('readers_ref', 'serial_readers', 'id, department_id, code, created_at, disabled_fields', 'created_at'),
       supabaseClient.from('serial_reader_logs').select('*').eq('log_date', date),
-      cachedSelectResponse('ipad_reader_devices_ref', 'ipad_reader_devices', 'id, department_id, code, created_at', 'created_at'),
+      cachedSelectResponse('ipad_reader_devices_ref', 'ipad_reader_devices', 'id, department_id, code, created_at, disabled_fields', 'created_at'),
       supabaseClient.from('ipad_reader_device_logs').select('*').eq('log_date', date),
-      cachedSelectResponse('laptops_ref', 'laptops', 'id, department_id, code, created_at', 'created_at'),
+      cachedSelectResponse('laptops_ref', 'laptops', 'id, department_id, code, created_at, disabled_fields', 'created_at'),
       supabaseClient.from('laptop_logs').select('*').eq('log_date', date),
-      cachedSelectResponse('pos_devices_ref', 'pos_devices', 'id, department_id, code, created_at', 'created_at'),
+      cachedSelectResponse('pos_devices_ref', 'pos_devices', 'id, department_id, code, created_at, disabled_fields', 'created_at'),
       supabaseClient.from('pos_device_logs').select('*').eq('log_date', date),
       supabaseClient.from('department_cleanliness_logs').select('*').eq('log_date', date)
     ]);
@@ -8108,6 +8139,14 @@ async function computeAllDeptsOverallPct(date){
     });
   }catch(e){}
   const colsOf = (deptId, scope) => Math.max(1, (_BASE[scope]||0) + ((_delta[deptId] && _delta[deptId][scope]) || 0));
+  /* خانات العنصر المعطّلة — أساسية ومضافة معاً. تُطرح من المتوقّع، فالخانة
+     التي لا تنطبق (شعر/لحية للنساء مثلاً) ليست نقصاً على القسم. */
+  const disOf = (item) => {
+    const d = item && item.disabled_fields; if (!d) return 0;
+    const arr = Array.isArray(d) ? d
+      : (typeof d === 'string' ? (function(){ try{ return JSON.parse(d); }catch(e){ return []; } })() : []);
+    return arr.length;
+  };
   /* يعدّ المنجز شاملاً الأعمدة المضافة (extra_fields) — وإلا ظهرت النسبة أقل من الحقيقة
      كما نحتسب ✗ مع ملاحظة كمُنجز — نفس معيار اكتمال الصف بشاشة مسؤول الشفت (shiftRowComplete)،
      وإلا ظهرت نسبة القسم متراجعة رغم أن كل خانة إما ✓ أو ✗ موثّقة بسبب واضح */
@@ -8172,13 +8211,12 @@ async function computeAllDeptsOverallPct(date){
   }catch(e){}
 
   // المواقع
-  const { data: allLocations } = await cachedSelectResponse('locations_ref', 'locations', 'id, department_id, code, sort_order, created_at', 'sort_order');
+  const { data: allLocations } = await cachedSelectResponse('locations_ref', 'locations', 'id, department_id, code, sort_order, created_at, disabled_fields', 'sort_order');
   const locToDept = {}; (allLocations||[]).forEach(l => locToDept[l.id]=l.department_id);
   const { data: locLogs } = await supabaseClient.from('daily_logs').select('*').eq('log_date', date);
   (allLocations||[]).forEach(loc => {
     if (!neoCountedOn(loc, date)) return;         /* لم يكن قائماً أو كان معطَّلاً ذلك اليوم */
-    const dis = (typeof neoDisabledCount === 'function') ? neoDisabledCount(loc, FIELD_DEFS.map(f=>f.key)) : 0;
-    bump(loc.department_id, Math.max(1, colsOf(loc.department_id,'loc') - dis) * SHIFTS, 0, 'loc');
+    bump(loc.department_id, Math.max(0, colsOf(loc.department_id,'loc') - disOf(loc)) * SHIFTS, 0, 'loc');
   }); // 2 = شفتين، القيمة الافتراضية صفر منجز
   (locLogs||[]).forEach(l => {
     const deptId = locToDept[l.location_id];
@@ -8187,13 +8225,12 @@ async function computeAllDeptsOverallPct(date){
   });
 
   // الموظفين
-  const { data: allStaff } = await cachedSelectResponse('staff_ref', 'staff', 'id, department_id, name, sort_order, created_at', 'sort_order');
+  const { data: allStaff } = await cachedSelectResponse('staff_ref', 'staff', 'id, department_id, name, sort_order, created_at, disabled_fields', 'sort_order');
   const staffToDept = {}; (allStaff||[]).forEach(s => staffToDept[s.id]=s.department_id);
   const { data: staffLogs } = await supabaseClient.from('staff_evaluations').select('*').eq('log_date', date);
   (allStaff||[]).forEach(s => {
     if (!neoCountedOn(s, date)) return;           /* لم يكن قائماً أو كان معطَّلاً ذلك اليوم */
-    const dis = (typeof neoDisabledCount === 'function') ? neoDisabledCount(s, STAFF_FIELD_DEFS.map(f=>f.key)) : 0;
-    bump(s.department_id, Math.max(1, colsOf(s.department_id,'staff') - dis) * SHIFTS, 0, 'staff');
+    bump(s.department_id, Math.max(0, colsOf(s.department_id,'staff') - disOf(s)) * SHIFTS, 0, 'staff');
   });
   (staffLogs||[]).forEach(e => {
     const deptId = staffToDept[e.staff_id];
@@ -8213,10 +8250,10 @@ async function computeAllDeptsOverallPct(date){
   });
 
   // الآيباد
-  const { data: allIpads } = await cachedSelectResponse('ipads_ref', 'ipads', 'id, department_id, code, created_at', 'created_at');
+  const { data: allIpads } = await cachedSelectResponse('ipads_ref', 'ipads', 'id, department_id, code, created_at, disabled_fields', 'created_at');
   const ipadToDept = {}; (allIpads||[]).forEach(i => ipadToDept[i.id]=i.department_id);
   const { data: ipadLogs } = await supabaseClient.from('ipad_logs').select('*').eq('log_date', date);
-  (allIpads||[]).forEach(i => { if(neoCountedOn(i, date)) bump(i.department_id, colsOf(i.department_id,'ipad') * SHIFTS, 0); });
+  (allIpads||[]).forEach(i => { if(neoCountedOn(i, date)) bump(i.department_id, Math.max(0, colsOf(i.department_id,'ipad') - disOf(i)) * SHIFTS, 0); });
   (ipadLogs||[]).forEach(l => {
     const deptId = ipadToDept[l.ipad_id];
     if (!deptId) return;
@@ -8224,10 +8261,10 @@ async function computeAllDeptsOverallPct(date){
   });
 
   // قارئ السيريال
-  const { data: allReaders } = await cachedSelectResponse('readers_ref', 'serial_readers', 'id, department_id, code, created_at', 'created_at');
+  const { data: allReaders } = await cachedSelectResponse('readers_ref', 'serial_readers', 'id, department_id, code, created_at, disabled_fields', 'created_at');
   const readerToDept = {}; (allReaders||[]).forEach(r => readerToDept[r.id]=r.department_id);
   const { data: readerLogs } = await supabaseClient.from('serial_reader_logs').select('*').eq('log_date', date);
-  (allReaders||[]).forEach(r => { if(neoCountedOn(r, date)) bump(r.department_id, colsOf(r.department_id,'reader') * SHIFTS, 0); });
+  (allReaders||[]).forEach(r => { if(neoCountedOn(r, date)) bump(r.department_id, Math.max(0, colsOf(r.department_id,'reader') - disOf(r)) * SHIFTS, 0); });
   (readerLogs||[]).forEach(l => {
     const deptId = readerToDept[l.reader_id];
     if (!deptId) return;
@@ -8235,10 +8272,10 @@ async function computeAllDeptsOverallPct(date){
   });
 
   // الآيباد + قارئ السيريال المدمج
-  const { data: allIpadReaderDevices } = await cachedSelectResponse('ipad_reader_devices_ref', 'ipad_reader_devices', 'id, department_id, code, created_at', 'created_at');
+  const { data: allIpadReaderDevices } = await cachedSelectResponse('ipad_reader_devices_ref', 'ipad_reader_devices', 'id, department_id, code, created_at, disabled_fields', 'created_at');
   const ipadReaderDeviceToDept = {}; (allIpadReaderDevices||[]).forEach(dv => ipadReaderDeviceToDept[dv.id]=dv.department_id);
   const { data: ipadReaderDeviceLogs } = await supabaseClient.from('ipad_reader_device_logs').select('*').eq('log_date', date);
-  (allIpadReaderDevices||[]).forEach(dv => { if(neoCountedOn(dv, date)) bump(dv.department_id, colsOf(dv.department_id,'ipadreader') * SHIFTS, 0); });
+  (allIpadReaderDevices||[]).forEach(dv => { if(neoCountedOn(dv, date)) bump(dv.department_id, Math.max(0, colsOf(dv.department_id,'ipadreader') - disOf(dv)) * SHIFTS, 0); });
   (ipadReaderDeviceLogs||[]).forEach(l => {
     const deptId = ipadReaderDeviceToDept[l.device_id];
     if (!deptId) return;
@@ -8246,10 +8283,10 @@ async function computeAllDeptsOverallPct(date){
   });
 
   // اللابتوبات
-  const { data: allLaptops } = await cachedSelectResponse('laptops_ref', 'laptops', 'id, department_id, code, created_at', 'created_at');
+  const { data: allLaptops } = await cachedSelectResponse('laptops_ref', 'laptops', 'id, department_id, code, created_at, disabled_fields', 'created_at');
   const laptopToDept = {}; (allLaptops||[]).forEach(l => laptopToDept[l.id]=l.department_id);
   const { data: laptopLogs } = await supabaseClient.from('laptop_logs').select('*').eq('log_date', date);
-  (allLaptops||[]).forEach(l => { if(neoCountedOn(l, date)) bump(l.department_id, colsOf(l.department_id,'laptop') * SHIFTS, 0); });
+  (allLaptops||[]).forEach(l => { if(neoCountedOn(l, date)) bump(l.department_id, Math.max(0, colsOf(l.department_id,'laptop') - disOf(l)) * SHIFTS, 0); });
   (laptopLogs||[]).forEach(l => {
     const deptId = laptopToDept[l.laptop_id];
     if (!deptId) return;
@@ -8257,10 +8294,10 @@ async function computeAllDeptsOverallPct(date){
   });
 
   // أجهزة POS
-  const { data: allPosDevices } = await cachedSelectResponse('pos_devices_ref', 'pos_devices', 'id, department_id, code, created_at', 'created_at');
+  const { data: allPosDevices } = await cachedSelectResponse('pos_devices_ref', 'pos_devices', 'id, department_id, code, created_at, disabled_fields', 'created_at');
   const posDeviceToDept = {}; (allPosDevices||[]).forEach(p => posDeviceToDept[p.id]=p.department_id);
   const { data: posDeviceLogs } = await supabaseClient.from('pos_device_logs').select('*').eq('log_date', date);
-  (allPosDevices||[]).forEach(p => { if(neoCountedOn(p, date)) bump(p.department_id, colsOf(p.department_id,'pos') * SHIFTS, 0); });
+  (allPosDevices||[]).forEach(p => { if(neoCountedOn(p, date)) bump(p.department_id, Math.max(0, colsOf(p.department_id,'pos') - disOf(p)) * SHIFTS, 0); });
   (posDeviceLogs||[]).forEach(l => {
     const deptId = posDeviceToDept[l.pos_device_id];
     if (!deptId) return;
@@ -8316,12 +8353,15 @@ async function computeAllDeptsOverallPctRange(startDate, endDate){
   };
 
   const dayCount = Math.max(1, Math.round((new Date(endDate) - new Date(startDate)) / 86400000) + 1);
+  /* الخانة المعطّلة ليست متوقَّعة — تُطرح من المقام هنا كما في حساب اليوم */
+  const nCols = (item, defs) => Math.max(0, defs.length
+    - ((typeof neoDisabledCount === 'function') ? neoDisabledCount(item, defs.map(f => f.key)) : 0));
 
-  const { data: allLocations } = await cachedSelectResponse('locations_ref', 'locations', 'id, department_id, code, sort_order, created_at', 'sort_order');
+  const { data: allLocations } = await cachedSelectResponse('locations_ref', 'locations', 'id, department_id, code, sort_order, created_at, disabled_fields', 'sort_order');
   const locToDept = {}; (allLocations||[]).forEach(l => locToDept[l.id]=l.department_id);
   const { data: locLogs } = await supabaseClient.from('daily_logs').select('*').gte('log_date', startDate).lte('log_date', endDate);
   (allLocations||[]).forEach(loc => { const dc = neoCountedDays(loc, startDate, endDate, dayCount);
-    if (dc) bump(loc.department_id, FIELD_DEFS.length * SHIFTS * dc, 0); });
+    if (dc) bump(loc.department_id, nCols(loc, FIELD_DEFS) * SHIFTS * dc, 0); });
   (locLogs||[]).forEach(l => {
     const deptId = locToDept[l.location_id];
     if (!deptId) return;
@@ -8329,11 +8369,11 @@ async function computeAllDeptsOverallPctRange(startDate, endDate){
     FIELD_DEFS.forEach(f => { if (l[f.key] || (fn[f.key]||'').trim()) bump(deptId, 0, 1); });
   });
 
-  const { data: allStaff } = await cachedSelectResponse('staff_ref', 'staff', 'id, department_id, name, sort_order, created_at', 'sort_order');
+  const { data: allStaff } = await cachedSelectResponse('staff_ref', 'staff', 'id, department_id, name, sort_order, created_at, disabled_fields', 'sort_order');
   const staffToDept = {}; (allStaff||[]).forEach(s => staffToDept[s.id]=s.department_id);
   const { data: staffLogs } = await supabaseClient.from('staff_evaluations').select('*').gte('log_date', startDate).lte('log_date', endDate);
   (allStaff||[]).forEach(s => { const dc = neoCountedDays(s, startDate, endDate, dayCount);
-    if (dc) bump(s.department_id, STAFF_FIELD_DEFS.length * SHIFTS * dc, 0); });
+    if (dc) bump(s.department_id, nCols(s, STAFF_FIELD_DEFS) * SHIFTS * dc, 0); });
   (staffLogs||[]).forEach(e => {
     const deptId = staffToDept[e.staff_id];
     if (!deptId) return;
@@ -8352,11 +8392,11 @@ async function computeAllDeptsOverallPctRange(startDate, endDate){
     if (l.checked || ((l.field_notes||{}).checked||'').trim()) bump(deptId, 0, 1);
   });
 
-  const { data: allIpads } = await cachedSelectResponse('ipads_ref', 'ipads', 'id, department_id, code, created_at', 'created_at');
+  const { data: allIpads } = await cachedSelectResponse('ipads_ref', 'ipads', 'id, department_id, code, created_at, disabled_fields', 'created_at');
   const ipadToDept = {}; (allIpads||[]).forEach(i => ipadToDept[i.id]=i.department_id);
   const { data: ipadLogs } = await supabaseClient.from('ipad_logs').select('*').gte('log_date', startDate).lte('log_date', endDate);
   (allIpads||[]).forEach(i => { const dc = neoCountedDays(i, startDate, endDate, dayCount);
-    if (dc) bump(i.department_id, IPAD_FIELD_DEFS.length * SHIFTS * dc, 0); });
+    if (dc) bump(i.department_id, nCols(i, IPAD_FIELD_DEFS) * SHIFTS * dc, 0); });
   (ipadLogs||[]).forEach(l => {
     const deptId = ipadToDept[l.ipad_id];
     if (!deptId) return;
@@ -8364,11 +8404,11 @@ async function computeAllDeptsOverallPctRange(startDate, endDate){
     IPAD_FIELD_DEFS.forEach(f => { if (l[f.key] || (fn[f.key]||'').trim()) bump(deptId, 0, 1); });
   });
 
-  const { data: allReaders } = await cachedSelectResponse('readers_ref', 'serial_readers', 'id, department_id, code, created_at', 'created_at');
+  const { data: allReaders } = await cachedSelectResponse('readers_ref', 'serial_readers', 'id, department_id, code, created_at, disabled_fields', 'created_at');
   const readerToDept = {}; (allReaders||[]).forEach(r => readerToDept[r.id]=r.department_id);
   const { data: readerLogs } = await supabaseClient.from('serial_reader_logs').select('*').gte('log_date', startDate).lte('log_date', endDate);
   (allReaders||[]).forEach(r => { const dc = neoCountedDays(r, startDate, endDate, dayCount);
-    if (dc) bump(r.department_id, READER_FIELD_DEFS.length * SHIFTS * dc, 0); });
+    if (dc) bump(r.department_id, nCols(r, READER_FIELD_DEFS) * SHIFTS * dc, 0); });
   (readerLogs||[]).forEach(l => {
     const deptId = readerToDept[l.reader_id];
     if (!deptId) return;
@@ -8376,11 +8416,11 @@ async function computeAllDeptsOverallPctRange(startDate, endDate){
     READER_FIELD_DEFS.forEach(f => { if (l[f.key] || (fn[f.key]||'').trim()) bump(deptId, 0, 1); });
   });
 
-  const { data: allIpadReaderDevices } = await cachedSelectResponse('ipad_reader_devices_ref', 'ipad_reader_devices', 'id, department_id, code, created_at', 'created_at');
+  const { data: allIpadReaderDevices } = await cachedSelectResponse('ipad_reader_devices_ref', 'ipad_reader_devices', 'id, department_id, code, created_at, disabled_fields', 'created_at');
   const ipadReaderDeviceToDept = {}; (allIpadReaderDevices||[]).forEach(dv => ipadReaderDeviceToDept[dv.id]=dv.department_id);
   const { data: ipadReaderDeviceLogs } = await supabaseClient.from('ipad_reader_device_logs').select('*').gte('log_date', startDate).lte('log_date', endDate);
   (allIpadReaderDevices||[]).forEach(dv => { const dc = neoCountedDays(dv, startDate, endDate, dayCount);
-    if (dc) bump(dv.department_id, IPAD_READER_FIELD_DEFS.length * SHIFTS * dc, 0); });
+    if (dc) bump(dv.department_id, nCols(dv, IPAD_READER_FIELD_DEFS) * SHIFTS * dc, 0); });
   (ipadReaderDeviceLogs||[]).forEach(l => {
     const deptId = ipadReaderDeviceToDept[l.device_id];
     if (!deptId) return;
@@ -8388,11 +8428,11 @@ async function computeAllDeptsOverallPctRange(startDate, endDate){
     IPAD_READER_FIELD_DEFS.forEach(f => { if (l[f.key] || (fn[f.key]||'').trim()) bump(deptId, 0, 1); });
   });
 
-  const { data: allLaptops } = await cachedSelectResponse('laptops_ref', 'laptops', 'id, department_id, code, created_at', 'created_at');
+  const { data: allLaptops } = await cachedSelectResponse('laptops_ref', 'laptops', 'id, department_id, code, created_at, disabled_fields', 'created_at');
   const laptopToDept = {}; (allLaptops||[]).forEach(l => laptopToDept[l.id]=l.department_id);
   const { data: laptopLogs } = await supabaseClient.from('laptop_logs').select('*').gte('log_date', startDate).lte('log_date', endDate);
   (allLaptops||[]).forEach(l => { const dc = neoCountedDays(l, startDate, endDate, dayCount);
-    if (dc) bump(l.department_id, LAPTOP_FIELD_DEFS.length * SHIFTS * dc, 0); });
+    if (dc) bump(l.department_id, nCols(l, LAPTOP_FIELD_DEFS) * SHIFTS * dc, 0); });
   (laptopLogs||[]).forEach(l => {
     const deptId = laptopToDept[l.laptop_id];
     if (!deptId) return;
@@ -8400,11 +8440,11 @@ async function computeAllDeptsOverallPctRange(startDate, endDate){
     LAPTOP_FIELD_DEFS.forEach(f => { if (l[f.key] || (fn[f.key]||'').trim()) bump(deptId, 0, 1); });
   });
 
-  const { data: allPosDevices } = await cachedSelectResponse('pos_devices_ref', 'pos_devices', 'id, department_id, code, created_at', 'created_at');
+  const { data: allPosDevices } = await cachedSelectResponse('pos_devices_ref', 'pos_devices', 'id, department_id, code, created_at, disabled_fields', 'created_at');
   const posDeviceToDept = {}; (allPosDevices||[]).forEach(p => posDeviceToDept[p.id]=p.department_id);
   const { data: posDeviceLogs } = await supabaseClient.from('pos_device_logs').select('*').gte('log_date', startDate).lte('log_date', endDate);
   (allPosDevices||[]).forEach(p => { const dc = neoCountedDays(p, startDate, endDate, dayCount);
-    if (dc) bump(p.department_id, POS_FIELD_DEFS.length * SHIFTS * dc, 0); });
+    if (dc) bump(p.department_id, nCols(p, POS_FIELD_DEFS) * SHIFTS * dc, 0); });
   (posDeviceLogs||[]).forEach(l => {
     const deptId = posDeviceToDept[l.pos_device_id];
     if (!deptId) return;
@@ -8446,7 +8486,7 @@ async function computeAllDeptsOverallPctRange(startDate, endDate){
 
 // متوسط نقاط الموظفين لكل قسم على مدى فترة (نسبة مئوية، بغض النظر عن عدد/أسماء معايير كل قسم)
 async function computeSumStaffPointsByDept(startDate, endDate){
-  const { data: allStaff } = await cachedSelectResponse('staff_ref', 'staff', 'id, department_id, name, sort_order, created_at', 'sort_order');
+  const { data: allStaff } = await cachedSelectResponse('staff_ref', 'staff', 'id, department_id, name, sort_order, created_at, disabled_fields', 'sort_order');
   const staffToDept = {}; (allStaff||[]).forEach(s => staffToDept[s.id]=s.department_id);
   const { data: pointsLogs } = await supabaseClient.from('staff_points').select('*')
     .gte('log_date', startDate).lte('log_date', endDate);
@@ -8469,7 +8509,7 @@ async function computeSumStaffPointsByDept(startDate, endDate){
 
 // تفصيل نقاط كل موظف بالاسم على مدى فترة (مجموع تراكمي — لأسئلة زي "أفضل موظف")
 async function computeStaffPointsPerStaff(startDate, endDate){
-  const { data: allStaff } = await cachedSelectResponse('staff_ref', 'staff', 'id, department_id, name, sort_order, created_at', 'sort_order');
+  const { data: allStaff } = await cachedSelectResponse('staff_ref', 'staff', 'id, department_id, name, sort_order, created_at, disabled_fields', 'sort_order');
   const staffMap = {}; (allStaff||[]).forEach(s => staffMap[s.id] = s);
   const { data: pointsLogs } = await supabaseClient.from('staff_points').select('*')
     .gte('log_date', startDate).lte('log_date', endDate);
@@ -8785,7 +8825,7 @@ async function renderSalesManagersTab(period){
       const _d = salesSelectedDate || todayStr();
       const { data: _lg } = await supabaseClient.from('daily_logs')
         .select('location_id,hall_verified_fields').eq('log_date', _d);
-      const { data: _loc } = await cachedSelectResponse('locations_ref', 'locations', 'id, department_id, code, sort_order, created_at', 'sort_order');
+      const { data: _loc } = await cachedSelectResponse('locations_ref', 'locations', 'id, department_id, code, sort_order, created_at, disabled_fields', 'sort_order');
       const locDept = {}; (_loc||[]).forEach(l => locDept[l.id] = String(l.department_id));
       const seen = new Set();
       (_lg||[]).forEach(l => {
@@ -9007,21 +9047,21 @@ async function renderSalesDeptMissingDetail(deptId, profileId){
       { data: allPosDevices }, { data: posDeviceLogs },
       { data: cleanLogs }
     ] = await Promise.all([
-      cachedSelectResponse('locations_ref', 'locations', 'id, department_id, code, sort_order, created_at', 'sort_order'),
+      cachedSelectResponse('locations_ref', 'locations', 'id, department_id, code, sort_order, created_at, disabled_fields', 'sort_order'),
       supabaseClient.from('daily_logs').select('*').eq('log_date', date),
-      cachedSelectResponse('staff_ref', 'staff', 'id, department_id, name, sort_order, created_at', 'sort_order'),
+      cachedSelectResponse('staff_ref', 'staff', 'id, department_id, name, sort_order, created_at, disabled_fields', 'sort_order'),
       supabaseClient.from('staff_evaluations').select('*').eq('log_date', date),
       cachedSelectResponse('tasks_ref', 'daily_tasks', 'id, department_id, name, created_at', 'created_at'),
       supabaseClient.from('daily_task_logs').select('*').eq('log_date', date),
-      cachedSelectResponse('ipads_ref', 'ipads', 'id, department_id, code, created_at', 'created_at'),
+      cachedSelectResponse('ipads_ref', 'ipads', 'id, department_id, code, created_at, disabled_fields', 'created_at'),
       supabaseClient.from('ipad_logs').select('*').eq('log_date', date),
-      cachedSelectResponse('readers_ref', 'serial_readers', 'id, department_id, code, created_at', 'created_at'),
+      cachedSelectResponse('readers_ref', 'serial_readers', 'id, department_id, code, created_at, disabled_fields', 'created_at'),
       supabaseClient.from('serial_reader_logs').select('*').eq('log_date', date),
-      cachedSelectResponse('ipad_reader_devices_ref', 'ipad_reader_devices', 'id, department_id, code, created_at', 'created_at'),
+      cachedSelectResponse('ipad_reader_devices_ref', 'ipad_reader_devices', 'id, department_id, code, created_at, disabled_fields', 'created_at'),
       supabaseClient.from('ipad_reader_device_logs').select('*').eq('log_date', date),
-      cachedSelectResponse('laptops_ref', 'laptops', 'id, department_id, code, created_at', 'created_at'),
+      cachedSelectResponse('laptops_ref', 'laptops', 'id, department_id, code, created_at, disabled_fields', 'created_at'),
       supabaseClient.from('laptop_logs').select('*').eq('log_date', date),
-      cachedSelectResponse('pos_devices_ref', 'pos_devices', 'id, department_id, code, created_at', 'created_at'),
+      cachedSelectResponse('pos_devices_ref', 'pos_devices', 'id, department_id, code, created_at, disabled_fields', 'created_at'),
       supabaseClient.from('pos_device_logs').select('*').eq('log_date', date),
       supabaseClient.from('department_cleanliness_logs').select('*').eq('log_date', date)
     ]);
@@ -9184,21 +9224,21 @@ async function renderSalesHallAuditDetail(deptId, profileId){
       { data: allPosDevices }, { data: posDeviceLogs },
       { data: cleanLogs }
     ] = await Promise.all([
-      cachedSelectResponse('locations_ref', 'locations', 'id, department_id, code, sort_order, created_at', 'sort_order'),
+      cachedSelectResponse('locations_ref', 'locations', 'id, department_id, code, sort_order, created_at, disabled_fields', 'sort_order'),
       supabaseClient.from('daily_logs').select('*').eq('log_date', date),
-      cachedSelectResponse('staff_ref', 'staff', 'id, department_id, name, sort_order, created_at', 'sort_order'),
+      cachedSelectResponse('staff_ref', 'staff', 'id, department_id, name, sort_order, created_at, disabled_fields', 'sort_order'),
       supabaseClient.from('staff_evaluations').select('*').eq('log_date', date),
       cachedSelectResponse('tasks_ref', 'daily_tasks', 'id, department_id, name, created_at', 'created_at'),
       supabaseClient.from('daily_task_logs').select('*').eq('log_date', date),
-      cachedSelectResponse('ipads_ref', 'ipads', 'id, department_id, code, created_at', 'created_at'),
+      cachedSelectResponse('ipads_ref', 'ipads', 'id, department_id, code, created_at, disabled_fields', 'created_at'),
       supabaseClient.from('ipad_logs').select('*').eq('log_date', date),
-      cachedSelectResponse('readers_ref', 'serial_readers', 'id, department_id, code, created_at', 'created_at'),
+      cachedSelectResponse('readers_ref', 'serial_readers', 'id, department_id, code, created_at, disabled_fields', 'created_at'),
       supabaseClient.from('serial_reader_logs').select('*').eq('log_date', date),
-      cachedSelectResponse('ipad_reader_devices_ref', 'ipad_reader_devices', 'id, department_id, code, created_at', 'created_at'),
+      cachedSelectResponse('ipad_reader_devices_ref', 'ipad_reader_devices', 'id, department_id, code, created_at, disabled_fields', 'created_at'),
       supabaseClient.from('ipad_reader_device_logs').select('*').eq('log_date', date),
-      cachedSelectResponse('laptops_ref', 'laptops', 'id, department_id, code, created_at', 'created_at'),
+      cachedSelectResponse('laptops_ref', 'laptops', 'id, department_id, code, created_at, disabled_fields', 'created_at'),
       supabaseClient.from('laptop_logs').select('*').eq('log_date', date),
-      cachedSelectResponse('pos_devices_ref', 'pos_devices', 'id, department_id, code, created_at', 'created_at'),
+      cachedSelectResponse('pos_devices_ref', 'pos_devices', 'id, department_id, code, created_at, disabled_fields', 'created_at'),
       supabaseClient.from('pos_device_logs').select('*').eq('log_date', date),
       supabaseClient.from('department_cleanliness_logs').select('*').eq('log_date', date)
     ]);
@@ -9809,7 +9849,7 @@ async function loadSalesRange(range){
     return;
   }
   if (currentSalesDeptId) depts = (depts||[]).filter(d => d.id === currentSalesDeptId);
-  const { data: allLocations, error: locsError } = await cachedSelectResponse('locations_ref', 'locations', 'id, department_id, code, sort_order, created_at', 'sort_order');
+  const { data: allLocations, error: locsError } = await cachedSelectResponse('locations_ref', 'locations', 'id, department_id, code, sort_order, created_at, disabled_fields', 'sort_order');
   if (locsError){
     wrap.innerHTML = `<div style="color:#ff7b7b;">خطأ بجلب المواقع: ${locsError.message}</div>`;
     return;
@@ -9994,7 +10034,7 @@ async function loadIpadRange(range){
 
   let { data: depts } = await cachedSelectResponse('departments', 'departments', '*', 'id');
   if (currentSalesDeptId) depts = (depts||[]).filter(d => d.id === currentSalesDeptId);
-  const { data: allIpads } = await cachedSelectResponse('ipads_ref', 'ipads', 'id, department_id, code, created_at', 'created_at');
+  const { data: allIpads } = await cachedSelectResponse('ipads_ref', 'ipads', 'id, department_id, code, created_at, disabled_fields', 'created_at');
   const { data: logs } = await supabaseClient.from('ipad_logs').select('*').gte('log_date', startDate).lte('log_date', endDate);
 
   const ipadsByDept = {};
@@ -10029,7 +10069,7 @@ async function loadReaderRange(range){
 
   let { data: depts } = await cachedSelectResponse('departments', 'departments', '*', 'id');
   if (currentSalesDeptId) depts = (depts||[]).filter(d => d.id === currentSalesDeptId);
-  const { data: allReaders } = await cachedSelectResponse('readers_ref', 'serial_readers', 'id, department_id, code, created_at', 'created_at');
+  const { data: allReaders } = await cachedSelectResponse('readers_ref', 'serial_readers', 'id, department_id, code, created_at, disabled_fields', 'created_at');
   const { data: logs } = await supabaseClient.from('serial_reader_logs').select('*').gte('log_date', startDate).lte('log_date', endDate);
 
   const readersByDept = {};
@@ -10064,7 +10104,7 @@ async function loadLaptopRange(range){
 
   let { data: depts } = await cachedSelectResponse('departments', 'departments', '*', 'id');
   if (currentSalesDeptId) depts = (depts||[]).filter(d => d.id === currentSalesDeptId);
-  const { data: allLaptops } = await cachedSelectResponse('laptops_ref', 'laptops', 'id, department_id, code, created_at', 'created_at');
+  const { data: allLaptops } = await cachedSelectResponse('laptops_ref', 'laptops', 'id, department_id, code, created_at, disabled_fields', 'created_at');
   const { data: logs } = await supabaseClient.from('laptop_logs').select('*').gte('log_date', startDate).lte('log_date', endDate);
 
   const laptopsByDept = {};
@@ -10099,7 +10139,7 @@ async function loadIpadReaderDeviceRange(range){
 
   let { data: depts } = await cachedSelectResponse('departments', 'departments', '*', 'id');
   if (currentSalesDeptId) depts = (depts||[]).filter(d => d.id === currentSalesDeptId);
-  const { data: allDevices } = await cachedSelectResponse('ipad_reader_devices_ref', 'ipad_reader_devices', 'id, department_id, code, created_at', 'created_at');
+  const { data: allDevices } = await cachedSelectResponse('ipad_reader_devices_ref', 'ipad_reader_devices', 'id, department_id, code, created_at, disabled_fields', 'created_at');
   const { data: logs } = await supabaseClient.from('ipad_reader_device_logs').select('*').gte('log_date', startDate).lte('log_date', endDate);
 
   const devicesByDept = {};
@@ -10134,7 +10174,7 @@ async function loadPosDeviceRange(range){
 
   let { data: depts } = await cachedSelectResponse('departments', 'departments', '*', 'id');
   if (currentSalesDeptId) depts = (depts||[]).filter(d => d.id === currentSalesDeptId);
-  const { data: allPosDevices } = await cachedSelectResponse('pos_devices_ref', 'pos_devices', 'id, department_id, code, created_at', 'created_at');
+  const { data: allPosDevices } = await cachedSelectResponse('pos_devices_ref', 'pos_devices', 'id, department_id, code, created_at, disabled_fields', 'created_at');
   const { data: logs } = await supabaseClient.from('pos_device_logs').select('*').gte('log_date', startDate).lte('log_date', endDate);
 
   const devicesByDept = {};
@@ -11546,7 +11586,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.04.03";
+const APP_VERSION = "2026.09.04.04";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -15533,6 +15573,7 @@ window.renderDeptStaffMonth = async function(deptId){
     /* سجلات كل جدول على حدة، وتعريفات أعمدة نطاقه */
     const logByKeyDay = {};          /* "<table>:<item>|<day>" -> [سجلات] */
     const nameOf = {};               /* "<table>:<id>" -> رمز العنصر */
+    const itemOf = {};               /* "<table>:<id>" -> صف العنصر (لخاناته المعطّلة) */
     const defsByScope = {};          /* "<قسم>|<نطاق>" -> تعريفات أعمدته */
     for (const tb of Object.keys(byTable)){
       const src = NEO_LNK_SRC[tb]; if (!src) continue;
@@ -15543,10 +15584,12 @@ window.renderDeptStaffMonth = async function(deptId){
         const k = tb + ':' + row[src.fk] + '|' + row.log_date;
         (logByKeyDay[k] = logByKeyDay[k] || []).push(row);
       });
-      /* رموز العناصر — يحتاجها التفصيل ليقول «موقع ٢٩٠» لا معرّفاً */
+      /* رموز العناصر وخاناتها المعطّلة — الرمز للتفصيل، والتعطيل للحساب:
+         خانة لا تنطبق على العنصر لا تُعدّ نقصاً ولا تدخل المقام. */
       try{
-        const nr = await supabaseClient.from(tb).select('id,code').in('id', ids);
-        (nr.data || []).forEach(x => { nameOf[tb + ':' + x.id] = x.code; });
+        let nr = await supabaseClient.from(tb).select('id,code,disabled_fields').in('id', ids);
+        if (nr.error) nr = await supabaseClient.from(tb).select('id,code').in('id', ids);
+        (nr.data || []).forEach(x => { nameOf[tb + ':' + x.id] = x.code; itemOf[tb + ':' + x.id] = x; });
       }catch(e){}
     }
     for (const key of needDefs){
@@ -15557,7 +15600,11 @@ window.renderDeptStaffMonth = async function(deptId){
     /* فهرسة: staff|day -> مجاميع، ومعها تفصيلها لشاشة «لماذا هذه الدرجة» */
     const evBy = {}, ptBy = {}, lkBy = {};
     const detail = {};               /* "staff|day" -> { ev, lk, pt } */
-    const det = k => detail[k] || (detail[k] = { ev:{}, lk:[], pt:null });
+    const det = k => detail[k] || (detail[k] = { ev:{}, evOff:[], lk:[], pt:null });
+    /* الصف الكامل للموظف — بدونه لا تُرى disabled_fields فتُحسب
+       الخانة التي لا تنطبق (شعر/لحية للنساء مثلاً) نقصاً عليه. */
+    const staffById = {};
+    staff.forEach(x => { staffById[String(x.id)] = x; });
     (evR.data || []).forEach(e => {
       const k = e.staff_id + '|' + e.log_date;
       const cur = evBy[k] || (evBy[k] = { on:0, tot:0 });
@@ -15566,8 +15613,12 @@ window.renderDeptStaffMonth = async function(deptId){
         Object.entries(e.extra_evaluations).map(([c,v]) => ['extra_' + c, v])) : {}) };
       const D = det(k).ev;
       const ft = e.field_times || {};
+      const sRow = staffById[String(e.staff_id)] || { id: e.staff_id };
       fieldDefs.forEach(f => {
-        if (typeof neoCellDisabled === 'function' && neoCellDisabled({ id:e.staff_id }, f.key)) return;
+        if (typeof neoCellDisabled === 'function' && neoCellDisabled(sRow, f.key)){
+          const dd = det(k); if (dd.evOff.indexOf(f.label || f.key) === -1) dd.evOff.push(f.label || f.key);
+          return;
+        }
         const v  = flat[f.key];
         const on = v === true;
         cur.tot++; if (on) cur.on++;
@@ -15607,9 +15658,12 @@ window.renderDeptStaffMonth = async function(deptId){
           const k = s.id + '|' + day;
           const cur = lkBy[k] || (lkBy[k] = { on:0, tot:0 });
           const rec = { label: nameOf[tb + ':' + link.itemId] || link.itemId,
-                        kind: src.label, days: link.days || '', on:0, tot:0, miss:[], cells:[] };
+                        kind: src.label, days: link.days || '', on:0, tot:0, miss:[], cells:[], off:[] };
+          const iRow = itemOf[tb + ':' + link.itemId] || { id: link.itemId };
           defs.forEach(def => {
-            if (typeof neoCellDisabled === 'function' && neoCellDisabled({ id: link.itemId }, def.key)) return;
+            if (typeof neoCellDisabled === 'function' && neoCellDisabled(iRow, def.key)){
+              rec.off.push(def.label || def.key); return;
+            }
             /* نفس قارئ الحالات المستعمل في التدقيق المفصّل — فلا يتناقض العرضان */
             let st = 'empty', tm = '';
             rows.forEach(r => {
@@ -15626,7 +15680,7 @@ window.renderDeptStaffMonth = async function(deptId){
             rec.tot++; if (on) rec.on++; else rec.miss.push(lbl);
             rec.cells.push({ label: lbl, state: st, time: tm });
           });
-          if (rec.tot) det(k).lk.push(rec);
+          if (rec.tot || rec.off.length) det(k).lk.push(rec);
         });
       });
     });
@@ -15836,8 +15890,16 @@ window.neoMonthDay = function(sid, day){
           : '<div style="color:#3ecf6b;font-size:13px;">كل الخانات مؤشَّرة ✓</div>')
       + (done.length ? '<div style="color:#7487a0;font-size:12px;margin:10px 0 4px;">المنجز (' + done.length + ')</div>'
           + done.map(line).join('') : '')
+      + ((d.evOff && d.evOff.length)
+          ? '<div style="color:#7487a0;font-size:12px;margin:10px 0 4px;">لا تنطبق عليه (' + d.evOff.length + ')</div>'
+            + d.evOff.map(l => '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;'
+                + 'padding:7px 2px;border-bottom:1px solid rgba(122,167,255,0.1);font-size:13px;opacity:.75;">'
+                + '<span style="color:#8a97a8;">' + esc(l) + '</span>'
+                + '<span style="color:#5d6d80;font-weight:800;" title="خانة معطّلة — خارج الحساب">—</span></div>').join('')
+          : '')
       + '<div style="color:#5d6d80;font-size:11px;margin-top:9px;line-height:1.8;">'
-      + '✓ مؤشَّرة (ومعها وقت التأشير) · ✗ مؤشَّرة بالنقص · — لم يُفتح عليها شيء</div>'
+      + '✓ مؤشَّرة (ومعها وقت التأشير) · ✗ مؤشَّرة بالنقص · — لم يُفتح عليها شيء'
+      + '<br>الخانات المعطّلة لا تُعدّ نقصاً ولا تدخل في المقام</div>'
       + '</div>';
   }
 
@@ -15857,6 +15919,10 @@ window.neoMonthDay = function(sid, day){
             + it.cells.map(c => '<span style="font-size:11.5px;padding:4px 9px;border-radius:9px;'
                 + 'background:rgba(122,167,255,0.06);border:1px solid rgba(122,167,255,0.16);color:'
                 + neoStColor(c.state) + ';">' + esc(c.label) + ' ' + neoStMark(c.state, c.time) + '</span>').join('')
+            + (it.off || []).map(l => '<span title="خانة معطّلة — خارج الحساب" '
+                + 'style="font-size:11.5px;padding:4px 9px;border-radius:9px;opacity:.7;'
+                + 'background:rgba(122,167,255,0.04);border:1px dashed rgba(122,167,255,0.18);color:#8a97a8;">'
+                + esc(l) + ' <span style="color:#5d6d80;font-weight:800;">—</span></span>').join('')
             + '</div></div>';
         }).join('')
       + '</div>';
