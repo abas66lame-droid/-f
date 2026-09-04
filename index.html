@@ -11293,7 +11293,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.03.04";
+const APP_VERSION = "2026.09.04.01";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -15230,6 +15230,7 @@ window.neoDevLnkTap = async function(staffId, table, itemId, deptId){
      • التقييم اليومي   — خانات تقييم الموظف المؤشَّرة ÷ مجموعها
      • المواقع المرتبطة — خانات مواقعه المؤشَّرة ✓ ÷ مجموع خاناته
      • النقاط           — مجموع نقاطه ÷ الحد الأعلى (إن وُجدت معايير) */
+let _neoMonth = null;   /* تفصيل آخر مخطط بُني — مصدر شاشتي «لماذا» */
 window.renderDeptStaffMonth = async function(deptId){
   mountSalesShell('trend', '<div class="card"><div class="neoLoadBox">جاري بناء المخطط…<div class="neoBarLoad"></div></div></div>');
   try{
@@ -15278,6 +15279,7 @@ window.renderDeptStaffMonth = async function(deptId){
 
     /* سجلات كل جدول على حدة، وتعريفات أعمدة نطاقه */
     const logByKeyDay = {};          /* "<table>:<item>|<day>" -> [سجلات] */
+    const nameOf = {};               /* "<table>:<id>" -> رمز العنصر */
     const defsByScope = {};          /* "<قسم>|<نطاق>" -> تعريفات أعمدته */
     for (const tb of Object.keys(byTable)){
       const src = NEO_LNK_SRC[tb]; if (!src) continue;
@@ -15288,28 +15290,52 @@ window.renderDeptStaffMonth = async function(deptId){
         const k = tb + ':' + row[src.fk] + '|' + row.log_date;
         (logByKeyDay[k] = logByKeyDay[k] || []).push(row);
       });
+      /* رموز العناصر — يحتاجها التفصيل ليقول «موقع ٢٩٠» لا معرّفاً */
+      try{
+        const nr = await supabaseClient.from(tb).select('id,code').in('id', ids);
+        (nr.data || []).forEach(x => { nameOf[tb + ':' + x.id] = x.code; });
+      }catch(e){}
     }
     for (const key of needDefs){
       const i = key.indexOf('|');
       defsByScope[key] = await neoUnifiedDefs(key.slice(0, i), key.slice(i + 1));
     }
 
-    /* فهرسة: staff|day -> مجاميع */
+    /* فهرسة: staff|day -> مجاميع، ومعها تفصيلها لشاشة «لماذا هذه الدرجة» */
     const evBy = {}, ptBy = {}, lkBy = {};
+    const detail = {};               /* "staff|day" -> { ev, lk, pt } */
+    const det = k => detail[k] || (detail[k] = { ev:{}, lk:[], pt:null });
     (evR.data || []).forEach(e => {
       const k = e.staff_id + '|' + e.log_date;
       const cur = evBy[k] || (evBy[k] = { on:0, tot:0 });
       /* الشفتان يُدمجان: الخانة تُعدّ مؤشَّرة إن أُشّرت في أيّهما */
       const flat = { ...e, ...(e.extra_evaluations ? Object.fromEntries(
         Object.entries(e.extra_evaluations).map(([c,v]) => ['extra_' + c, v])) : {}) };
+      const D = det(k).ev;
+      const ft = e.field_times || {};
       fieldDefs.forEach(f => {
         if (typeof neoCellDisabled === 'function' && neoCellDisabled({ id:e.staff_id }, f.key)) return;
-        cur.tot++; if (flat[f.key] === true) cur.on++;
+        const v  = flat[f.key];
+        const on = v === true;
+        cur.tot++; if (on) cur.on++;
+        const c = D[f.key] || (D[f.key] = { label: f.label || f.key, on:0, tot:0, rows:[] });
+        c.tot++; if (on) c.on++;
+        /* ثلاث حالات لا اثنتان: ✓ مؤشَّرة · ✗ مؤشَّرة بالنقص · — لم تُفتح أصلاً.
+           التمييز بنفس أدلّة التدقيق المفصّل (field_notes) فلا تتناقض الشاشتان.
+           والحساب لا يتغيّر: on يبقى من القراءة المسطَّحة كما كان. */
+        const st = on ? 'yes'
+          : (typeof neoCellState === 'function' && neoCellState(e, f) === 'no') ? 'no'
+          : (v === false ? 'no' : 'empty');
+        c.rows.push({ shift: e.shift || '', state: st, time: ft[f.key] || '' });
       });
     });
     (ptR.data || []).forEach(p => {
       const sc = p.scores || {};
-      ptBy[p.staff_id + '|' + p.log_date] = Object.values(sc).reduce((a, b) => a + (Number(b) || 0), 0);
+      const tot = Object.values(sc).reduce((a, b) => a + (Number(b) || 0), 0);
+      const k = p.staff_id + '|' + p.log_date;
+      ptBy[k] = tot;
+      det(k).pt = { got: tot, max: maxPts, rows: (critR || []).map(c =>
+        ({ label: c.name, val: Number(sc[c.id] !== undefined ? sc[c.id] : sc[c.name]) || 0 })) };
     });
     /* لكل ربط: خاناته المؤشَّرة ✓ في يومها.
        الحقل '*' يعني الجهاز كاملاً فتُحسب كل أعمدة نطاقه؛ وغيره عمود واحد. */
@@ -15327,11 +15353,27 @@ window.renderDeptStaffMonth = async function(deptId){
             : [ scopeDefs.find(d => d.key === link.field) || { key: link.field } ];
           const k = s.id + '|' + day;
           const cur = lkBy[k] || (lkBy[k] = { on:0, tot:0 });
+          const rec = { label: nameOf[tb + ':' + link.itemId] || link.itemId,
+                        kind: src.label, days: link.days || '', on:0, tot:0, miss:[], cells:[] };
           defs.forEach(def => {
             if (typeof neoCellDisabled === 'function' && neoCellDisabled({ id: link.itemId }, def.key)) return;
-            const on = rows.some(r => (typeof neoReadCell === 'function') ? neoReadCell(r, def) : r[def.key] === true);
+            /* نفس قارئ الحالات المستعمل في التدقيق المفصّل — فلا يتناقض العرضان */
+            let st = 'empty', tm = '';
+            rows.forEach(r => {
+              const c = (typeof neoCellState === 'function') ? neoCellState(r, def)
+                        : (((typeof neoReadCell === 'function') ? neoReadCell(r, def) : r[def.key] === true)
+                            ? 'yes' : (r[def.key] === false ? 'no' : 'empty'));
+              if (c === 'yes') st = 'yes'; else if (c === 'no' && st !== 'yes') st = 'no';
+              const t = (r.field_times || {})[def.key];
+              if (t && !tm) tm = t;
+            });
+            const on = st === 'yes';
+            const lbl = def.label || def.key;
             cur.tot++; if (on) cur.on++;
+            rec.tot++; if (on) rec.on++; else rec.miss.push(lbl);
+            rec.cells.push({ label: lbl, state: st, time: tm });
           });
+          if (rec.tot) det(k).lk.push(rec);
         });
       });
     });
@@ -15356,6 +15398,11 @@ window.renderDeptStaffMonth = async function(deptId){
       return { s, series, avg, nLinks, ptTot };
     }).sort((a,b) => (b.avg === null ? -1 : b.avg) - (a.avg === null ? -1 : a.avg));
 
+    /* مخزون التفصيل — تقرأه شاشتا «لماذا هذه الدرجة» ولا يُعاد استعلامه */
+    _neoMonth = { det: detail, evBy, lkBy, ptBy, maxPts, cycle, deptName, deptId, days,
+                  names: Object.fromEntries(staff.map(x => [String(x.id), x.name])),
+                  series: Object.fromEntries(rowsData.map(r => [String(r.s.id), r.series])) };
+
     const anyData = rowsData.some(r => r.avg !== null);
     let h = '<div class="card">'
       + '<button class="secondary" style="font-size:12px;padding:8px 14px;margin-bottom:10px;" onclick="renderSalesTrend()">↩ رجوع للاتجاه</button>'
@@ -15363,7 +15410,8 @@ window.renderDeptStaffMonth = async function(deptId){
       + '<div style="color:#8fa3b8;font-size:12px;">دورة ' + cycle.label + ' · ' + cycle.from + ' إلى ' + cycle.to
       + ' · ' + days.length + ' من ' + cycle.days + ' يوماً</div>'
       + '<div style="color:#7487a0;font-size:11px;margin-top:6px;line-height:1.8;">'
-      + 'الدرجة اليومية متوسط ما توفّر من: التقييم اليومي · النقاط · المواقع المرتبطة (جرد وتنظيف) · الأجهزة المرتبطة</div></div>';
+      + 'الدرجة اليومية متوسط ما توفّر من: التقييم اليومي · النقاط · المواقع المرتبطة (جرد وتنظيف) · الأجهزة المرتبطة'
+      + '<br><span style="color:#38d9b9;">👆 اضغط أي رقم لترى تفصيله، أو اسم الموظف لترى سبب معدّله</span></div></div>';
 
     if (!staff.length){
       h += '<div class="card" style="color:#8fa3b8;">لا يوجد موظفون في هذا القسم</div>';
@@ -15377,15 +15425,15 @@ window.renderDeptStaffMonth = async function(deptId){
         + days.map(d => '<th style="color:#5d6d80;padding:5px 3px;min-width:26px;font-weight:600;">' + dLabel(d) + '</th>').join('')
         + '</tr>'
         + rowsData.map(r => '<tr>'
-            + '<td style="position:sticky;inset-inline-end:0;background:#0a121e;color:#c8d4e2;padding:6px 10px;white-space:nowrap;">'
+            + '<td onclick="neoMonthWhy(\'' + r.s.id + '\')" style="position:sticky;inset-inline-end:0;background:#0a121e;color:#c8d4e2;padding:6px 10px;white-space:nowrap;cursor:pointer;">'
               + esc(r.s.name)
               + (r.nLinks ? '<span style="color:#38d9b9;font-size:9px;margin-inline-start:5px;">🔗' + r.nLinks + '</span>' : '')
             + '</td>'
-            + '<td style="text-align:center;padding:5px 6px;font-weight:800;color:'
+            + '<td onclick="neoMonthWhy(\'' + r.s.id + '\')" style="text-align:center;padding:5px 6px;font-weight:800;cursor:pointer;color:'
               + (r.avg === null ? '#3a4757' : bucket(r.avg)) + ';">' + (r.avg === null ? '·' : r.avg) + '</td>'
-            + r.series.map(v => v === null
+            + r.series.map((v, i) => v === null
                 ? '<td style="background:rgba(122,167,255,0.05);color:#3a4757;text-align:center;padding:5px 2px;">·</td>'
-                : '<td style="background:' + bucket(v) + '22;color:' + bucket(v) + ';text-align:center;padding:5px 2px;font-weight:700;">' + v + '</td>'
+                : '<td onclick="neoMonthDay(\'' + r.s.id + '\',\'' + days[i] + '\')" style="background:' + bucket(v) + '22;color:' + bucket(v) + ';text-align:center;padding:5px 2px;font-weight:700;cursor:pointer;">' + v + '</td>'
               ).join('')
           + '</tr>').join('')
         + '</table></div>'
@@ -15406,6 +15454,261 @@ window.renderDeptStaffMonth = async function(deptId){
   }catch(e){
     mountSalesShell('trend', '<div class="card" style="color:#ff7b7b;">تعذّر بناء المخطط: ' + esc(e && e.message) + '</div>');
   }
+};
+
+/* ══ لماذا هذه الدرجة؟ ══
+   الرقم وحده يقول «كم» ولا يقول «لماذا»، فالمدير يبقى يخمّن. الضغط على
+   الرقم يفتح مصادره الثلاثة مفصّلة بخاناتها الناقصة، والضغط على اسم
+   الموظف يفتح ملخّص دورته: أضعف أيامه وأكثر خاناته تكراراً للنقص.
+   كل ذلك من المخزون المبنيّ أصلاً — بلا استعلام جديد. */
+const neoMonthBucket = v => v >= 90 ? '#3ecf6b' : v >= 80 ? '#d3a04f' : v >= 70 ? '#e08b4f' : '#e15b64';
+/* الأرقام المركّبة تُعزل عن اتجاه الصفحة، وإلا انقلب «٦ من ١٠» إلى «١٠ من ٦» */
+const neoLtr = t => '<span dir="ltr" style="unicode-bidi:isolate;display:inline-block;">' + t + '</span>';
+function neoArDays(n){
+  if (n === 1) return 'يوم واحد';
+  if (n === 2) return 'يومان';
+  if (n <= 10) return n + ' أيام';
+  return n + ' يوماً';
+}
+/* ✓ منجزة · ✗ مؤشَّرة بالنقص · — لم تُفتح أصلاً */
+function neoStMark(st, time){
+  const t = (time && typeof neoFmtTime === 'function') ? neoFmtTime(time) : '';
+  if (st === 'yes') return '<span style="color:#3ecf6b;font-weight:800;">✓</span>'
+    + (t ? ' <span style="color:#7487a0;font-size:10.5px;font-weight:400;">' + t + '</span>' : '');
+  if (st === 'no')  return '<span style="color:#ff7b7b;font-weight:800;">✗</span>';
+  return '<span style="color:#5d6d80;font-weight:800;" title="لم يُؤشَّر عليها إطلاقاً">—</span>';
+}
+const neoStColor = st => st === 'yes' ? '#c8d4e2' : st === 'no' ? '#f0b3b8' : '#8a97a8';
+
+function neoMonthSheet(html){
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;z-index:999997;background:rgba(6,11,20,0.95);'
+    + 'overflow-y:auto;-webkit-overflow-scrolling:touch;padding:14px 12px 34px;';
+  ov.innerHTML = html
+    + '<div class="card" style="padding:0;background:none;border:none;box-shadow:none;">'
+    + '<button class="secondary" style="width:100%;font-size:14px;padding:12px;">✕ إغلاق</button></div>';
+  ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
+  ov.querySelector('button').onclick = () => ov.remove();
+  document.body.appendChild(ov);
+  ov.scrollTop = 0;
+  return ov;
+}
+
+function neoMonthBar(v, color){
+  return '<div style="height:7px;border-radius:4px;background:rgba(122,167,255,0.12);overflow:hidden;margin-top:6px;">'
+    + '<div style="height:100%;width:' + Math.max(0, Math.min(100, v)) + '%;background:' + color + ';"></div></div>';
+}
+
+/* أجزاء درجة يوم واحد — بنفس ترتيب حساب المخطط وبنفس أرقامه تماماً */
+function neoMonthParts(M, sid, day){
+  const k = sid + '|' + day;
+  const ev = M.evBy[k], lk = M.lkBy[k], pt = M.ptBy[k], out = [];
+  if (ev && ev.tot) out.push({ id:'ev', n:'📋 التقييم اليومي', v: ev.on / ev.tot * 100,
+                               txt: ev.on + ' من ' + ev.tot + ' خانة' });
+  if (lk && lk.tot) out.push({ id:'lk', n:'🔗 المواقع والأجهزة المرتبطة', v: lk.on / lk.tot * 100,
+                               txt: lk.on + ' من ' + lk.tot + ' خانة' });
+  if (M.maxPts && pt !== undefined) out.push({ id:'pt', n:'🏆 النقاط', v: Math.min(100, pt / M.maxPts * 100),
+                               txt: pt + ' من ' + M.maxPts + ' نقطة' });
+  return out;
+}
+const neoAvg = a => a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length) : null;
+
+/* ماذا لو أُصلح هذا الجزء وحده؟ — يُظهر أيّ مصدر يجرّ الدرجة فعلاً */
+function neoMonthLift(parts, id){
+  const now = neoAvg(parts.map(p => p.v));
+  const alt = neoAvg(parts.map(p => p.id === id ? 100 : p.v));
+  return alt - now;
+}
+
+window.neoMonthDay = function(sid, day){
+  const M = _neoMonth; if (!M) return;
+  const name = M.names[String(sid)] || '';
+  const d = M.det[sid + '|' + day] || { ev:{}, lk:[], pt:null };
+  const parts = neoMonthParts(M, sid, day);
+  const score = neoAvg(parts.map(p => p.v));
+  const wd = (typeof neoWeekdayOf === 'function') ? neoWeekdayOf(day) : -1;
+  const wdName = (typeof NEO_DAY_AR !== 'undefined' && NEO_DAY_AR[wd]) || '';
+
+  let h = '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">'
+    + '<div style="min-width:0;"><h3 style="margin:0;">' + esc(name) + '</h3>'
+    + '<div style="color:#8fa3b8;font-size:12px;margin-top:3px;">' + esc(wdName) + ' · ' + neoLtr(day) + '</div></div>'
+    + '<div style="font-size:30px;font-weight:800;white-space:nowrap;color:'
+    + (score === null ? '#3a4757' : neoMonthBucket(score)) + ';">' + (score === null ? '·' : score) + '</div></div>';
+
+  if (!parts.length){
+    h += '<div style="color:#8fa3b8;font-size:13px;margin-top:10px;">لا توجد بيانات لهذا اليوم — لم تُسجَّل خانة واحدة.</div></div>';
+    neoMonthSheet(h); return;
+  }
+  h += '<div style="margin-top:12px;background:rgba(122,167,255,0.06);border-radius:10px;padding:10px 12px;'
+    + 'font-size:13px;color:#c8d4e2;line-height:1.9;">الحساب: '
+    + neoLtr('(' + parts.map(p => Math.round(p.v)).join(' + ') + ') ÷ ' + parts.length
+             + ' = <b style="color:' + neoMonthBucket(score) + ';">' + score + '</b>') + '</div>';
+  h += parts.map(p => {
+      const lift = neoMonthLift(parts, p.id);
+      return '<div style="margin-top:11px;">'
+        + '<div style="display:flex;justify-content:space-between;gap:8px;font-size:13px;">'
+        + '<span style="color:#c8d4e2;min-width:0;">' + p.n + '</span>'
+        + '<span style="white-space:nowrap;color:' + neoMonthBucket(p.v) + ';font-weight:800;">' + Math.round(p.v)
+        + ' <span style="color:#7487a0;font-weight:400;font-size:11px;">(' + p.txt + ')</span></span></div>'
+        + neoMonthBar(p.v, neoMonthBucket(p.v))
+        + (lift > 0 ? '<div style="color:#7487a0;font-size:11px;margin-top:4px;">لو اكتمل هذا وحده لصارت درجة اليوم '
+            + '<b style="color:#8fb8d8;">' + (score + lift) + '</b> (+' + lift + ')</div>' : '')
+        + '</div>';
+    }).join('');
+  h += '</div>';
+
+  /* خانات التقييم اليومي واحدةً واحدة، بوقت التأشير */
+  const evKeys = Object.keys(d.ev);
+  if (evKeys.length){
+    const line = (c) => {
+      const r0 = (c.rows && c.rows[0]) || { state: c.on ? 'yes' : 'no', time:'' };
+      const multi = c.rows && c.rows.length > 1;
+      return '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;'
+        + 'padding:7px 2px;border-bottom:1px solid rgba(122,167,255,0.1);font-size:13px;">'
+        + '<span style="color:' + neoStColor(c.on === c.tot ? 'yes' : r0.state) + ';min-width:0;">' + esc(c.label)
+        + (multi ? ' <span style="color:#7487a0;font-size:10.5px;">' + c.on + ' من ' + c.tot + ' سجل</span>' : '')
+        + '</span>'
+        + '<span style="white-space:nowrap;">'
+        + (multi ? c.rows.map(r => neoStMark(r.state, r.time)).join(' ')
+                 : neoStMark(r0.state, r0.time)) + '</span></div>';
+    };
+    const all  = evKeys.map(k => d.ev[k]);
+    const miss = all.filter(c => c.on < c.tot);
+    const done = all.filter(c => c.on === c.tot);
+    h += '<div class="card"><h3 style="margin:0 0 8px;">📋 التقييم اليومي — أُنجز '
+      + done.length + ' من ' + all.length + '</h3>'
+      + (miss.length
+          ? '<div style="color:#ff9a9a;font-size:12px;margin-bottom:4px;">الناقص (' + miss.length + ')</div>'
+            + miss.map(line).join('')
+          : '<div style="color:#3ecf6b;font-size:13px;">كل الخانات مؤشَّرة ✓</div>')
+      + (done.length ? '<div style="color:#7487a0;font-size:12px;margin:10px 0 4px;">المنجز (' + done.length + ')</div>'
+          + done.map(line).join('') : '')
+      + '<div style="color:#5d6d80;font-size:11px;margin-top:9px;line-height:1.8;">'
+      + '✓ مؤشَّرة (ومعها وقت التأشير) · ✗ مؤشَّرة بالنقص · — لم يُفتح عليها شيء</div>'
+      + '</div>';
+  }
+
+  /* كل عنصر مرتبط بكل أعمدته لا بالناقص فقط */
+  if (d.lk.length){
+    h += '<div class="card"><h3 style="margin:0 0 8px;">🔗 المواقع والأجهزة المرتبطة</h3>'
+      + d.lk.map(it => {
+          const pct = it.tot ? Math.round(it.on / it.tot * 100) : 0;
+          const dl = (it.days && typeof neoDaysLabel === 'function') ? neoDaysLabel(it.days) : '';
+          return '<div style="padding:9px 2px;border-bottom:1px solid rgba(122,167,255,0.1);">'
+            + '<div style="display:flex;justify-content:space-between;gap:8px;font-size:13px;">'
+            + '<span style="color:#c8d4e2;min-width:0;">' + esc(it.kind) + ' ' + esc(it.label)
+            + (dl ? ' <span style="color:#38d9b9;font-size:10px;">' + esc(dl) + '</span>' : '') + '</span>'
+            + '<span style="white-space:nowrap;font-weight:800;color:' + neoMonthBucket(pct) + ';">'
+            + it.on + ' من ' + it.tot + '</span></div>'
+            + '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;">'
+            + it.cells.map(c => '<span style="font-size:11.5px;padding:4px 9px;border-radius:9px;'
+                + 'background:rgba(122,167,255,0.06);border:1px solid rgba(122,167,255,0.16);color:'
+                + neoStColor(c.state) + ';">' + esc(c.label) + ' ' + neoStMark(c.state, c.time) + '</span>').join('')
+            + '</div></div>';
+        }).join('')
+      + '</div>';
+  }
+
+  if (d.pt && d.pt.rows && d.pt.rows.length){
+    h += '<div class="card"><h3 style="margin:0 0 8px;">🏆 النقاط — ' + d.pt.got + ' من ' + d.pt.max + '</h3>'
+      + d.pt.rows.map(r => '<div style="display:flex;justify-content:space-between;gap:8px;padding:7px 2px;'
+          + 'border-bottom:1px solid rgba(122,167,255,0.1);font-size:13px;">'
+          + '<span style="color:#c8d4e2;min-width:0;">' + esc(r.label) + '</span>'
+          + '<b style="white-space:nowrap;color:' + neoMonthBucket(r.val * 10) + ';">'
+          + r.val + ' من 10</b></div>').join('')
+      + '</div>';
+  }
+  neoMonthSheet(h);
+};
+
+window.neoMonthWhy = function(sid){
+  const M = _neoMonth; if (!M) return;
+  const name = M.names[String(sid)] || '';
+  const series = M.series[String(sid)] || [];
+  const vals = series.filter(v => v !== null);
+  const avg = neoAvg(vals);
+
+  /* معدّل كل مصدر على الدورة، وكم يرفع المعدّلَ إصلاحُه وحده */
+  const srcs = [{ id:'ev', n:'📋 التقييم اليومي' }, { id:'lk', n:'🔗 المواقع والأجهزة' }, { id:'pt', n:'🏆 النقاط' }];
+  const each = [];
+  srcs.forEach(sc => {
+    const own = [], lifted = [];
+    M.days.forEach(day => {
+      const parts = neoMonthParts(M, sid, day); if (!parts.length) return;
+      const mine = parts.find(p => p.id === sc.id);
+      if (mine) own.push(mine.v);
+      lifted.push(neoAvg(parts.map(p => p.id === sc.id ? 100 : p.v)));
+    });
+    if (own.length) each.push({ n: sc.n, avg: neoAvg(own), days: own.length,
+                                lift: (neoAvg(lifted) || 0) - (avg || 0) });
+  });
+
+  /* تجميع النقص على الدورة كلها — الخانة المتكرّرة هي السبب الحقيقي */
+  const tally = {};
+  const hit = (label, kind) => {
+    const k = kind + '|' + label;
+    (tally[k] = tally[k] || { label, kind, n:0 }).n++;
+  };
+  M.days.forEach(day => {
+    const d = M.det[sid + '|' + day]; if (!d) return;
+    Object.keys(d.ev).forEach(k => { const c = d.ev[k]; if (c.on < c.tot) hit(c.label, '📋'); });
+    d.lk.forEach(it => it.miss.forEach(m => hit(m + ' — ' + it.label, '🔗')));
+  });
+  const top = Object.values(tally).sort((a, b) => b.n - a.n);
+
+  const withDay = series.map((v, i) => ({ v, day: M.days[i] })).filter(x => x.v !== null);
+  const worst = withDay.slice().sort((a, b) => a.v - b.v).filter(x => x.v < 100).slice(0, 12);
+  const nEmpty = series.length - vals.length;
+
+  let h = '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">'
+    + '<div style="min-width:0;"><h3 style="margin:0;">' + esc(name) + '</h3>'
+    + '<div style="color:#8fa3b8;font-size:12px;margin-top:3px;">دورة ' + esc(M.cycle.label)
+    + ' · ' + neoArDays(vals.length) + ' فيها بيانات'
+    + (nEmpty ? ' · ' + neoArDays(nEmpty) + ' بلا بيانات' : '') + '</div></div>'
+    + '<div style="font-size:30px;font-weight:800;white-space:nowrap;color:'
+    + (avg === null ? '#3a4757' : neoMonthBucket(avg)) + ';">' + (avg === null ? '·' : avg) + '</div></div>'
+    + (avg !== null ? neoMonthBar(avg, neoMonthBucket(avg)) : '') + '</div>';
+
+  if (each.length){
+    h += '<div class="card"><h3 style="margin:0 0 4px;">⚖️ من أين جاء المعدّل</h3>'
+      + '<div style="color:#8fa3b8;font-size:12px;margin-bottom:9px;">معدّل كل مصدر على حدة، وكم يرتفع المعدّل العام لو اكتمل ذلك المصدر وحده</div>'
+      + each.map(x => '<div style="margin-bottom:11px;">'
+          + '<div style="display:flex;justify-content:space-between;gap:8px;font-size:13px;">'
+          + '<span style="color:#c8d4e2;min-width:0;">' + x.n
+          + ' <span style="color:#7487a0;font-size:11px;">(' + neoArDays(x.days) + ')</span></span>'
+          + '<span style="white-space:nowrap;font-weight:800;color:' + neoMonthBucket(x.avg) + ';">' + x.avg
+          + (x.lift > 0 ? ' <span style="color:#38d9b9;font-size:11px;font-weight:700;">+' + x.lift + '</span>' : '')
+          + '</span></div>' + neoMonthBar(x.avg, neoMonthBucket(x.avg)) + '</div>').join('')
+      + '</div>';
+  }
+
+  h += '<div class="card"><h3 style="margin:0 0 4px;">🎯 أكثر ما تكرّر نقصه</h3>'
+    + '<div style="color:#8fa3b8;font-size:12px;margin-bottom:8px;">عدد الأيام التي نقصت فيها هذه الخانة</div>'
+    + (top.length
+        ? top.slice(0, 15).map(x => '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;'
+            + 'padding:7px 2px;border-bottom:1px solid rgba(122,167,255,0.1);font-size:13px;">'
+            + '<span style="color:#c8d4e2;min-width:0;">' + x.kind + ' ' + esc(x.label) + '</span>'
+            + '<b style="white-space:nowrap;color:' + (x.n >= vals.length ? '#ff7b7b' : x.n > 1 ? '#d3a04f' : '#8fb8d8') + ';">'
+            + neoArDays(x.n) + '</b></div>').join('')
+        : '<div style="color:#3ecf6b;font-size:13px;">لا نقص في هذه الدورة</div>')
+    + (top.length > 15 ? '<div style="color:#7487a0;font-size:11px;margin-top:7px;">…و' + (top.length - 15) + ' غيرها</div>' : '')
+    + '</div>';
+
+  h += '<div class="card"><h3 style="margin:0 0 4px;">📉 الأيام التي نزلت</h3>'
+    + '<div style="color:#8fa3b8;font-size:12px;margin-bottom:8px;">اضغط اليوم لترى تفصيله</div>'
+    + (worst.length
+        ? worst.map(x => {
+            const wd = (typeof neoWeekdayOf === 'function') ? neoWeekdayOf(x.day) : -1;
+            const wn = (typeof NEO_DAY_AR !== 'undefined' && NEO_DAY_AR[wd]) || '';
+            return '<div onclick="neoMonthDay(\'' + sid + '\',\'' + x.day + '\')" '
+              + 'style="display:flex;justify-content:space-between;align-items:center;gap:8px;cursor:pointer;'
+              + 'padding:9px 2px;border-bottom:1px solid rgba(122,167,255,0.1);font-size:13px;">'
+              + '<span style="color:#c8d4e2;min-width:0;">' + esc(wn) + ' · ' + neoLtr(x.day) + '</span>'
+              + '<b style="white-space:nowrap;color:' + neoMonthBucket(x.v) + ';">' + x.v + ' ›</b></div>';
+          }).join('')
+        : '<div style="color:#3ecf6b;font-size:13px;">لم ينزل أي يوم عن ١٠٠</div>')
+    + '</div>';
+  neoMonthSheet(h);
 };
 
 /* ══ نظام التوصيل — المركبات والمهام والرحلات (وحدة مستقلة، إضافية بالكامل) ══ */
