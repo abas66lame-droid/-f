@@ -4243,6 +4243,16 @@ async function renderShiftView(profile){
         </table>
       </div>
     </div>
+    <div class="card" id="subLocCard">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+        <div style="min-width:0;">
+          <h3 style="margin:0;">🏷️ المواقع الفرعية</h3>
+          <div style="color:#8fa3b8;font-size:12px;margin-top:4px;line-height:1.8;">
+            فرِّع أي موقع قائم: ٣٢٠ ← ٣٢٠-١ · ٣٢٠-٢ — وتظهر في جدولك أعلاه كمواقع كاملة.</div>
+        </div>
+        <button onclick="neoOpenSubLocs('${deptId}')" style="font-size:13px;padding:11px 18px;white-space:nowrap;">فتح الشاشة ›</button>
+      </div>
+    </div>
     <div class="card" id="staffSection"></div>
     <div class="card" id="pointsSection"></div>
     <div class="card" id="tasksSection"></div>
@@ -4272,6 +4282,233 @@ async function renderShiftView(profile){
   if (!HID('clean')) await renderCleanlinessSection(deptId); else { const e=document.getElementById('cleanSection'); if(e) e.style.display='none'; }
   if (HID('loc')){ const e=document.getElementById('locationsSection')||document.querySelector('[id*=location]'); if(e) e.style.display='none'; }
 }
+
+/* ══ المواقع الفرعية — صلاحية مقيَّدة لمسؤول الشفت ══
+   مسؤول الشفت لا يُنشئ موقعاً من العدم، وإنما يفرّع موقعاً قائماً في قسمه:
+   ٣٢٠ ← ٣٢٠-١ و٣٢٠-٢. الفرع موقع كامل في النظام يظهر في المهام اليومية
+   طبيعياً، ويرث ترتيب أصله فيقف بجانبه لا في آخر القائمة.
+
+   القيد محروس في القاعدة بسياسة RLS لا في الواجهة وحدها، فلا يلتفّ عليه أحد.
+   والحذف لا يمحو تاريخاً: فرعٌ له سجلات لا يُحذف نهائياً وإنما يُعطَّل. */
+const NEO_SUB_RE = /^(.+)-(\d{1,4})$/;
+function neoSubParent(code){
+  const m = NEO_SUB_RE.exec(String(code || '').trim());
+  return m ? m[1] : '';
+}
+function neoIsSubLoc(code){ return !!neoSubParent(code); }
+function neoSubNum(code){
+  const m = NEO_SUB_RE.exec(String(code || '').trim());
+  return m ? parseInt(m[2], 10) : 0;
+}
+let _subDept = '', _subParent = '', _subBusy = false;
+/* صيغة العدد العربية — «فرع واحد» لا «1 فرع» */
+function neoArCount(n, one, two, few, many){
+  if (n === 1) return one;
+  if (n === 2) return two;
+  if (n <= 10) return n + ' ' + few;
+  return n + ' ' + many;
+}
+/* الكود المرقَّم يُعزل عن اتجاه السطر، وإلا التصق «320-1» بالعدد بعده */
+const neoBdi = t => '<bdi>' + t + '</bdi>';
+
+window.neoOpenSubLocs = async function(deptId){
+  _subDept = deptId; _subParent = '';
+  document.getElementById('subLocPanel')?.remove();
+  const p = document.createElement('div');
+  p.id = 'subLocPanel';
+  p.style.cssText = 'position:fixed;inset:0;z-index:999996;background:#070c14;overflow-y:auto;'
+    + '-webkit-overflow-scrolling:touch;padding:14px 12px calc(30px + env(safe-area-inset-bottom,0px));';
+  p.innerHTML = '<div class="card"><div class="neoLoadBox">جاري التحميل…<div class="neoBarLoad"></div></div></div>';
+  document.body.appendChild(p);
+  await neoRenderSubLocs();
+};
+/* الخروج يعيد بناء شاشة الشفت — فتظهر المواقع الجديدة في الجدول فوراً */
+window.neoCloseSubLocs = async function(){
+  document.getElementById('subLocPanel')?.remove();
+  try{ if (currentShiftProfile) await renderShiftView(currentShiftProfile); }catch(e){}
+};
+window.neoSubPick = async function(code){ _subParent = code; await neoRenderSubLocs(); };
+
+async function neoRenderSubLocs(){
+  const p = document.getElementById('subLocPanel'); if (!p) return;
+  const deptId = _subDept;
+  const locs    = await getLocations(deptId);
+  window.__subCodes = locs.map(l => String(l.code));   /* تقرأها المعاينة */
+  const parents = locs.filter(l => !neoIsSubLoc(l.code));
+  const subs    = locs.filter(l =>  neoIsSubLoc(l.code));
+  if (_subParent && !parents.some(x => String(x.code) === String(_subParent))) _subParent = '';
+
+  /* عدد سجلات كل فرع — هو ما يقرّر: حذف نهائي أم تعطيل */
+  const counts = {};
+  await Promise.all(subs.map(async l => {
+    counts[l.id] = await neoCountLogs('daily_logs', 'location_id', l.id);
+  }));
+
+  const kids = base => subs.filter(l => neoSubParent(l.code) === base)
+                           .sort((a, b) => neoSubNum(a.code) - neoSubNum(b.code));
+  const nextNum = base => { const k = kids(base); return k.length ? neoSubNum(k[k.length - 1].code) + 1 : 1; };
+
+  let h = '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">'
+    + '<h2 style="margin:0;">🏷️ المواقع الفرعية</h2>'
+    + '<span style="background:rgba(56,217,185,0.14);color:#38d9b9;font-size:12px;font-weight:700;'
+    + 'padding:4px 12px;border-radius:10px;white-space:nowrap;">'
+    + neoArCount(subs.length, 'فرع واحد', 'فرعان', 'فروع', 'فرعاً') + '</span></div>'
+    + '<div style="color:#8fa3b8;font-size:12.5px;line-height:1.9;margin-top:8px;">'
+    + 'اختر موقعاً من مواقع قسمك، ثم أضف له فروعاً مرقّمة. الفرع موقع كامل: يظهر في '
+    + 'جدولك اليومي بكل أعمدته، ويدخل في نسبتك من يوم إضافته لا قبله.'
+    + '<br><b style="color:#ffcf5c;">لا يمكنك إنشاء موقع باسم جديد</b> — التفريع فقط.</div></div>';
+
+  if (!parents.length){
+    h += '<div class="card" style="color:#8fa3b8;">لا توجد مواقع في قسمك بعد.</div>';
+  } else {
+    /* ١ — اختيار الموقع الأصل */
+    h += '<div class="card"><h3 style="margin:0 0 4px;">١ · اختر الموقع الأصل</h3>'
+      + '<div style="color:#8fa3b8;font-size:12px;margin-bottom:9px;">الرقم بين قوسين = عدد فروعه الحالية</div>'
+      + '<div style="display:flex;flex-wrap:wrap;gap:7px;">'
+      + parents.map(l => {
+          const on = String(_subParent) === String(l.code);
+          const n  = kids(l.code).length;
+          return '<span onclick="neoSubPick(' + JSON.stringify(String(l.code)).replace(/"/g, '&quot;') + ')" '
+            + 'style="font-size:14px;padding:9px 14px;border-radius:10px;cursor:pointer;'
+            + (on ? 'background:rgba(56,217,185,0.18);color:#38d9b9;border:1px solid rgba(56,217,185,0.5);font-weight:700;'
+                  : 'background:rgba(122,167,255,0.07);color:#c8d4e2;border:1px solid rgba(122,167,255,0.22);')
+            + '">' + neoBdi(esc(l.code))
+            + (n ? ' <span style="font-size:10.5px;opacity:.85;">(' + n + ')</span>' : '') + '</span>';
+        }).join('')
+      + '</div></div>';
+
+    /* ٢ — الإضافة */
+    if (_subParent){
+      const start = nextNum(_subParent);
+      const k = kids(_subParent);
+      h += '<div class="card"><h3 style="margin:0 0 9px;">٢ · أضف فروعاً لـ «' + neoBdi(esc(_subParent)) + '»</h3>'
+        + (k.length
+            ? '<div style="color:#8fa3b8;font-size:12px;margin-bottom:6px;">فروعه الآن</div>'
+              + '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">'
+              + k.map(l => '<span style="font-size:12px;padding:5px 11px;border-radius:9px;'
+                  + 'background:rgba(122,167,255,0.07);border:1px solid rgba(122,167,255,0.18);color:'
+                  + (neoIsOff(l.id) ? '#8a7a3a' : '#c8d4e2') + ';">' + neoBdi(esc(l.code))
+                  + (neoIsOff(l.id) ? ' ⏸' : '') + '</span>').join('')
+              + '</div>'
+            : '<div style="color:#7487a0;font-size:12px;margin-bottom:12px;">لا فروع له بعد</div>')
+        + '<div style="display:flex;gap:9px;flex-wrap:wrap;">'
+        + '<label style="flex:1 1 130px;min-width:0;color:#8fa3b8;font-size:12px;">يبدأ من الرقم'
+        + '<input type="number" id="subStart" min="1" max="9999" value="' + start + '" '
+        + 'oninput="neoSubPreview()" style="width:100%;font-size:15px;margin-top:5px;"></label>'
+        + '<label style="flex:1 1 130px;min-width:0;color:#8fa3b8;font-size:12px;">كم فرعاً'
+        + '<input type="number" id="subCount" min="1" max="20" value="1" '
+        + 'oninput="neoSubPreview()" style="width:100%;font-size:15px;margin-top:5px;"></label>'
+        + '</div>'
+        + '<div id="subPreview" style="color:#38d9b9;font-size:13px;margin-top:11px;line-height:1.9;"></div>'
+        + '<button onclick="neoSubAdd()" style="width:100%;margin-top:11px;font-size:14px;padding:12px;">'
+        + '➕ إضافة</button></div>';
+    }
+  }
+
+  /* ٣ — كل الفروع الحالية وإدارتها */
+  h += '<div class="card"><h3 style="margin:0 0 4px;">٣ · فروع قسمك</h3>'
+    + '<div style="color:#8fa3b8;font-size:12px;margin-bottom:9px;line-height:1.8;">'
+    + '<b>⏸ تعطيل</b> يُخفي الفرع من جدولك ومن النسبة وتبقى سجلاته سليمة ويرجع بضغطة.'
+    + '<br><b>✕ حذف</b> لا يُتاح إلا لفرع بلا سجلات — حتى لا يُمحى تاريخ بالخطأ.</div>'
+    + (subs.length
+        ? subs.map(l => {
+            const n   = counts[l.id] || 0;
+            const off = neoIsOff(l.id);
+            const cd  = JSON.stringify(String(l.code)).replace(/"/g, '&quot;');
+            return '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;'
+              + 'padding:9px 2px;border-bottom:1px solid rgba(122,167,255,0.1);'
+              + (off ? 'opacity:.6;' : '') + '">'
+              + '<span style="color:#c8d4e2;font-size:13.5px;min-width:0;">' + neoBdi(esc(l.code))
+              + (off ? ' <span style="background:#5a4a12;color:#ffcf5c;font-size:10px;padding:2px 7px;border-radius:8px;">معطَّل</span>' : '')
+              + '<span style="color:#7487a0;font-size:11px;margin-inline-start:7px;">· '
+              + (n ? neoArCount(n, 'سجل واحد', 'سجلان', 'سجلات', 'سجلاً') : 'بلا سجلات') + '</span></span>'
+              + '<span style="white-space:nowrap;">'
+              + '<span onclick="neoSubOff(' + JSON.stringify(String(l.id)).replace(/"/g, '&quot;') + ',' + cd + ')" '
+              + 'style="cursor:pointer;color:' + (off ? '#3ecf6b' : '#ffcf5c') + ';font-size:13px;margin-inline-end:12px;">'
+              + (off ? '▶ إرجاع' : '⏸ تعطيل') + '</span>'
+              + (n
+                  ? '<span style="color:#4a5768;font-size:12px;" title="له سجلات — استعمل التعطيل">✕ حذف</span>'
+                  : '<span onclick="neoSubDel(' + JSON.stringify(String(l.id)).replace(/"/g, '&quot;') + ',' + cd + ')" '
+                    + 'style="cursor:pointer;color:#ff7b7b;font-size:13px;">✕ حذف</span>')
+              + '</span></div>';
+          }).join('')
+        : '<div style="color:#7487a0;font-size:13px;">لا فروع في قسمك بعد</div>')
+    + '</div>';
+
+  h += '<div class="card" style="padding:0;background:none;border:none;box-shadow:none;">'
+    + '<button class="secondary" onclick="neoCloseSubLocs()" style="width:100%;font-size:14px;padding:13px;">'
+    + '✕ إغلاق والرجوع للجدول</button></div>';
+
+  p.innerHTML = h;
+  p.scrollTop = 0;
+  neoSubPreview();
+}
+
+/* معاينة حيّة لما سيُضاف — فلا يضغط المسؤول على المجهول */
+window.neoSubPreview = function(){
+  const box = document.getElementById('subPreview'); if (!box) return;
+  const list = neoSubPlanned();
+  box.innerHTML = list.length
+    ? 'سيُضاف: ' + list.map(c => '<b><bdi>' + esc(c) + '</bdi></b>').join(' · ')
+    : '<span style="color:#ffcf5c;">لا جديد — هذه الأرقام موجودة أصلاً</span>';
+};
+/* الأكواد التي ستُنشأ فعلاً بعد استبعاد الموجود */
+function neoSubPlanned(){
+  const sEl = document.getElementById('subStart'), cEl = document.getElementById('subCount');
+  if (!_subParent || !sEl || !cEl) return [];
+  let start = parseInt(sEl.value, 10); if (!(start >= 1)) start = 1;
+  let n = parseInt(cEl.value, 10); if (!(n >= 1)) n = 1; if (n > 20) n = 20;
+  const have = new Set((window.__subCodes || []).map(String));
+  const out = [];
+  for (let i = 0; i < n; i++){
+    const code = _subParent + '-' + (start + i);
+    if (!have.has(code)) out.push(code);
+  }
+  return out;
+}
+
+window.neoSubAdd = async function(){
+  if (_subBusy) return;
+  const deptId = _subDept, base = _subParent;
+  if (!base){ neoNotify('اختر الموقع الأصل أولاً'); return; }
+  const locs = await getLocations(deptId);
+  const parent = locs.find(l => String(l.code) === String(base));
+  if (!parent){ neoNotify('الموقع الأصل لم يعد موجوداً'); await neoRenderSubLocs(); return; }
+  window.__subCodes = locs.map(l => String(l.code));
+  const codes = neoSubPlanned();
+  if (!codes.length){ neoNotify('كل هذه الأرقام موجودة أصلاً'); return; }
+  _subBusy = true;
+  /* الفرع يرث ترتيب أصله، والترتيب الثانوي بالكود — فيقف ٣٢٠-١ خلف ٣٢٠ */
+  const rows = codes.map(code => ({ department_id: deptId, code: code,
+                                    sort_order: (parent.sort_order === undefined ? null : parent.sort_order) }));
+  const { error } = await supabaseClient.from('locations').insert(rows);
+  _subBusy = false;
+  if (error){ neoNotify('تعذّرت الإضافة: ' + error.message); return; }
+  try{ invalidateRefCache('locations_ref'); }catch(e){}
+  try{ neoToast('➕ أُضيف ' + neoArCount(codes.length, 'فرع واحد', 'فرعان', 'فروع', 'فرعاً'), true); }catch(e){}
+  await neoRenderSubLocs();
+};
+
+window.neoSubOff = async function(id, code){
+  if (await neoSetOff(_subDept, id, !neoIsOff(id), code)) await neoRenderSubLocs();
+};
+
+window.neoSubDel = async function(id, code){
+  /* نُعيد العدّ لحظة الحذف — لا نثق بعدد مرسوم قبل دقائق */
+  const n = await neoCountLogs('daily_logs', 'location_id', id);
+  if (n){
+    neoNotify('«' + code + '» صار له '
+      + neoArCount(n, 'سجل واحد', 'سجلان', 'سجلات', 'سجلاً') + ' — استعمل ⏸ تعطيل لتبقى بياناته');
+    await neoRenderSubLocs(); return;
+  }
+  if (!await neoConfirm('حذف «' + code + '» نهائياً؟',
+      'لا سجلات لهذا الفرع، فالحذف لا يمحو تاريخاً. ولن يظهر في جدولك بعد الآن.')) return;
+  const { error } = await supabaseClient.from('locations').delete().eq('id', id);
+  if (error){ neoNotify('تعذّر الحذف: ' + error.message); return; }
+  try{ invalidateRefCache('locations_ref'); }catch(e){}
+  try{ neoToast('✕ حُذف «' + code + '»', true); }catch(e){}
+  await neoRenderSubLocs();
+};
 
 /* أُزيلت switchShift — لم تكن مستدعاة من أي مكان بعد إلغاء الشفتات */
 
@@ -11293,7 +11530,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.04.01";
+const APP_VERSION = "2026.09.04.02";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
