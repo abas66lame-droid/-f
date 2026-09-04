@@ -3820,17 +3820,11 @@ function neoComputeShiftPct(){
         if (typeof neoIsOff === 'function' && neoIsOff(loc.id)) return;  /* معطَّل — خارج النسبة بأعمدته المخصّصة أيضاً */
         const log = st.logsMap[loc.id] || {};
         const fn = log?.field_notes || {};
-        FIELD_DEFS.forEach(f => {
-          if (typeof neoCellDisabled === 'function' && neoCellDisabled(loc, f.key)) return;
+        (st.defs || []).forEach(def => {
+          if (typeof neoCellDisabled === 'function' && neoCellDisabled(loc, def.key)) return;
           total++;
-          const s = shiftFieldState(log, f.key);
-          if (s === 'yes' || (s === 'no' && (fn[f.key]||'').trim())) done++;
-        });
-        (st.customFields||[]).forEach(cf => {
-          if (neoCfDisabled(loc, cf.id)) return;
-          total++;
-          const s = shiftExtraState(log, cf.id);
-          if (s === 'yes' || (s === 'no' && (fn['extra_'+cf.id]||'').trim())) done++;
+          const s = shiftDefState(log, def);
+          if (s === 'yes' || (s === 'no' && (fn[shiftSlot(def).noteKey]||'').trim())) done++;
         });
       });
     }
@@ -4296,15 +4290,16 @@ async function renderShiftView(profile){
   const deptName = dept?.name || deptId;
   const date = todayStr();
   const locations = await getLocations(deptId);
-  const customFields = await getCustomFields(deptId);
+  /* قائمة أعمدة واحدة: الأساسية والمضافة والقديمة سواءً بسواء — نفس
+     القائمة التي تراها كل الشاشات الأخرى، فلا يشذّ هذا الجدول عنها. */
+  const defs = await neoUnifiedDefs(deptId, 'loc');
 
   const locationIds = locations.map(l => l.id);
   const logsMap = await getDailyLogsMap(locationIds, date, currentShiftChoice);
-  const cleanCF = (customFields||[]).filter(cf => !String(cf.name||'').startsWith('⟦'));
-  shiftRowsState = { deptId, date, shift: currentShiftChoice, locations, customFields: cleanCF, logsMap };
+  shiftRowsState = { deptId, date, shift: currentShiftChoice, locations, defs, logsMap };
   const rowsHtml = buildShiftProgressiveRows();
 
-  const customHeaders = cleanCF.map(cf => `<th>${esc(cf.name)}</th>`).join('');
+  const colHeaders = defs.map(f => `<th>${esc(f.label)}</th>`).join('');
 
   try{ await neoLoadSavedStats(date); }catch(e){}
   el.innerHTML = `
@@ -4324,8 +4319,7 @@ async function renderShiftView(profile){
         <table>
           <tr>
             <th>الموقع</th>
-            ${FIELD_DEFS.map(f=>`<th>${f.label}</th>`).join('')}
-            ${customHeaders}
+            ${colHeaders}
           </tr>
           ${rowsHtml || '<tr><td colspan="8">لا توجد مواقع لهذا القسم</td></tr>'}
         </table>
@@ -4620,47 +4614,38 @@ window.neoSubDel = async function(id, code){
 let shiftRowsState = null;
 
 // حالة الخانة: 'yes' لو true بقاعدة البيانات، 'no' لو فيه ملاحظة خطأ محفوظة، 'empty' غير ذلك
-function shiftFieldState(log, key){
-  /* الأعمدة المضافة (x_) تُخزَّن في extra_fields — نقرأ من المكانين لضمان الاتساق */
-  if (String(key).startsWith('x_')){
-    const ex = log?.extra_fields || {};
-    if (ex[key] === true || log?.[key] === true) return 'yes';
-    const fn0 = log?.field_notes || {};
-    if (key in fn0) return 'no';
-    return 'empty';
-  }
-  if (log && log[key] === true) return 'yes';
-  const fn = log?.field_notes || {};
-  if (key in fn) return 'no';
-  return 'empty';
+/* أين يسكن العمود: القيمة والملاحظة والوقت. الأساسي عمودٌ حقيقي،
+   والمضاف والقديم داخل extra_fields — وهذا كل الفرق بينهما، مجموعاً
+   في مكان واحد بدل أن يتفرّق على ست دوال. */
+function shiftSlot(def){
+  const cf = (def && def.cfId) ? String(def.cfId) : '';
+  const x  = !cf && String((def && def.key) || '').startsWith('x_');
+  return {
+    extra:   !!cf || x,
+    valKey:  cf || (def && def.key),
+    noteKey: cf ? ('extra_' + cf) : (def && def.key),
+    timeKey: cf || (def && def.key)
+  };
 }
-function shiftExtraState(log, cfId){
-  const ex = log?.extra_fields || {};
-  const fn = log?.field_notes || {};
-  if (ex[cfId] === true) return 'yes';
-  if (('extra_'+cfId) in fn) return 'no';
+function shiftDefState(log, def){
+  const s  = shiftSlot(def);
+  const ex = (log && log.extra_fields) || {};
+  if (ex[s.valKey] === true) return 'yes';
+  if (log && log[s.valKey] === true) return 'yes';
+  const fn = (log && log.field_notes) || {};
+  if (s.noteKey in fn) return 'no';
   return 'empty';
 }
 // الصف مكتمل إذا كل خاناته ✓ أو (✗ مع ملاحظة غير فارغة)
-/* لم تعد تحتاج تجريب الصيغ — neoCellDisabled يطابق بالجذر */
-function neoCfDisabled(loc, cfId){
-  return !!loc && typeof neoCellDisabled === 'function' && neoCellDisabled(loc, String(cfId));
-}
 /* الخانة المعطّلة لا تُطلب لإكمال الصف — وإلا قُفل الجدول التدريجي على
    المسؤول ولم يستطع إكمال يومه أبداً. */
-function shiftRowComplete(log, customFields, loc){
+function shiftRowComplete(log, defs, loc){
   const fn = log?.field_notes || {};
-  for (const f of FIELD_DEFS){
-    if (loc && typeof neoCellDisabled === 'function' && neoCellDisabled(loc, f.key)) continue;
-    const s = shiftFieldState(log, f.key);
+  for (const def of (defs || [])){
+    if (loc && typeof neoCellDisabled === 'function' && neoCellDisabled(loc, def.key)) continue;
+    const s = shiftDefState(log, def);
     if (s === 'empty') return false;
-    if (s === 'no' && !(fn[f.key]||'').trim()) return false;
-  }
-  for (const cf of customFields){
-    if (neoCfDisabled(loc, cf.id)) continue;
-    const s = shiftExtraState(log, cf.id);
-    if (s === 'empty') return false;
-    if (s === 'no' && !(fn['extra_'+cf.id]||'').trim()) return false;
+    if (s === 'no' && !(fn[shiftSlot(def).noteKey]||'').trim()) return false;
   }
   return true;
 }
@@ -4669,30 +4654,22 @@ function buildShiftProgressiveRows(){
   const st = shiftRowsState;
   let html = '';
   let allDone = st.locations.length > 0;
-  const totalCols = 1 + FIELD_DEFS.length + st.customFields.length;
+  const defs = st.defs || [];
+  const totalCols = 1 + defs.length;
   for (let i = 0; i < st.locations.length; i++){
     const loc = st.locations[i];
     const log = st.logsMap[loc.id];
     const fn = log?.field_notes || {};
     let cells = '';
     const wrongList = [];
-    for (const f of FIELD_DEFS){
-      if (typeof neoCellDisabled === 'function' && neoCellDisabled(loc, f.key)){
+    for (const def of defs){
+      if (typeof neoCellDisabled === 'function' && neoCellDisabled(loc, def.key)){
         cells += '<td><span style="color:#5d6d80;font-size:15px;" title="لا ينطبق">—</span></td>';
         continue;
       }
-      const s = shiftFieldState(log, f.key);
-      cells += `<td><div class="check ${s==='yes'?'on':s==='no'?'bad':''}" onclick="shiftCycleField('${loc.id}','${f.key}',false)">${s==='yes'?'✓':s==='no'?'✗':''}</div></td>`;
-      if (s === 'no') wrongList.push({ key: f.key, label: f.label });
-    }
-    for (const cf of st.customFields){
-      if (neoCfDisabled(loc, cf.id)){
-        cells += '<td><span style="color:#5d6d80;font-size:15px;" title="لا ينطبق">—</span></td>';
-        continue;
-      }
-      const s = shiftExtraState(log, cf.id);
-      cells += `<td><div class="check ${s==='yes'?'on':s==='no'?'bad':''}" onclick="shiftCycleField('${loc.id}','${String(cf.id)}',true)">${s==='yes'?'✓':s==='no'?'✗':''}</div></td>`;
-      if (s === 'no') wrongList.push({ key: 'extra_'+cf.id, label: cf.name });
+      const s = shiftDefState(log, def);
+      cells += `<td><div class="check ${s==='yes'?'on':s==='no'?'bad':''}" onclick="shiftCycleField('${loc.id}','${def.key}')">${s==='yes'?'✓':s==='no'?'✗':''}</div></td>`;
+      if (s === 'no') wrongList.push({ key: shiftSlot(def).noteKey, label: def.label });
     }
     const locOff = (typeof neoIsOff === 'function' && neoIsOff(loc.id))
       ? ' <span style="background:#5a4a12;color:#ffcf5c;font-size:10px;padding:2px 7px;border-radius:8px;white-space:nowrap;">معطَّل</span>' : '';
@@ -4707,7 +4684,7 @@ function buildShiftProgressiveRows(){
       </td></tr>`;
     }
     // لا نعرض الصف التالي إلا بعد اكتمال هذا الصف
-    if (!shiftRowComplete(log, st.customFields, loc)){
+    if (!shiftRowComplete(log, defs, loc)){
       allDone = false;
       const remaining = st.locations.length - i - 1;
       if (remaining > 0) html += `<tr><td colspan="${totalCols}" style="color:#777; font-size:11px;">🔒 يتبقى ${remaining} موقع — أكمل هذا الصف ليظهر التالي</td></tr>`;
@@ -4723,35 +4700,35 @@ function refreshShiftTable(){
   const table = document.querySelector('#shiftView .table-wrap table');
   if (!table) return;
   const st = shiftRowsState;
-  const customHeaders = st.customFields.map(cf => `<th>${esc(cf.name)}</th>`).join('');
-  table.innerHTML = `<tr><th>الموقع</th>${FIELD_DEFS.map(f=>`<th>${f.label}</th>`).join('')}${customHeaders}</tr>` + (buildShiftProgressiveRows() || '<tr><td colspan="8">لا توجد مواقع لهذا القسم</td></tr>');
+  const defs = st.defs || [];
+  table.innerHTML = `<tr><th>الموقع</th>${defs.map(f => `<th>${esc(f.label)}</th>`).join('')}</tr>`
+    + (buildShiftProgressiveRows() || `<tr><td colspan="${1 + defs.length}">لا توجد مواقع لهذا القسم</td></tr>`);
 }
 
 // تبديل الحالة: فارغ ← ✓ ← ✗ ← فارغ ، مع الحفظ الفوري
-async function shiftCycleField(locId, key, isExtra){
+async function shiftCycleField(locId, defKey){
   const st = shiftRowsState;
+  const def = (st.defs || []).find(d => String(d.key) === String(defKey));
+  if (!def) return;
+  const slot = shiftSlot(def);
   const log = st.logsMap[locId] || (st.logsMap[locId] = {});
   log.field_notes = log.field_notes || {};
   log.extra_fields = log.extra_fields || {};
   log.field_times = log.field_times || {};
-  const noteKey = isExtra ? 'extra_'+key : key;
-  const cur = isExtra ? shiftExtraState(log, key) : shiftFieldState(log, key);
+  const cur  = shiftDefState(log, def);
   const next = cur === 'empty' ? 'yes' : cur === 'yes' ? 'no' : 'empty';
+  const on   = (next === 'yes');
 
-  try{ neoPlay(next === 'yes' ? 'ok' : next === 'no' ? 'no' : 'clear'); neoBuzzFor(next); }catch(e){}
-  if (isExtra) log.extra_fields[key] = (next === 'yes');
-  else log[key] = (next === 'yes');
-  /* الوقت يُختم بمُعرّف العمود نفسه — وهو ما تقرأه neoReadCellTime عبر cfId،
-     وهو نفس ما يكتبه toggleExtraField. كان يُختم بالمختصر x_<12> فلا يجده
-     القارئ أبداً، فيظهر ✓ بلا ساعة في كل عمود مخصّص للمواقع. */
-  const timeKey   = key;
-  const legacyKey = isExtra ? neoShortKey(key) : null;
-  if (next === 'yes') log.field_times[timeKey] = new Date().toISOString();
-  else delete log.field_times[timeKey];
-  /* المفتاح القديم يُمسح مع الإلغاء وإلا بقي وقتٌ يتيم يظهر بعد رفع العلامة */
-  if (legacyKey && next !== 'yes') delete log.field_times[legacyKey];
-  if (next === 'no') { if (!(noteKey in log.field_notes)) log.field_notes[noteKey] = ''; }
-  else delete log.field_notes[noteKey];
+  try{ neoPlay(on ? 'ok' : next === 'no' ? 'no' : 'clear'); neoBuzzFor(next); }catch(e){}
+  if (slot.extra){ log.extra_fields[slot.valKey] = on; log[slot.valKey] = on; }
+  else log[slot.valKey] = on;
+  if (on) log.field_times[slot.timeKey] = new Date().toISOString();
+  else {
+    delete log.field_times[slot.timeKey];
+    delete log.field_times[neoShortKey(slot.timeKey)];   /* مفتاح قديم مهجور */
+  }
+  if (next === 'no'){ if (!(slot.noteKey in log.field_notes)) log.field_notes[slot.noteKey] = ''; }
+  else delete log.field_notes[slot.noteKey];
 
   refreshShiftTable();
   await shiftSaveRow(locId);
@@ -4771,10 +4748,13 @@ async function shiftSaveRow(locId){
   const log = st.logsMap[locId];
   const { data: { user } } = await supabaseClient.auth.getUser();
   const payload = { location_id: locId, log_date: st.date, shift: st.shift, updated_by: user.id, updated_at: new Date().toISOString() };
-  FIELD_DEFS.forEach(f => { if (!String(f.key).startsWith('x_')) payload[f.key] = log[f.key] === true; });
-  const ex = {};
-  st.customFields.forEach(cf => { ex[cf.id] = log.extra_fields?.[cf.id] === true; });
-  FIELD_DEFS.forEach(f => { if (String(f.key).startsWith('x_')) ex[f.key] = log[f.key] === true || (log.extra_fields||{})[f.key] === true; });
+  /* كل عمود يُكتب في مكانه من نفس القائمة — لا حلقتان تفترقان */
+  const ex = { ...(log.extra_fields || {}) };
+  (st.defs || []).forEach(def => {
+    const slot = shiftSlot(def);
+    const on = (ex[slot.valKey] === true) || (log[slot.valKey] === true);
+    if (slot.extra) ex[slot.valKey] = on; else payload[slot.valKey] = on;
+  });
   payload.extra_fields = ex;
   payload.field_notes = log.field_notes || {};
   payload.field_times = log.field_times || {};
@@ -11699,7 +11679,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.04.07";
+const APP_VERSION = "2026.09.04.08";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
