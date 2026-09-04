@@ -4290,15 +4290,22 @@ async function renderShiftView(profile){
 
    القيد محروس في القاعدة بسياسة RLS لا في الواجهة وحدها، فلا يلتفّ عليه أحد.
    والحذف لا يمحو تاريخاً: فرعٌ له سجلات لا يُحذف نهائياً وإنما يُعطَّل. */
+/* الفرع ليس «كل كود فيه شرطة ورقم» — فأكواد مثل m-200 شائعة أصلاً وهي
+   مواقع أصلية. الفرع هو ما كان كودُه «كودَ موقعٍ قائم في القسم» + «-رقم»،
+   فلا يُعدّ شيء فرعاً إلا وأصلُه موجود فعلاً. */
 const NEO_SUB_RE = /^(.+)-(\d{1,4})$/;
-function neoSubParent(code){
+function neoSubSplit(code){
   const m = NEO_SUB_RE.exec(String(code || '').trim());
-  return m ? m[1] : '';
+  return m ? { base: m[1], num: parseInt(m[2], 10) } : null;
 }
-function neoIsSubLoc(code){ return !!neoSubParent(code); }
+/* codes: Set بأكواد القسم كلها */
+function neoSubParentIn(code, codes){
+  const sp = neoSubSplit(code);
+  return (sp && codes.has(sp.base)) ? sp.base : '';
+}
 function neoSubNum(code){
-  const m = NEO_SUB_RE.exec(String(code || '').trim());
-  return m ? parseInt(m[2], 10) : 0;
+  const sp = neoSubSplit(code);
+  return sp ? sp.num : 0;
 }
 let _subDept = '', _subParent = '', _subBusy = false;
 /* صيغة العدد العربية — «فرع واحد» لا «1 فرع» */
@@ -4333,9 +4340,11 @@ async function neoRenderSubLocs(){
   const p = document.getElementById('subLocPanel'); if (!p) return;
   const deptId = _subDept;
   const locs    = await getLocations(deptId);
-  window.__subCodes = locs.map(l => String(l.code));   /* تقرأها المعاينة */
-  const parents = locs.filter(l => !neoIsSubLoc(l.code));
-  const subs    = locs.filter(l =>  neoIsSubLoc(l.code));
+  const codeSet = new Set(locs.map(l => String(l.code)));
+  window.__subCodes = [...codeSet];                    /* تقرأها المعاينة */
+  const parentOf = l => neoSubParentIn(l.code, codeSet);
+  const subs    = locs.filter(l =>  parentOf(l));
+  const parents = locs.filter(l => !parentOf(l));
   if (_subParent && !parents.some(x => String(x.code) === String(_subParent))) _subParent = '';
 
   /* عدد سجلات كل فرع — هو ما يقرّر: حذف نهائي أم تعطيل */
@@ -4344,7 +4353,7 @@ async function neoRenderSubLocs(){
     counts[l.id] = await neoCountLogs('daily_logs', 'location_id', l.id);
   }));
 
-  const kids = base => subs.filter(l => neoSubParent(l.code) === base)
+  const kids = base => subs.filter(l => parentOf(l) === base)
                            .sort((a, b) => neoSubNum(a.code) - neoSubNum(b.code));
   const nextNum = base => { const k = kids(base); return k.length ? neoSubNum(k[k.length - 1].code) + 1 : 1; };
 
@@ -4474,7 +4483,9 @@ window.neoSubAdd = async function(){
   const locs = await getLocations(deptId);
   const parent = locs.find(l => String(l.code) === String(base));
   if (!parent){ neoNotify('الموقع الأصل لم يعد موجوداً'); await neoRenderSubLocs(); return; }
-  window.__subCodes = locs.map(l => String(l.code));
+  const codeSet = new Set(locs.map(l => String(l.code)));
+  if (neoSubParentIn(base, codeSet)){ neoNotify('«' + base + '» فرع أصلاً — لا يُفرَّع الفرع'); return; }
+  window.__subCodes = [...codeSet];
   const codes = neoSubPlanned();
   if (!codes.length){ neoNotify('كل هذه الأرقام موجودة أصلاً'); return; }
   _subBusy = true;
@@ -4494,6 +4505,11 @@ window.neoSubOff = async function(id, code){
 };
 
 window.neoSubDel = async function(id, code){
+  /* حارس أخير: لا يُحذف إلا فرعٌ أصلُه قائم — لا موقع أصلي */
+  const codeSet = new Set((await getLocations(_subDept)).map(l => String(l.code)));
+  if (!neoSubParentIn(code, codeSet)){
+    neoNotify('«' + code + '» موقع أصلي لا فرع — لا يمكن حذفه من هنا'); return;
+  }
   /* نُعيد العدّ لحظة الحذف — لا نثق بعدد مرسوم قبل دقائق */
   const n = await neoCountLogs('daily_logs', 'location_id', id);
   if (n){
@@ -11530,7 +11546,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.04.02";
+const APP_VERSION = "2026.09.04.03";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
