@@ -1769,14 +1769,20 @@ function neoCellMark(state){
 window.neoCellMark = neoCellMark;
 
 /* قراءة وقت خانة أياً كان مفتاحها */
+/* الصيغة المختصرة التي تُشتقّ منها مفاتيح الأعمدة المضافة */
+function neoShortKey(id){ return 'x_' + String(id).replace(/-/g,'').slice(0,12); }
+window.neoShortKey = neoShortKey;
+
 function neoReadCellTime(log, def, hall){
   const t = (log && (hall ? log.hall_field_times : log.field_times)) || {};
   if (!def) return null;
   /* الزمن يُخزَّن بمفاتيح مختلفة حسب نوع العمود:
      الأساسي بمفتاحه، والمضاف للمواقع بمُعرّفه الخام، ومعيار الموظف
      بـ extra_<id>. نجرّبها كلها بدل افتراض صيغة واحدة. */
+  /* المفتاح المختصر x_<12> كان يكتبه جدول الشفت للأعمدة القديمة، فيُقرأ
+     هنا أيضاً وإلا ضاع وقتُ كل عمود مخصّص للمواقع سبق تأشيره. */
   return t[def.key]
-      || (def.cfId ? (t[def.cfId] || t['extra_' + def.cfId]) : null)
+      || (def.cfId ? (t[def.cfId] || t['extra_' + def.cfId] || t[neoShortKey(def.cfId)]) : null)
       || (def.criterionId ? (t['extra_' + def.criterionId] || t[def.criterionId]) : null)
       || null;
 }
@@ -4658,10 +4664,15 @@ async function shiftCycleField(locId, key, isExtra){
   try{ neoPlay(next === 'yes' ? 'ok' : next === 'no' ? 'no' : 'clear'); neoBuzzFor(next); }catch(e){}
   if (isExtra) log.extra_fields[key] = (next === 'yes');
   else log[key] = (next === 'yes');
-  // سجّل وقت العلامة: مفتاح extra يُخزّن بالشكل المختصر x_ ليطابق العرض
-  const timeKey = isExtra ? ('x_' + String(key).replace(/-/g,'').slice(0,12)) : key;
+  /* الوقت يُختم بمُعرّف العمود نفسه — وهو ما تقرأه neoReadCellTime عبر cfId،
+     وهو نفس ما يكتبه toggleExtraField. كان يُختم بالمختصر x_<12> فلا يجده
+     القارئ أبداً، فيظهر ✓ بلا ساعة في كل عمود مخصّص للمواقع. */
+  const timeKey   = key;
+  const legacyKey = isExtra ? neoShortKey(key) : null;
   if (next === 'yes') log.field_times[timeKey] = new Date().toISOString();
   else delete log.field_times[timeKey];
+  /* المفتاح القديم يُمسح مع الإلغاء وإلا بقي وقتٌ يتيم يظهر بعد رفع العلامة */
+  if (legacyKey && next !== 'yes') delete log.field_times[legacyKey];
   if (next === 'no') { if (!(noteKey in log.field_notes)) log.field_notes[noteKey] = ''; }
   else delete log.field_notes[noteKey];
 
@@ -4934,21 +4945,34 @@ function buildEmptyLogPayload(existing, date, shift){
   };
 }
 
-/* ══ تتبّع توقيت كل علامة — يُدمج مع field_times الموجودة ══ */
+/* ══ تتبّع توقيت كل علامة — يُدمج مع field_times الموجودة ══
+   الحقل يُكتب ككائن كامل لا كتعديل جزئي، فقراءةٌ متأخّرة عن كتابةٍ سابقة
+   تمحو وقتاً سُجّل قبل لحظات. لذلك نحتفظ بآخر ما أرسلناه لكل صف ونُدمجه
+   فوق ما تُرجعه القاعدة — فضغطتان متتاليتان لا تُسقطان الأولى. */
+const _neoFtSent = {};
+function _neoFtKey(table, matchObj){
+  return table + '|' + Object.keys(matchObj).sort().map(k => k + '=' + matchObj[k]).join('&');
+}
 async function neoStampField(table, matchObj, fieldKey, willBeOn){
+  const ck = _neoFtKey(table, matchObj);
   try{
     // اقرأ الأوقات الحالية — قد يوجد أكثر من صف (شفتات) فلا نستخدم maybeSingle
     let q = supabaseClient.from(table).select('field_times,updated_at');
     Object.keys(matchObj).forEach(k => { q = q.eq(k, matchObj[k]); });
     const { data } = await q.order('updated_at', { ascending: false }).limit(1);
     const row = (data && data[0]) ? data[0] : null;
-    const times = (row && row.field_times && typeof row.field_times === 'object') ? { ...row.field_times } : {};
+    const fromDb = (row && row.field_times && typeof row.field_times === 'object') ? row.field_times : {};
+    const times = { ...fromDb, ...(_neoFtSent[ck] || {}) };
     if (willBeOn){ times[fieldKey] = new Date().toISOString(); }
     else { delete times[fieldKey]; }
+    _neoFtSent[ck] = times;
     return times;
   }catch(e){
     // حتى لو فشلت القراءة، نُرجع وقتاً جديداً للخانة (أفضل من لا شيء)
-    return willBeOn ? { [fieldKey]: new Date().toISOString() } : {};
+    const times = { ...(_neoFtSent[ck] || {}) };
+    if (willBeOn) times[fieldKey] = new Date().toISOString(); else delete times[fieldKey];
+    _neoFtSent[ck] = times;
+    return times;
   }
 }
 function neoFmtTime(iso){
@@ -11586,7 +11610,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.04.04";
+const APP_VERSION = "2026.09.04.05";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
