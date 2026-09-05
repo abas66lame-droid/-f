@@ -3946,7 +3946,7 @@ window.neoSavedPct = neoSavedPct;
 
 /* يحسب نسبة قسم من بيانات شاشة مسؤول الشفت نفسها — المصدر الأدق */
 function neoComputeShiftPct(){
-  let total = 0, done = 0;
+  let total = 0, done = 0, wrong = 0;   /* wrong = ✗ ومعها ملاحظة: لا تُنقص النسبة وتُعرض بجانبها */
   try{
     /* جدول المواقع */
     const st = shiftRowsState;
@@ -3959,7 +3959,9 @@ function neoComputeShiftPct(){
           if (typeof neoCellDisabled === 'function' && neoCellDisabled(loc, def.key)) return;
           total++;
           const s = shiftDefState(log, def);
-          if (s === 'yes' || (s === 'no' && (fn[shiftSlot(def).noteKey]||'').trim())) done++;
+          const ok = (s === 'no' && (fn[shiftSlot(def).noteKey]||'').trim());
+          if (s === 'yes' || ok) done++;
+          if (ok) wrong++;
         });
       });
     }
@@ -3974,7 +3976,9 @@ function neoComputeShiftPct(){
           if (typeof neoCellDisabled === 'function' && neoCellDisabled(it, f.key)) return;
           total++;
           const s = progState(log, f.key);
-          if (s === 'yes' || (s === 'no' && (fn[f.key]||'').trim())) done++;
+          const ok = (s === 'no' && (fn[f.key]||'').trim());
+          if (s === 'yes' || ok) done++;
+          if (ok) wrong++;
         });
       });
     });
@@ -3984,11 +3988,13 @@ function neoComputeShiftPct(){
       (CLEAN_FIELD_DEFS||[]).forEach(f => {
         total++;
         const s = progState(cleanProgState.log, f.key);
-        if (s === 'yes' || (s === 'no' && (fn[f.key]||'').trim())) done++;
+        const ok = (s === 'no' && (fn[f.key]||'').trim());
+        if (s === 'yes' || ok) done++;
+        if (ok) wrong++;
       });
     }
   }catch(e){}
-  return { total, done, pct: total ? Math.min(100, Math.round((done/total)*100)) : 0 };
+  return { total, done, wrong, pct: total ? Math.min(100, Math.round((done/total)*100)) : 0 };
 }
 window.neoComputeShiftPct = neoComputeShiftPct;
 
@@ -4044,6 +4050,9 @@ function neoRefreshShiftPctBox(deptId, date){
     /* عدّ تصاعدي بدل قفزة جافة للرقم — لمسة فقط، الحساب والحفظ لم يتغيّرا */
     try{ neoCountUp(el, r.pct, '٪', 450); }catch(e){ el.textContent = r.pct + '٪'; }
     el.style.color = r.pct >= 90 ? '#38d9b9' : r.pct >= 60 ? '#d3a04f' : '#e15b64';
+    /* الـ✗ الموثّقة لا تُنقص النسبة، لكنها تُعرض بجانبها فلا تختفي عن الأنظار */
+    const wr = document.getElementById('shiftPctWrong');
+    if (wr) wr.textContent = r.wrong ? (r.wrong + '✗') : '';
     const sv = document.getElementById('shiftPctSaved');
     if (sv){
       const saved = neoSavedPct(date, deptId);
@@ -4444,7 +4453,10 @@ async function renderShiftView(profile){
       <div id="shiftPctBox" style="background:#0c1524;border:1px solid rgba(56,217,185,0.3);border-radius:10px;padding:11px;margin-bottom:10px;">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
           <span style="color:#8fa3b8;font-size:12px;">نسبتك اليوم</span>
-          <span id="shiftPctNow" style="color:#38d9b9;font-size:20px;font-weight:800;">—</span>
+          <span style="display:flex;align-items:baseline;gap:7px;">
+            <span id="shiftPctNow" style="color:#38d9b9;font-size:20px;font-weight:800;">—</span>
+            <span id="shiftPctWrong" style="color:#e0a3a7;font-size:13px;font-weight:700;"></span>
+          </span>
         </div>
         <button onclick="neoSaveShiftPct('${deptId}','${date}')" style="width:100%;margin-top:9px;font-size:13px;padding:11px;background:#14705f;">💾 حفظ وتثبيت النسبة</button>
         <div id="shiftPctSaved" style="color:#7487a0;font-size:11px;margin-top:6px;text-align:center;"></div>
@@ -8206,7 +8218,7 @@ function salesTabBarHtml(active){
     { id: 'leaderboard', icon: '🏆', label: 'المتصدرين' },
     { id: 'report', icon: '📊', label: 'التقرير' },
     { id: 'trend', icon: '📈', label: 'الاتجاه' },
-    { id: 'managers', icon: '🧑‍💼', label: 'المسؤولين' },
+    /* أُزيل تبويب «المسؤولين» — صار داخل «الأقسام» فالقائمة واحدة */
     { id: 'fleet', icon: '🚚', label: 'التوصيل' },
     { id: 'account', icon: '🚨', label: 'الإبلاغات' }
   ];
@@ -8259,10 +8271,15 @@ async function buildSalesDeptCardsHtml(date, returnTab){
       ? '<span class="badge" style="background:rgba(122,167,255,0.12);color:#8fa3b8;">لم يُسجَّل</span>'
         + '<span style="color:#5d6d80;font-size:11px;margin-inline-start:6px;">(تقدير تلقائي ' + pct + '٪)</span>'
       : '<span class="badge ' + badgeClass + '">' + pct + '%</span>';
+    /* ✗ الموثّقة لا تُنقص النسبة، فتُعرض بجانبها لتبقى ظاهرة للمدير */
+    const nWrong = (typeof neoWrongOf === 'function') ? neoWrongOf(dept.id) : 0;
+    const wrongHtml = nWrong
+      ? ' <span style="color:#e0a3a7;font-size:12px;font-weight:700;" title="خانات ✗ موثّقة بملاحظة — لا تُنقص النسبة">'
+        + nWrong + '✗</span>' : '';
     cardsHtml += `
       <div class="card dept-card" onclick="salesDetailReturnTab='${returnTab}'; openSalesDept('${dept.id}')">
         <h3>${esc(dept.name)}</h3>
-        <div>نسبة الإنجاز العامة: ${pctHtml}</div>
+        <div>نسبة الإنجاز العامة: ${pctHtml}${wrongHtml}</div>
       </div>`;
   }
   return cardsHtml || '<div class="card">لا توجد أقسام مسجلة</div>';
@@ -8270,6 +8287,7 @@ async function buildSalesDeptCardsHtml(date, returnTab){
 
 async function renderSalesView(){
   currentSalesDeptId = null;
+  window.salesManagersKind = null;   /* الرجوع للأقسام يُنهي شاشة المسؤولين */
   const el = document.getElementById('salesView');
   el.innerHTML = '<div class="status neoLoad">جاري التحميل...</div>';
   try {
@@ -8288,7 +8306,29 @@ async function renderSalesView(){
         </div>
         <div style="color:#999; font-size:12px;">اضغط على أي قسم لعرض التحليل التفصيلي الكامل — التاريخ: ${date}</div>
       </div>
-      ${cardsHtml}`;
+      ${cardsHtml}
+      <div class="card">
+        <h3 style="margin:0 0 4px;">🧑‍💼 تقييم المسؤولين</h3>
+        <div style="color:#8fa3b8;font-size:12px;">تقرير أداء المسؤولين — يومي وأسبوعي وشهري</div>
+      </div>
+      <div class="card dept-card" onclick="salesPickManagers('shift')" style="cursor:pointer;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div>
+            <h3 style="margin:0;">👤 مسؤولو الشفت</h3>
+            <div style="color:#999; font-size:12px; margin-top:4px;">نسبة إنجاز القسم الذي يديره كل مسؤول</div>
+          </div>
+          <span style="color:#5d6d80; font-size:18px;">‹</span>
+        </div>
+      </div>
+      <div class="card dept-card" onclick="salesPickManagers('hall')" style="cursor:pointer;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div>
+            <h3 style="margin:0;">🏬 مسؤولو الصالة</h3>
+            <div style="color:#999; font-size:12px; margin-top:4px;">ما دقّقه كل مشرف من عيّنته</div>
+          </div>
+          <span style="color:#5d6d80; font-size:18px;">‹</span>
+        </div>
+      </div>`;
     mountSalesShell('overview', innerHtml);
   try{ neoPlay('report'); }catch(e){}
   } catch (err) {
@@ -8312,6 +8352,11 @@ function setOverviewDate(dateStr){
    قاس بها قاسَ كل الأقسام بأعمدة قسمٍ واحد. هنا نقرأ الأعداد لكل قسم
    على حدة مرة واحدة، وتستعملها حاسبةُ اليوم وحاسبةُ المدى معاً — فلا
    تفترقان ولا تعود إحداهما تُصلَح دون الأخرى. */
+/* عدد الخانات المؤشَّرة ✗ بملاحظة لكل قسم — يملؤه حساب اليوم ويقرأه العرض */
+let _neoWrongByDept = {};
+function neoWrongOf(deptId){ return _neoWrongByDept[String(deptId)] || 0; }
+window.neoWrongOf = neoWrongOf;
+
 async function neoDeptCols(){
   /* التعطيل والإجازات جاهزة قبل أي عدّ — الحاسبتان تبدآن من هنا، فلا
      تعتمدان على شاشةٍ حمّلتهما قبلهما بالصدفة. */
@@ -8382,6 +8427,18 @@ async function computeAllDeptsOverallPct(date){
     Object.keys(ev).forEach(k => { if (ev[k] === true && !seen['e_'+k]){ seen['e_'+k]=1; c++; } });
     return Math.min(c, cap);
   };
+  /* الخانة ✗ ومعها ملاحظة تُحتسب منجزة (السبب موثَّق) — لكنها ليست ✓،
+     فنعدّها على حدة لتُعرض بجانب النسبة: «١٠٠٪ · ١٧✗». */
+  const wrongIn = (row, baseDefs) => {
+    if (!row) return 0;
+    let c = 0; const seen = {};
+    const fn = row.field_notes || {};
+    const note = k => String(fn[k] || fn['extra_' + k] || '').trim();
+    (baseDefs||[]).forEach(f => { if (row[f.key] !== true && note(f.key) && !seen[f.key]){ seen[f.key]=1; c++; } });
+    const ex = row.extra_fields || {};
+    Object.keys(ex).forEach(k => { if (ex[k] !== true && note(k) && !seen[k]){ seen[k]=1; c++; } });
+    return c;
+  };
   const totals = {}; // deptId -> { total, done }
   /* عدد الشفتات المستخدمة فعلياً في هذا اليوم — لا نفترض شفتين إن كان النظام يعمل بشفت واحد */
   const SHIFTS = 1;   /* نظام الشفتات ملغى — يوم واحد لكل تاريخ */
@@ -8393,11 +8450,13 @@ async function computeAllDeptsOverallPct(date){
     (hd||[]).forEach(r => { (hiddenMap[r.department_id] = hiddenMap[r.department_id] || new Set()).add((r.name||'').replace('⟦secoff⟧','')); });
   }catch(e){}
   const isHid = (deptId, sc) => !!(hiddenMap[deptId] && hiddenMap[deptId].has(sc));
-  const bump = (deptId, total, done, scope) => {
+  _neoWrongByDept = {};
+  const bump = (deptId, total, done, scope, wrong) => {
     if (scope && isHid(deptId, scope)) return;   /* جدول مخفي لا يدخل الحساب */
     if (!totals[deptId]) totals[deptId] = { total: 0, done: 0 };
     totals[deptId].total += total;
     totals[deptId].done += done;
+    if (wrong) _neoWrongByDept[deptId] = (_neoWrongByDept[deptId] || 0) + wrong;
   };
 
   /* ══ الجداول المضافة (custom_sections) — تُحتسب كباقي الجداول ══ */
@@ -8441,7 +8500,8 @@ async function computeAllDeptsOverallPct(date){
   (locLogs||[]).forEach(l => {
     const deptId = locToDept[l.location_id];
     if (!deptId) return;
-    bump(deptId, 0, doneIn(l, (NEO_BASE_DEFS&&NEO_BASE_DEFS.loc)||FIELD_DEFS, colsOf(deptId,'loc')), 'loc');
+    bump(deptId, 0, doneIn(l, (NEO_BASE_DEFS&&NEO_BASE_DEFS.loc)||FIELD_DEFS, colsOf(deptId,'loc')), 'loc',
+         wrongIn(l, (NEO_BASE_DEFS&&NEO_BASE_DEFS.loc)||FIELD_DEFS));
   });
 
   // الموظفين
@@ -8455,7 +8515,8 @@ async function computeAllDeptsOverallPct(date){
   (staffLogs||[]).forEach(e => {
     const deptId = staffToDept[e.staff_id];
     if (!deptId) return;
-    bump(deptId, 0, doneIn(e, (NEO_BASE_DEFS&&NEO_BASE_DEFS.staff)||STAFF_FIELD_DEFS, colsOf(deptId,'staff')), 'staff');
+    bump(deptId, 0, doneIn(e, (NEO_BASE_DEFS&&NEO_BASE_DEFS.staff)||STAFF_FIELD_DEFS, colsOf(deptId,'staff')), 'staff',
+         wrongIn(e, (NEO_BASE_DEFS&&NEO_BASE_DEFS.staff)||STAFF_FIELD_DEFS));
   });
 
   // المهام اليومية
@@ -8944,13 +9005,18 @@ window.salesPickManagers = function(kind){
   window.salesManagersKind = kind;
   renderSalesManagersTab();
 };
+/* الرجوع من تقييم المسؤولين إلى قائمة الأقسام — صارا قائمة واحدة */
+window.salesBackToDepts = function(){
+  window.salesManagersKind = null;
+  return renderSalesView();
+};
 
 async function renderSalesManagersTab(period){
   if (period) salesManagersPeriod = period;
 
   /* شاشة اختيار الفئة — تمنع حساب الفئتين معاً فيقصر التحميل للنصف */
   if (!window.salesManagersKind){
-    mountSalesShell('managers', `
+    mountSalesShell('overview', `
       <div class="card">
         <h2>🧑‍💼 تقييم المسؤولين</h2>
         <div style="color:#999; font-size:12px; margin-top:6px;">اختر الفئة — يُحمَّل ما تحتاجه فقط</div>
@@ -8977,9 +9043,9 @@ async function renderSalesManagersTab(period){
   }
 
   const K = window.salesManagersKind;
-  mountSalesShell('managers', `
+  mountSalesShell('overview', `
     <div class="card">
-      <button class="secondary" onclick="salesPickManagers(null)" style="font-size:12px;padding:7px 13px;">◀ رجوع للفئات</button>
+      <button class="secondary" onclick="salesBackToDepts()" style="font-size:12px;padding:7px 13px;">◀ رجوع للأقسام</button>
       <h2 style="margin-top:10px;">${K==='shift' ? '👤 مسؤولو الشفت' : '🏬 مسؤولو الصالة'}</h2>
       <div class="tabs">
         <div class="tab ${salesManagersPeriod==='daily'?'active':''}" onclick="renderSalesManagersTab('daily')">يومي</div>
@@ -9014,7 +9080,7 @@ async function renderSalesManagersTab(period){
     const shiftHtml = shiftManagers.length ? shiftManagers.map(p => {
       const deptId = (p.department_ids && p.department_ids[0]) || null;
       const pct = deptId ? (pctByDept[deptId] ?? 0) : 0;
-      const clickAttr = deptId ? `onclick="salesDetailReturnTab='managers'; openSalesDept('${deptId}')"` : '';
+      const clickAttr = deptId ? `onclick="salesDetailReturnTab='overview'; openSalesDept('${deptId}')"` : '';
       return `
         <div class="card" style="display:flex; justify-content:space-between; align-items:center; padding:12px 16px; gap:8px;">
           <div ${deptId ? 'class="dept-card"' : ''} ${clickAttr} style="flex:1; display:flex; justify-content:space-between; align-items:center; ${deptId ? 'cursor:pointer;' : ''}">
@@ -9138,7 +9204,7 @@ async function renderSalesManagersTab(period){
 }
 
 async function renderSalesManagerHallDetail(profileId){
-  mountSalesShell('managers', `<div class="card"><div class="status neoLoad">جاري التحميل...</div></div>`);
+  mountSalesShell('overview', `<div class="card"><div class="status neoLoad">جاري التحميل...</div></div>`);
   try {
     const { startDate, endDate } = leaderboardRange(salesManagersPeriod, salesSelectedDate);
     const [{ data: profile }, { data: depts }, pctByDept] = await Promise.all([
@@ -9170,7 +9236,7 @@ async function renderSalesManagerHallDetail(profileId){
       const pct = pctByDept[id] ?? 0;
       return `
         <div class="card" style="padding:12px 16px; margin-bottom:10px;">
-          <div class="dept-card" onclick="salesDetailReturnTab='managers'; openSalesDept('${id}')" style="display:flex; justify-content:space-between; align-items:center; cursor:pointer;">
+          <div class="dept-card" onclick="salesDetailReturnTab='overview'; openSalesDept('${id}')" style="display:flex; justify-content:space-between; align-items:center; cursor:pointer;">
             <h3 style="margin:0;">${dept?.name || ''}</h3>
             <div class="badge ${badgeClass(pct)}">${pct}%</div>
           </div>
@@ -9195,9 +9261,9 @@ async function renderSalesManagerHallDetail(profileId){
       <div id="hmDepts" style="display:none;">
         ${rows || '<div class="card">لا توجد أقسام</div>'}
       </div>`;
-    mountSalesShell('managers', innerHtml);
+    mountSalesShell('overview', innerHtml);
   } catch (err) {
-    mountSalesShell('managers', `<div class="card" style="color:#ff7b7b;">❌ خطأ: ${err.message || JSON.stringify(err)}</div>`);
+    mountSalesShell('overview', `<div class="card" style="color:#ff7b7b;">❌ خطأ: ${err.message || JSON.stringify(err)}</div>`);
   }
 }
 
@@ -9243,7 +9309,7 @@ window.neoBuildCustomSectionTables = neoBuildCustomSectionTables;
 
 async function renderSalesDeptMissingDetail(deptId, profileId){
   try{ neoPlay('drill'); }catch(e){}
-  mountSalesShell('managers', `<div class="card"><div class="status neoLoad">جاري التحميل...</div></div>`);
+  mountSalesShell('overview', `<div class="card"><div class="status neoLoad">جاري التحميل...</div></div>`);
   try {
     const date = salesSelectedDate || todayStr();
     if (typeof neoSnapshotDefs === 'function') neoSnapshotDefs();
@@ -9420,16 +9486,16 @@ async function renderSalesDeptMissingDetail(deptId, profileId){
         ${sectionsHtml || '<div style="color:#999;">لا توجد عناصر مسجلة لهذا القسم</div>'}
         ${csTables.html || ''}
       </div>`;
-    mountSalesShell('managers', innerHtml);
+    mountSalesShell('overview', innerHtml);
   } catch (err) {
-    mountSalesShell('managers', `<div class="card" style="color:#ff7b7b;">❌ خطأ: ${err.message || JSON.stringify(err)}</div>`);
+    mountSalesShell('overview', `<div class="card" style="color:#ff7b7b;">❌ خطأ: ${err.message || JSON.stringify(err)}</div>`);
   }
 }
 
 // يعرض لمدير المبيعات نواقص تدقيق مسؤول الصالة نفسه (وين لسا ما راجع) — مو نواقص مسؤول الشفت
 async function renderSalesHallAuditDetail(deptId, profileId){
   try{ neoPlay('drill'); }catch(e){}
-  mountSalesShell('managers', `<div class="card"><div class="status neoLoad">جاري التحميل...</div></div>`);
+  mountSalesShell('overview', `<div class="card"><div class="status neoLoad">جاري التحميل...</div></div>`);
   try {
     const date = salesSelectedDate || todayStr();
     neoColsDept = null;
@@ -9550,15 +9616,15 @@ async function renderSalesHallAuditDetail(deptId, profileId){
         ${sectionsHtml || '<div style="color:#999;">لا توجد عناصر بعيّنة اليوم لهذا القسم</div>'}
         ${csTablesH.html || ''}
       </div>`;
-    mountSalesShell('managers', innerHtml);
+    mountSalesShell('overview', innerHtml);
   } catch (err) {
-    mountSalesShell('managers', `<div class="card" style="color:#ff7b7b;">❌ خطأ: ${err.message || JSON.stringify(err)}</div>`);
+    mountSalesShell('overview', `<div class="card" style="color:#ff7b7b;">❌ خطأ: ${err.message || JSON.stringify(err)}</div>`);
   }
 }
 
 
 async function renderEditManagerForm(profileId, role){
-  mountSalesShell('managers', `<div class="card"><div class="status neoLoad">جاري التحميل...</div></div>`);
+  mountSalesShell('overview', `<div class="card"><div class="status neoLoad">جاري التحميل...</div></div>`);
   try {
     const [{ data: profile }, { data: depts }] = await Promise.all([
       supabaseClient.from('profiles').select('*').eq('id', profileId).single(),
@@ -9591,9 +9657,9 @@ async function renderEditManagerForm(profileId, role){
         <button onclick="resetManagerPassword('${profileId}', this)" style="margin-top:8px; width:100%;">🔑 تحديث كلمة السر</button>
         <div id="resetPasswordMsg" style="margin-top:8px; font-size:12px;"></div>
       </div>`;
-    mountSalesShell('managers', innerHtml);
+    mountSalesShell('overview', innerHtml);
   } catch (err) {
-    mountSalesShell('managers', `<div class="card" style="color:#ff7b7b;">❌ خطأ: ${err.message || JSON.stringify(err)}</div>`);
+    mountSalesShell('overview', `<div class="card" style="color:#ff7b7b;">❌ خطأ: ${err.message || JSON.stringify(err)}</div>`);
   }
 }
 
@@ -11810,7 +11876,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.05.03";
+const APP_VERSION = "2026.09.05.04";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
