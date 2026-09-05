@@ -9689,20 +9689,23 @@ async function renderSalesDeptChooser(deptId){
       <button class="secondary" onclick="switchSalesTab(salesDetailReturnTab || 'overview')">◀ رجوع</button>
       <h2 style="margin-top:10px;">${dept?.name || ''}</h2>
       <div style="color:#999; font-size:12px; margin-bottom:14px;">اختر وش تبي تسوي بهذا القسم</div>
-      <button onclick="renderSalesDeptMonitor('${deptId}')" style="width:100%; margin-bottom:10px; padding:16px; font-size:15px;">📊 خانة التدقيق — تحليل وتقارير</button>
+      <button onclick="renderSalesDeptMonitor('${deptId}')" style="width:100%; margin-bottom:10px; padding:16px; font-size:15px;">🏆 نقاط الموظفين — سجل وتصدير Excel</button>
       <button class="secondary" onclick="renderSalesDeptMissingDetail('${deptId}', null)" style="width:100%; margin-bottom:10px; padding:16px; font-size:15px;">🔍 خانة التدقيق المفصل — نواقص اليوم</button>
       <button class="secondary" onclick="renderSalesDeptManage('${deptId}')" style="width:100%; padding:16px; font-size:15px;">⚙️ خانة التعديل — إدارة القسم (مواقع، موظفين، مهام، أجهزة)</button>
     </div>`;
 }
 
 async function renderSalesDeptMonitor(deptId){
+  /* كانت هذه الشاشة عشر بطاقات تحليل لم تُستعمل — بقي منها ما يُستعمل
+     فعلاً: سجل نقاط الموظفين وتصديره. ودوال التحليل باقية في الملف
+     لمن أرادها لاحقاً، لكنها لم تعد تُرسم ولا تُحمَّل. */
   const el = document.getElementById('salesView');
   salesSelectedDate = salesSelectedDate || todayStr();
   const { data: dept } = await supabaseClient.from('departments').select('*').eq('id', deptId).single();
   el.innerHTML = `
     <div class="card">
       <button class="secondary" onclick="renderSalesDeptChooser('${deptId}')">◀ رجوع</button>
-      <h2 style="margin-top:10px;">📊 ${dept?.name || ''} — خانة التدقيق</h2>
+      <h2 style="margin-top:10px;">🏆 ${dept?.name || ''} — نقاط الموظفين</h2>
       <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px; flex-wrap:wrap;">
         <button class="secondary" onclick="changeSalesDate(-1)">◀ يوم سابق</button>
         <input type="date" value="${salesSelectedDate}" onchange="setSalesDate(this.value)">
@@ -9710,127 +9713,17 @@ async function renderSalesDeptMonitor(deptId){
         <button class="secondary" onclick="setSalesDate('${todayStr()}')">اليوم الحالي</button>
       </div>
       <div class="tabs">
-        <div class="tab active" id="tabDay" onclick="loadSalesRange('day')">يومي</div>
-        <div class="tab" id="tabWeek" onclick="loadSalesRange('week')">أسبوعي</div>
-        <div class="tab" id="tabMonth" onclick="loadSalesRange('month')">شهري</div>
-      </div>
-      <div id="insightsWrap"></div>
-      <button class="secondary" onclick="exportTableToExcel('salesTableWrap', 'تحليل_المواقع', this)">📥 تصدير Excel</button>
-      <div id="salesTableWrap" class="status neoLoad">جاري التحميل...</div>
-    </div>
-    <div class="card">
-      <h2>👤 تحليل تقييم الموظفين</h2>
-      <div class="tabs">
-        <div class="tab active" id="staffTabDay" onclick="loadStaffRange('day')">يومي</div>
-        <div class="tab" id="staffTabWeek" onclick="loadStaffRange('week')">أسبوعي</div>
-        <div class="tab" id="staffTabMonth" onclick="loadStaffRange('month')">شهري</div>
-      </div>
-      <div id="staffInsightsWrap"></div>
-      <button class="secondary" onclick="exportTableToExcel('staffTableWrap', 'تقييم_الموظفين', this)">📥 تصدير Excel</button>
-      <div id="staffTableWrap" class="status neoLoad">جاري التحميل...</div>
-    </div>
-    <div class="card">
-      <h2>🏆 نقاط الموظفين</h2>
-      <div class="tabs">
         <div class="tab active" id="pointsTabDay" onclick="loadPointsRange('day')">يومي</div>
         <div class="tab" id="pointsTabWeek" onclick="loadPointsRange('week')">أسبوعي</div>
         <div class="tab" id="pointsTabMonth" onclick="loadPointsRange('month')">شهري</div>
       </div>
       <button class="secondary" id="pointsExportBtn" onclick="exportPointsLog(currentPointsRange, this)">📥 تصدير Excel (سجل يومي)</button>
       <div id="pointsTableWrap" class="status neoLoad">جاري التحميل...</div>
-    </div>
-    <div class="card">
-      <h2>📝 تحليل المهام اليومية</h2>
-      <div class="tabs">
-        <div class="tab active" id="taskTabDay" onclick="loadTaskRange('day')">يومي</div>
-        <div class="tab" id="taskTabWeek" onclick="loadTaskRange('week')">أسبوعي</div>
-        <div class="tab" id="taskTabMonth" onclick="loadTaskRange('month')">شهري</div>
-      </div>
-      <div id="taskInsightsWrap"></div>
-      <button class="secondary" onclick="exportTableToExcel('taskTableWrap', 'تحليل_المهام', this)">📥 تصدير Excel</button>
-      <div id="taskTableWrap" class="status neoLoad">جاري التحميل...</div>
-    </div>
-    ${dept?.name === IPAD_READER_SEPARATE_DEPT ? `
-    <div class="card">
-      <h2>📱 تحليل جرد الآيباد</h2>
-      <div class="tabs">
-        <div class="tab active" id="ipadTabDay" onclick="loadIpadRange('day')">يومي</div>
-        <div class="tab" id="ipadTabWeek" onclick="loadIpadRange('week')">أسبوعي</div>
-        <div class="tab" id="ipadTabMonth" onclick="loadIpadRange('month')">شهري</div>
-      </div>
-      <button class="secondary" onclick="exportTableToExcel('ipadTableWrap', 'جرد_الآيباد', this)">📥 تصدير Excel</button>
-      <div id="ipadTableWrap" class="status neoLoad">جاري التحميل...</div>
-    </div>
-    <div class="card">
-      <h2>🔍 تحليل جرد قارئ السيريال</h2>
-      <div class="tabs">
-        <div class="tab active" id="readerTabDay" onclick="loadReaderRange('day')">يومي</div>
-        <div class="tab" id="readerTabWeek" onclick="loadReaderRange('week')">أسبوعي</div>
-        <div class="tab" id="readerTabMonth" onclick="loadReaderRange('month')">شهري</div>
-      </div>
-      <button class="secondary" onclick="exportTableToExcel('readerTableWrap', 'جرد_قارئ_السيريال', this)">📥 تصدير Excel</button>
-      <div id="readerTableWrap" class="status neoLoad">جاري التحميل...</div>
-    </div>` : `
-    <div class="card">
-      <h2>📱 تحليل جرد الآيباد وقارئ السيريال</h2>
-      <div class="tabs">
-        <div class="tab active" id="ipadReaderTabDay" onclick="loadIpadReaderDeviceRange('day')">يومي</div>
-        <div class="tab" id="ipadReaderTabWeek" onclick="loadIpadReaderDeviceRange('week')">أسبوعي</div>
-        <div class="tab" id="ipadReaderTabMonth" onclick="loadIpadReaderDeviceRange('month')">شهري</div>
-      </div>
-      <button class="secondary" onclick="exportTableToExcel('ipadReaderTableWrap', 'جرد_الآيباد_والقارئ', this)">📥 تصدير Excel</button>
-      <div id="ipadReaderTableWrap" class="status neoLoad">جاري التحميل...</div>
-    </div>`}
-    ${LAPTOP_ENABLED_DEPTS.includes(dept?.name) ? `
-    <div class="card">
-      <h2>💻 تحليل جرد اللابتوبات</h2>
-      <div class="tabs">
-        <div class="tab active" id="laptopTabDay" onclick="loadLaptopRange('day')">يومي</div>
-        <div class="tab" id="laptopTabWeek" onclick="loadLaptopRange('week')">أسبوعي</div>
-        <div class="tab" id="laptopTabMonth" onclick="loadLaptopRange('month')">شهري</div>
-      </div>
-      <button class="secondary" onclick="exportTableToExcel('laptopTableWrap', 'جرد_اللابتوبات', this)">📥 تصدير Excel</button>
-      <div id="laptopTableWrap" class="status neoLoad">جاري التحميل...</div>
-    </div>` : ''}
-    ${POS_ENABLED_DEPTS.includes(dept?.name) ? `
-    <div class="card">
-      <h2>💳 تحليل جرد أجهزة POS</h2>
-      <div class="tabs">
-        <div class="tab active" id="posDeviceTabDay" onclick="loadPosDeviceRange('day')">يومي</div>
-        <div class="tab" id="posDeviceTabWeek" onclick="loadPosDeviceRange('week')">أسبوعي</div>
-        <div class="tab" id="posDeviceTabMonth" onclick="loadPosDeviceRange('month')">شهري</div>
-      </div>
-      <button class="secondary" onclick="exportTableToExcel('posDeviceTableWrap', 'جرد_أجهزة_POS', this)">📥 تصدير Excel</button>
-      <div id="posDeviceTableWrap" class="status neoLoad">جاري التحميل...</div>
-    </div>` : ''}
-    <div class="card">
-      <h2>🧹 تحليل نظافة القسم</h2>
-      <div class="tabs">
-        <div class="tab active" id="cleanTabDay" onclick="loadCleanRange('day')">يومي</div>
-        <div class="tab" id="cleanTabWeek" onclick="loadCleanRange('week')">أسبوعي</div>
-        <div class="tab" id="cleanTabMonth" onclick="loadCleanRange('month')">شهري</div>
-      </div>
-      <button class="secondary" onclick="exportTableToExcel('cleanTableWrap', 'نظافة_القسم', this)">📥 تصدير Excel</button>
-      <div id="cleanTableWrap" class="status neoLoad">جاري التحميل...</div>
-    </div>
-    <div class="card" id="customSectionsMonitor"></div>`;
+    </div>`;
   neoSetManageMode(false);
   currentShiftChoice = 'morning';
   currentDate = todayStr();
-  /* طي كل بطاقات التحليل — تُحمّل عند الفتح فقط */
-  neoCollapseCards('salesView', [
-    { fn: () => loadSalesRange('day') },
-    { fn: () => loadStaffRange('day') },
-    { fn: () => loadPointsRange('day') },
-    { fn: () => loadTaskRange('day') },
-    ...(dept?.name === IPAD_READER_SEPARATE_DEPT
-        ? [{ fn: () => loadIpadRange('day') }, { fn: () => loadReaderRange('day') }]
-        : [{ fn: () => loadIpadReaderDeviceRange('day') }]),
-    ...(LAPTOP_ENABLED_DEPTS.includes(dept?.name) ? [{ fn: () => loadLaptopRange('day') }] : []),
-    ...(POS_ENABLED_DEPTS.includes(dept?.name) ? [{ fn: () => loadPosDeviceRange('day') }] : []),
-    { fn: () => loadCleanRange('day') },
-    { fn: () => renderCustomSectionsMonitor(deptId) }
-  ]);
+  await loadPointsRange('day');
 }
 
 /* ══ طي عام لأي شاشة: كل بطاقة فيها عنوان تصبح قابلة للطي ══ */
@@ -9980,6 +9873,8 @@ function refreshSalesDateUI(){
 }
 
 async function loadStaffRange(range){
+  /* بطاقتها لم تعد تُرسم — الخروج بهدوء بدل الانهيار على عنصر مفقود */
+  if (!document.getElementById('staffTableWrap')) return;
   currentStaffRange = range;
   ['staffTabDay','staffTabWeek','staffTabMonth'].forEach(id => document.getElementById(id).classList.remove('active'));
   const tabId = range === 'day' ? 'staffTabDay' : range === 'week' ? 'staffTabWeek' : 'staffTabMonth';
@@ -10069,6 +9964,8 @@ async function loadStaffRange(range){
 }
 
 async function loadSalesRange(range){
+  /* بطاقتها لم تعد تُرسم — الخروج بهدوء بدل الانهيار على عنصر مفقود */
+  if (!document.getElementById('salesTableWrap')) return;
   currentSalesRange = range;
   ['tabDay','tabWeek','tabMonth'].forEach(id => document.getElementById(id).classList.remove('active'));
   const tabId = range === 'day' ? 'tabDay' : range === 'week' ? 'tabWeek' : 'tabMonth';
@@ -10172,6 +10069,8 @@ async function loadSalesRange(range){
 }
 
 async function loadTaskRange(range){
+  /* بطاقتها لم تعد تُرسم — الخروج بهدوء بدل الانهيار على عنصر مفقود */
+  if (!document.getElementById('taskTableWrap')) return;
   currentTaskRange = range;
   ['taskTabDay','taskTabWeek','taskTabMonth'].forEach(id => document.getElementById(id).classList.remove('active'));
   const tabId = range === 'day' ? 'taskTabDay' : range === 'week' ? 'taskTabWeek' : 'taskTabMonth';
@@ -10261,6 +10160,8 @@ async function loadTaskRange(range){
 }
 
 async function loadIpadRange(range){
+  /* بطاقتها لم تعد تُرسم — الخروج بهدوء بدل الانهيار على عنصر مفقود */
+  if (!document.getElementById('ipadTableWrap')) return;
   ['ipadTabDay','ipadTabWeek','ipadTabMonth'].forEach(id => document.getElementById(id).classList.remove('active'));
   const tabId = range === 'day' ? 'ipadTabDay' : range === 'week' ? 'ipadTabWeek' : 'ipadTabMonth';
   document.getElementById(tabId).classList.add('active');
@@ -10296,6 +10197,8 @@ async function loadIpadRange(range){
 }
 
 async function loadReaderRange(range){
+  /* بطاقتها لم تعد تُرسم — الخروج بهدوء بدل الانهيار على عنصر مفقود */
+  if (!document.getElementById('readerTableWrap')) return;
   ['readerTabDay','readerTabWeek','readerTabMonth'].forEach(id => document.getElementById(id).classList.remove('active'));
   const tabId = range === 'day' ? 'readerTabDay' : range === 'week' ? 'readerTabWeek' : 'readerTabMonth';
   document.getElementById(tabId).classList.add('active');
@@ -10331,6 +10234,8 @@ async function loadReaderRange(range){
 }
 
 async function loadLaptopRange(range){
+  /* بطاقتها لم تعد تُرسم — الخروج بهدوء بدل الانهيار على عنصر مفقود */
+  if (!document.getElementById('laptopTableWrap')) return;
   ['laptopTabDay','laptopTabWeek','laptopTabMonth'].forEach(id => document.getElementById(id).classList.remove('active'));
   const tabId = range === 'day' ? 'laptopTabDay' : range === 'week' ? 'laptopTabWeek' : 'laptopTabMonth';
   document.getElementById(tabId).classList.add('active');
@@ -10366,6 +10271,8 @@ async function loadLaptopRange(range){
 }
 
 async function loadIpadReaderDeviceRange(range){
+  /* بطاقتها لم تعد تُرسم — الخروج بهدوء بدل الانهيار على عنصر مفقود */
+  if (!document.getElementById('ipadReaderTableWrap')) return;
   ['ipadReaderTabDay','ipadReaderTabWeek','ipadReaderTabMonth'].forEach(id => document.getElementById(id).classList.remove('active'));
   const tabId = range === 'day' ? 'ipadReaderTabDay' : range === 'week' ? 'ipadReaderTabWeek' : 'ipadReaderTabMonth';
   document.getElementById(tabId).classList.add('active');
@@ -10401,6 +10308,8 @@ async function loadIpadReaderDeviceRange(range){
 }
 
 async function loadPosDeviceRange(range){
+  /* بطاقتها لم تعد تُرسم — الخروج بهدوء بدل الانهيار على عنصر مفقود */
+  if (!document.getElementById('posDeviceTableWrap')) return;
   ['posDeviceTabDay','posDeviceTabWeek','posDeviceTabMonth'].forEach(id => document.getElementById(id).classList.remove('active'));
   const tabId = range === 'day' ? 'posDeviceTabDay' : range === 'week' ? 'posDeviceTabWeek' : 'posDeviceTabMonth';
   document.getElementById(tabId).classList.add('active');
@@ -10436,6 +10345,8 @@ async function loadPosDeviceRange(range){
 }
 
 async function loadCleanRange(range){
+  /* بطاقتها لم تعد تُرسم — الخروج بهدوء بدل الانهيار على عنصر مفقود */
+  if (!document.getElementById('cleanTableWrap')) return;
   ['cleanTabDay','cleanTabWeek','cleanTabMonth'].forEach(id => document.getElementById(id).classList.remove('active'));
   const tabId = range === 'day' ? 'cleanTabDay' : range === 'week' ? 'cleanTabWeek' : 'cleanTabMonth';
   document.getElementById(tabId).classList.add('active');
@@ -11825,7 +11736,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.05.05";
+const APP_VERSION = "2026.09.05.06";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
