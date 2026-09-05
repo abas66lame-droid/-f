@@ -3681,28 +3681,78 @@ async function neoAutoReport(table, errMsg, payload){
 window.neoAutoReport = neoAutoReport;
 
 /* ══ طابور إعادة المحاولة: أي حفظ يفشل يُعاد تلقائياً حتى ينجح ══ */
+/* ══ طابور الحفظ المؤجَّل ══
+   كان في الذاكرة وحدها: إغلاق الصفحة يمحوه، ويستسلم بعد عشر محاولات
+   فيضيع إدخال المسؤول بلا أثر. صار على القرص، ولا يستسلم أبداً، ويُستعاد
+   عند فتح التطبيق — فما أُشّر يوماً لا يُفقد ولو انقطعت الشبكة ساعة. */
+const NEO_Q_KEY = 'neoRetryQ_v1';
 const NEO_RETRY_Q = [];
 let neoRetryTimer = null;
+
+function neoQSave(){
+  try{ localStorage.setItem(NEO_Q_KEY, JSON.stringify(NEO_RETRY_Q.slice(0, 300))); }catch(e){}
+}
+function neoQRestore(){
+  try{
+    const a = JSON.parse(localStorage.getItem(NEO_Q_KEY) || '[]');
+    /* نملأ المصفوفة نفسها ولا نستبدلها — كل من يشير إليها يبقى على صواب */
+    if (Array.isArray(a) && a.length){
+      NEO_RETRY_Q.length = 0; a.forEach(j => NEO_RETRY_Q.push(j));
+      neoQStart(); neoUpdateQueueBadge();
+    }
+  }catch(e){}
+}
+/* صفٌّ واحد = وظيفة واحدة: تبديل الخانة عشر مرات لا يُنتج عشر كتابات،
+   وإنما آخرَ حالة فقط — فلا تُعيد كتابةٌ قديمة ما صحّحه المسؤول بعدها. */
+function neoQKey(job){
+  const cols = String(job.conflict || '').split(',').map(c => c.trim()).filter(Boolean);
+  return job.table + '|' + cols.map(c => String((job.payload || {})[c])).join('|');
+}
 function neoQueueRetry(table, payload, conflict){
-  NEO_RETRY_Q.push({ table, payload, conflict, tries: 0 });
+  const job = { table, payload, conflict, tries: 0, nextAt: 0, reported: false };
+  const k = neoQKey(job);
+  const i = NEO_RETRY_Q.findIndex(j => neoQKey(j) === k);
+  if (i >= 0) NEO_RETRY_Q[i] = job; else NEO_RETRY_Q.push(job);
+  neoQSave();
   neoUpdateQueueBadge();
-  if (!neoRetryTimer){
-    neoRetryTimer = setInterval(async () => {
-      if (!NEO_RETRY_Q.length){ clearInterval(neoRetryTimer); neoRetryTimer = null; neoUpdateQueueBadge(); return; }
-      const job = NEO_RETRY_Q[0];
+  neoQStart();
+}
+function neoQStart(){
+  if (neoRetryTimer) return;
+  neoRetryTimer = setInterval(neoQTick, 5000);
+}
+let _neoQBusy = false;
+async function neoQTick(){
+  if (!NEO_RETRY_Q.length){ clearInterval(neoRetryTimer); neoRetryTimer = null; neoUpdateQueueBadge(); return; }
+  if (!navigator.onLine || _neoQBusy) return;
+  _neoQBusy = true;
+  try{
+    const now = Date.now();
+    /* نُفرغ كل ما استحقّ في هذه الدورة لا صفّاً واحداً — عشرون خانة متأخّرة
+       كانت تحتاج مئة ثانية لتصل، والمسؤول قد يقفل التطبيق قبلها. */
+    const due = NEO_RETRY_Q.filter(j => !j.nextAt || j.nextAt <= now).slice(0, 25);
+    let okAny = false;
+    for (const job of due){
       job.tries++;
       const { error } = await supabaseClient.from(job.table).upsert(job.payload, { onConflict: job.conflict });
       if (!error){
-        NEO_RETRY_Q.shift();
-        neoUpdateQueueBadge();
-        if (typeof neoToast === 'function') neoToast('✅ حُفظ ما تعذّر سابقاً', true);
-      } else if (job.tries >= 10){
-        neoAutoReport(job.table, 'تعذّر الحفظ بعد ١٠ محاولات: ' + (error.message||''), job.payload);
-        NEO_RETRY_Q.shift();
-        neoUpdateQueueBadge();
+        const i = NEO_RETRY_Q.indexOf(job);
+        if (i >= 0) NEO_RETRY_Q.splice(i, 1);
+        okAny = true;
+        continue;
       }
-    }, 5000);
-  }
+      /* لا نرمي الإدخال أبداً — نُباعد المحاولات فقط، ونُبلغ المطوّر مرة */
+      job.nextAt = now + Math.min(300000, 5000 * Math.pow(2, Math.min(job.tries, 6)));
+      if (job.tries >= 6 && !job.reported){
+        job.reported = true;
+        neoAutoReport(job.table, 'تعذّر الحفظ بعد ' + job.tries + ' محاولات: ' + (error.message || ''), job.payload);
+      }
+    }
+    if (okAny){ try{ neoNetDot('ok'); }catch(e){} }
+    if (okAny && !NEO_RETRY_Q.length && typeof neoToast === 'function') neoToast('حُفظ كل ما تأخّر', true);
+    neoQSave();
+    neoUpdateQueueBadge();
+  } finally { _neoQBusy = false; }
 }
 function neoUpdateQueueBadge(){
   let b = document.getElementById('neoQueueBadge');
@@ -3711,15 +3761,30 @@ function neoUpdateQueueBadge(){
     b = document.createElement('div');
     b.id = 'neoQueueBadge';
     b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:999994;background:#8c6f2f;color:#fff;'
-      + 'font-size:12px;padding:6px 10px;text-align:center;font-weight:600;';
+      + 'font-size:12px;padding:7px 10px;text-align:center;font-weight:600;cursor:pointer;';
+    b.onclick = () => { NEO_RETRY_Q.forEach(j => { j.nextAt = 0; }); neoQTick(); };
     document.body.appendChild(b);
   }
-  b.textContent = '⏳ ' + NEO_RETRY_Q.length + ' إدخال بانتظار الحفظ — جاري إعادة المحاولة تلقائياً';
+  b.textContent = NEO_RETRY_Q.length + ' إدخال لم يُحفظ بعد — يُعاد تلقائياً · اضغط للمحاولة الآن';
 }
 /* أعد المحاولة فوراً عند عودة الاتصال */
 window.addEventListener('online', () => {
-  if (NEO_RETRY_Q.length && typeof neoToast === 'function') neoToast('عاد الاتصال — جاري حفظ ما تأخّر', true);
+  if (!NEO_RETRY_Q.length) return;
+  NEO_RETRY_Q.forEach(j => { j.nextAt = 0; });
+  if (typeof neoToast === 'function') neoToast('عاد الاتصال — جاري حفظ ما تأخّر', true);
+  neoQStart(); neoQTick();
 });
+try{ neoQRestore(); }catch(e){}
+
+/* مُعرّف المستخدم بلا انهيار — انتهاء الجلسة كان يرمي استثناءً قبل الحفظ
+   فلا يُحفظ شيء ولا تظهر رسالة: صمت تامّ والمسؤول يظنّ أنه أشّر. */
+async function neoUserId(){
+  try{
+    const { data } = await supabaseClient.auth.getUser();
+    return (data && data.user && data.user.id) || null;
+  }catch(e){ return null; }
+}
+window.neoUserId = neoUserId;
 
 async function neoSafeUpsert(table, payload, conflict, opts){
   opts = opts || {};
@@ -3735,7 +3800,11 @@ async function neoSafeUpsert(table, payload, conflict, opts){
   }
   if (error){
     /* لا نُضيع إدخال المستخدم: نضعه في طابور إعادة المحاولة */
-    const netIssue = /network|fetch|timeout|failed|connection/i.test(error.message || '') || !navigator.onLine;
+    /* كل ما قد ينجح لاحقاً يدخل الطابور: الشبكة، وانتهاء الجلسة (تُجدَّد
+       تلقائياً فتنجح المحاولة التالية)، وأخطاء الخادم المؤقتة. */
+    const msg = String(error.message || '') + ' ' + String(error.code || '');
+    const netIssue = !navigator.onLine
+      || /network|fetch|timeout|failed|connection|abort|jwt|token|expired|unauthorized|401|429|50[0234]/i.test(msg);
     try{ neoPlay('err'); neoBuzzFor('err'); neoNetDot('off'); }catch(e){}
     if (netIssue){
       neoQueueRetry(table, payload, conflict);
@@ -4812,8 +4881,9 @@ async function shiftSaveFieldNote(locId, noteKey, value){
 async function shiftSaveRow(locId){
   const st = shiftRowsState;
   const log = st.logsMap[locId];
-  const { data: { user } } = await supabaseClient.auth.getUser();
-  const payload = { location_id: locId, log_date: st.date, shift: st.shift, updated_by: user.id, updated_at: new Date().toISOString() };
+  const uid = await neoUserId();
+  const payload = { location_id: locId, log_date: st.date, shift: st.shift, updated_at: new Date().toISOString() };
+  if (uid) payload.updated_by = uid;
   /* كل عمود يُكتب في مكانه من نفس القائمة — لا حلقتان تفترقان */
   const ex = { ...(log.extra_fields || {}) };
   (st.defs || []).forEach(def => {
@@ -4824,22 +4894,8 @@ async function shiftSaveRow(locId){
   payload.extra_fields = ex;
   payload.field_notes = log.field_notes || {};
   payload.field_times = log.field_times || {};
-  let { error } = await supabaseClient.from('daily_logs').upsert(payload, { onConflict: 'location_id,log_date,shift' });
-  let guard = 0;
-  while (error && /column|schema cache/i.test(error.message || '') && guard++ < 4){
-    const m = (error.message || '').match(/'([^']+)' column/);
-    if (!m || !m[1] || !(m[1] in payload)) break;
-    /* لا نُسقط أبداً الحقول التي تحمل بيانات المستخدم الفعلية */
-    const PROTECTED = ['hall_field_notes','field_notes','hall_verified','hall_verified_fields','extra_fields'];
-    if (PROTECTED.includes(m[1])) break;
-    delete payload[m[1]];
-    const retry = await supabaseClient.from('daily_logs').upsert(payload, { onConflict: 'location_id,log_date,shift' });
-    error = retry.error;
-  }
-  if (error){
-    if (typeof neoToast === 'function') neoToast('خطأ بالحفظ: ' + error.message);
-    else neoNotify('خطأ بالحفظ: ' + error.message);
-  }
+  /* عبر الحفظ الآمن: يتعافى من عمود ناقص، وما يفشل يدخل الطابور ولا يضيع */
+  await neoSafeUpsert('daily_logs', payload, 'location_id,log_date,shift');
 }
 
 // ========== محرك تدريجي عام: يطبَّق على الموظفين والمهام والأجهزة والنظافة ==========
@@ -4974,8 +5030,9 @@ async function progSaveGeneralNote(key, itemId, value){
 }
 async function progSaveRow(cfg, itemId){
   const log = cfg.logsMap[itemId] || {};
-  const { data: { user } } = await supabaseClient.auth.getUser();
-  const payload = { [cfg.idCol]: itemId, log_date: cfg.date, shift: cfg.shift, updated_by: user.id, updated_at: new Date().toISOString(), field_notes: log.field_notes || {}, field_times: log.field_times || {} };
+  const uid = await neoUserId();
+  const payload = { [cfg.idCol]: itemId, log_date: cfg.date, shift: cfg.shift, updated_at: new Date().toISOString(), field_notes: log.field_notes || {}, field_times: log.field_times || {} };
+  if (uid) payload.updated_by = uid;
   if (cfg.jsonValues){
     const vals = {}; cfg.fields.forEach(f => { vals[f.key] = log[f.key] === true; });
     payload.col_values = vals;
@@ -5000,20 +5057,8 @@ async function progSaveRow(cfg, itemId){
     payload.extra_evaluations = ex;
   }
   if (cfg.includeNotes) payload.notes = log.notes || '';
-  let { error } = await supabaseClient.from(cfg.table).upsert(payload, { onConflict: `${cfg.idCol},log_date,shift` });
-  /* شبكة أمان: لو رفضت القاعدة عموداً غير موجود، احذفه وأعد المحاولة بدل فقد الإدخال */
-  if (error && /column|schema cache/i.test(error.message || '')){
-    const m = (error.message || '').match(/'([^']+)' column/);
-    const PROTECTED2 = ['hall_field_notes','field_notes','hall_verified','hall_verified_fields','extra_fields'];
-    if (m && m[1] && (m[1] in payload) && !PROTECTED2.includes(m[1])){
-      delete payload[m[1]];
-      const retry = await supabaseClient.from(cfg.table).upsert(payload, { onConflict: `${cfg.idCol},log_date,shift` });
-      error = retry.error;
-      if (!error && typeof neoToast === 'function') neoToast('حُفظ (تُخطّي عمود غير مدعوم: ' + m[1] + ')', true);
-    }
-  }
-  if (error && typeof neoToast === 'function') neoToast('خطأ بالحفظ: ' + error.message);
-  else if (error) neoNotify('خطأ بالحفظ: ' + error.message);
+  /* عبر الحفظ الآمن: ما يفشل يدخل الطابور ويُعاد حتى ينجح */
+  await neoSafeUpsert(cfg.table, payload, `${cfg.idCol},log_date,shift`);
 }
 
 function changeDate(deltaDays){
@@ -5479,8 +5524,7 @@ async function hallMissSaveNote(table, id, key, value){
   log.hall_missing_notes = log.hall_missing_notes || {};
   if (value.trim()) log.hall_missing_notes[key] = value; else delete log.hall_missing_notes[key];
   const payload = { [cfg.idField]: id, log_date: (hallMissingData?.date) || todayStr(), shift: log.shift || 'morning', hall_missing_notes: log.hall_missing_notes };
-  const { error } = await supabaseClient.from(cfg.table).upsert(payload, { onConflict: `${cfg.idField},log_date,shift` });
-  if (error) neoNotify('خطأ بالحفظ: ' + error.message);
+  await neoSafeUpsert(cfg.table, payload, `${cfg.idField},log_date,shift`);
   missRefresh(table);
 }
 
@@ -6308,12 +6352,9 @@ async function hallProgSave(cfg, id){
     hallSelectedDate = null;
     return false;
   }
-  let _hu = null, _hn = '';
-  try{
-    const { data: { user } } = await supabaseClient.auth.getUser();
-    _hu = user ? String(user.id) : null;
-    _hn = (document.getElementById('userNameLabel')?.textContent || '').trim();
-  }catch(e){}
+  const _hu = await neoUserId();
+  let _hn = '';
+  try{ _hn = (document.getElementById('userNameLabel')?.textContent || '').trim(); }catch(e){}
   const payload = { [cfg.idField]: id, log_date: (typeof hallDate === 'function' ? hallDate() : todayStr()), shift: 'morning',
     hall_verified_by: _hu, hall_verified_name: _hn, hall_verified_at: new Date().toISOString(), hall_field_notes: log.hall_field_notes || {}, hall_field_times: log.hall_field_times || {} };
   if (cfg.fields.length === 1 && cfg.fields[0].key === '__task'){
@@ -6321,24 +6362,9 @@ async function hallProgSave(cfg, id){
   } else {
     payload.hall_verified_fields = log.hall_verified_fields || {};
   }
-  let { error } = await supabaseClient.from(cfg.table).upsert(payload, { onConflict: `${cfg.idField},log_date,shift` });
-  /* شبكة أمان: لو رفضت القاعدة عموداً غير موجود، احذفه وأعد المحاولة بدل ضياع التدقيق */
-  let guard = 0;
-  while (error && /column|schema cache/i.test(error.message || '') && guard++ < 4){
-    const m = (error.message || '').match(/'([^']+)' column/);
-    if (!m || !m[1] || !(m[1] in payload)) break;
-    /* لا نُسقط أبداً الحقول التي تحمل بيانات المستخدم الفعلية */
-    const PROTECTED = ['hall_field_notes','field_notes','hall_verified','hall_verified_fields','extra_fields'];
-    if (PROTECTED.includes(m[1])) break;
-    delete payload[m[1]];
-    const retry = await supabaseClient.from(cfg.table).upsert(payload, { onConflict: `${cfg.idField},log_date,shift` });
-    error = retry.error;
-  }
-  if (error){
-    if (typeof neoToast === 'function') neoToast('خطأ بالحفظ: ' + error.message);
-    else neoNotify('خطأ بالحفظ: ' + error.message);
-    return false;
-  }
+  /* عبر الحفظ الآمن: تدقيق مسؤول الصالة يدخل الطابور إن فشل ولا يضيع */
+  const ok = await neoSafeUpsert(cfg.table, payload, `${cfg.idField},log_date,shift`);
+  if (!ok) return false;
   /* أبطل ذاكرة نسبة التدقيق المؤقتة (٢٠ ثانية) — وإلا رجعت النسبة قديمة عند الرجوع للقائمة فوراً بعد الحفظ */
   try{ window.__hapCache = {}; }catch(e){}
   return true;
@@ -7199,8 +7225,7 @@ async function toggleHallVerify(table, idField, id, box){
   box.classList.toggle('on');
   box.textContent = willBeOn ? '✓' : '';
   const payload = { [idField]: id, log_date: date, shift: 'morning', hall_verified: willBeOn };
-  const { error } = await supabaseClient.from(table).upsert(payload, { onConflict: `${idField},log_date,shift` });
-  if (error){ neoNotify('خطأ: ' + error.message); return; }
+  if (!await neoSafeUpsert(table, payload, `${idField},log_date,shift`)) return;
   if (hallAuditData?.taskLogsById){
     hallAuditData.taskLogsById[id] = { ...(hallAuditData.taskLogsById[id] || {}), hall_verified: willBeOn };
   }
@@ -11785,7 +11810,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.05.02";
+const APP_VERSION = "2026.09.05.03";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
