@@ -8287,7 +8287,6 @@ async function buildSalesDeptCardsHtml(date, returnTab){
 
 async function renderSalesView(){
   currentSalesDeptId = null;
-  window.salesManagersKind = null;   /* الرجوع للأقسام يُنهي شاشة المسؤولين */
   const el = document.getElementById('salesView');
   el.innerHTML = '<div class="status neoLoad">جاري التحميل...</div>';
   try {
@@ -8307,24 +8306,11 @@ async function renderSalesView(){
         <div style="color:#999; font-size:12px;">اضغط على أي قسم لعرض التحليل التفصيلي الكامل — التاريخ: ${date}</div>
       </div>
       ${cardsHtml}
-      <div class="card">
-        <h3 style="margin:0 0 4px;">🧑‍💼 تقييم المسؤولين</h3>
-        <div style="color:#8fa3b8;font-size:12px;">تقرير أداء المسؤولين — يومي وأسبوعي وشهري</div>
-      </div>
-      <div class="card dept-card" onclick="salesPickManagers('shift')" style="cursor:pointer;">
+      <div class="card dept-card" onclick="renderSalesManagersTab()" style="cursor:pointer;">
         <div style="display:flex; justify-content:space-between; align-items:center;">
           <div>
-            <h3 style="margin:0;">👤 مسؤولو الشفت</h3>
-            <div style="color:#999; font-size:12px; margin-top:4px;">نسبة إنجاز القسم الذي يديره كل مسؤول</div>
-          </div>
-          <span style="color:#5d6d80; font-size:18px;">‹</span>
-        </div>
-      </div>
-      <div class="card dept-card" onclick="salesPickManagers('hall')" style="cursor:pointer;">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-          <div>
-            <h3 style="margin:0;">🏬 مسؤولو الصالة</h3>
-            <div style="color:#999; font-size:12px; margin-top:4px;">ما دقّقه كل مشرف من عيّنته</div>
+            <h3 style="margin:0;">🧑‍💼 تقييم المسؤولين</h3>
+            <div style="color:#999; font-size:12px; margin-top:4px;">الشفت والصالة معاً — يومي وأسبوعي وشهري</div>
           </div>
           <span style="color:#5d6d80; font-size:18px;">‹</span>
         </div>
@@ -8999,67 +8985,33 @@ async function renderSalesLeaderboardTab(period){
 
 let salesManagersPeriod = 'daily';
 
-/* أي فئة يعرضها التبويب: null = شاشة الاختيار · 'shift' · 'hall' */
-window.salesManagersKind = window.salesManagersKind || null;
-window.salesPickManagers = function(kind){
-  window.salesManagersKind = kind;
-  renderSalesManagersTab();
-};
-/* الرجوع من تقييم المسؤولين إلى قائمة الأقسام — صارا قائمة واحدة */
-window.salesBackToDepts = function(){
-  window.salesManagersKind = null;
-  return renderSalesView();
-};
+/* أُزيل تقسيم المسؤولين إلى فئتين — الشفت والصالة في صفحة واحدة */
+window.salesPickManagers = function(){ return renderSalesManagersTab(); };
+window.salesBackToDepts  = function(){ return renderSalesView(); };
 
 async function renderSalesManagersTab(period){
   if (period) salesManagersPeriod = period;
 
-  /* شاشة اختيار الفئة — تمنع حساب الفئتين معاً فيقصر التحميل للنصف */
-  if (!window.salesManagersKind){
-    mountSalesShell('overview', `
-      <div class="card">
-        <h2>🧑‍💼 تقييم المسؤولين</h2>
-        <div style="color:#999; font-size:12px; margin-top:6px;">اختر الفئة — يُحمَّل ما تحتاجه فقط</div>
-      </div>
-      <div class="card dept-card" onclick="salesPickManagers('shift')" style="cursor:pointer;">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-          <div>
-            <h3 style="margin:0;">👤 مسؤولو الشفت</h3>
-            <div style="color:#999; font-size:12px; margin-top:4px;">نسبة إنجاز القسم الذي يديره كل مسؤول</div>
-          </div>
-          <span style="color:#5d6d80; font-size:18px;">‹</span>
-        </div>
-      </div>
-      <div class="card dept-card" onclick="salesPickManagers('hall')" style="cursor:pointer;">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-          <div>
-            <h3 style="margin:0;">🏬 مسؤولو الصالة</h3>
-            <div style="color:#999; font-size:12px; margin-top:4px;">ما دقّقه كل مشرف من عيّنته</div>
-          </div>
-          <span style="color:#5d6d80; font-size:18px;">‹</span>
-        </div>
-      </div>`);
-    return;
-  }
-
-  const K = window.salesManagersKind;
   mountSalesShell('overview', `
     <div class="card">
       <button class="secondary" onclick="salesBackToDepts()" style="font-size:12px;padding:7px 13px;">◀ رجوع للأقسام</button>
-      <h2 style="margin-top:10px;">${K==='shift' ? '👤 مسؤولو الشفت' : '🏬 مسؤولو الصالة'}</h2>
+      <h2 style="margin-top:10px;">🧑‍💼 تقييم المسؤولين</h2>
       <div class="tabs">
         <div class="tab ${salesManagersPeriod==='daily'?'active':''}" onclick="renderSalesManagersTab('daily')">يومي</div>
         <div class="tab ${salesManagersPeriod==='weekly'?'active':''}" onclick="renderSalesManagersTab('weekly')">أسبوعي</div>
         <div class="tab ${salesManagersPeriod==='monthly'?'active':''}" onclick="renderSalesManagersTab('monthly')">شهري</div>
       </div>
     </div>
-    ${K==='shift' ? `<div class="card">
-      <div style="color:#999; font-size:12px; margin-bottom:8px;">نسبة إنجاز القسم اللي يديره كل مسؤول شفت — تعكس جودة تنفيذه</div>
+    <div class="card">
+      <h3 style="margin:0 0 4px;">👤 مسؤولو الشفت</h3>
+      <div style="color:#999; font-size:12px; margin-bottom:8px;">نسبة إنجاز القسم الذي يديره كل مسؤول</div>
       <div id="shiftManagersList">جاري التحميل...</div>
-    </div>` : `<div class="card">
+    </div>
+    <div class="card">
+      <h3 style="margin:0 0 4px;">🏬 مسؤولو الصالة</h3>
       <div style="color:#999; font-size:12px; margin-bottom:8px;">ما دقّقه كل مشرف بنفسه من عيّنته</div>
       <div id="hallManagersList">جاري التحميل...</div>
-    </div>`}
+    </div>
 `);
   /* مقياس المصداقية مُعطَّل: كان يعطي صفراً للجميع فلا يميّز بين مجتهد ومقصّر.
      الدالة باقية — لإعادته اجعل SHOW_CREDIBILITY = true وأعد بطاقة العرض. */
@@ -9097,12 +9049,9 @@ async function renderSalesManagersTab(period){
         </div>` : ''}`;
     }).join('') : '<div style="color:#999;">لا يوجد مسؤولو شفت مسجلين</div>';
 
-    /* لا نحسب فئة غير معروضة — هذا مصدر التوفير الحقيقي */
-    if (window.salesManagersKind === 'shift'){
-      const _sl = document.getElementById('shiftManagersList');
-      if (_sl) _sl.innerHTML = shiftHtml;
-      return;
-    }
+    /* نعرض قائمة الشفت فور جهوزها، ثم تلحقها قائمة الصالة — فلا ينتظر
+       المدير حساب الصالة ليرى النصف الأول. */
+    try{ const _sl = document.getElementById('shiftManagersList'); if (_sl) _sl.innerHTML = shiftHtml; }catch(e){}
 
     const hallManagers = (profiles||[]).filter(p => p.role === 'hall');
     /* ══ مقياس مشرف الصالة = تغطية تدقيقه هو، لا متوسط نسب الأقسام ══
@@ -11876,7 +11825,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.05.04";
+const APP_VERSION = "2026.09.05.05";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
