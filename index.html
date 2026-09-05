@@ -4893,12 +4893,12 @@ function progBuildRows(cfg){
       ? ' <span style="background:#5a4a12;color:#ffcf5c;font-size:10px;padding:2px 7px;border-radius:8px;white-space:nowrap;">معطَّل</span>' : '';
     const onLeave = (it.on_leave === true);
     const leaveBadge = onLeave
-      ? ' <span style="background:#123a52;color:#8fd0f0;font-size:10px;padding:2px 7px;border-radius:8px;white-space:nowrap;">🏖️ إجازة</span>' : '';
+      ? ' <span style="background:#123a52;color:#8fd0f0;font-size:10px;padding:2px 7px;border-radius:8px;white-space:nowrap;">إجازة</span>' : '';
     /* الزر يظهر فقط حيث سُمح به — جدول الموظفين عند مسؤول الشفت */
     const leaveBtn = cfg.leaveDeptId
       ? ` <span style="cursor:pointer;color:${onLeave ? '#3ecf6b' : '#8fb8d8'};font-size:11px;margin-inline-start:6px;"
             title="${onLeave ? 'إلغاء الإجازة — ترجع خاناته للتأشير' : 'إجازة اليوم — تظهر خاناته «—» ولا تُحتسب عليه'}"
-            onclick="neoLeaveTap('${it.id}','${cfg.leaveDeptId}','${cfg.leaveDate}','${cfg.key}')">${onLeave ? '↩ إلغاء' : '🏖️ إجازة'}</span>` : '';
+            onclick="neoLeaveTap('${it.id}','${cfg.leaveDeptId}','${cfg.leaveDate}','${cfg.key}')">${onLeave ? 'إلغاء الإجازة' : 'تسجيل إجازة'}</span>` : '';
     html += `<tr${(offBadge || onLeave) ? ' style="opacity:.6;"' : ''}><td class="code-cell">${esc(it.label)}${offBadge}${leaveBadge}${leaveBtn}</td>${cells}</tr>`;
     for (const w of wrong){
       const val = (fn[w.key]||'').replace(/"/g,'&quot;');
@@ -4930,8 +4930,8 @@ window.neoLeaveTap = async function(staffId, deptId, day, sectionKey){
   if (!await neoSetLeave(deptId, staffId, day, to)) return;
   it.on_leave = to;
   progRefresh(sectionKey);
-  try{ neoToast(to ? '🏖️ سُجّلت إجازة اليوم — خاناته لا تُحتسب'
-                   : '↩ أُلغيت الإجازة — خاناته رجعت للتأشير', true); }catch(e){}
+  try{ neoToast(to ? 'سُجّلت إجازة اليوم — خاناته لا تُحتسب'
+                   : 'أُلغيت الإجازة — خاناته رجعت للتأشير', true); }catch(e){}
 };
 function progRefresh(key){
   try{ if (window.neoRefreshShiftPctBox && shiftRowsState) neoRefreshShiftPctBox(shiftRowsState.deptId, shiftRowsState.date); }catch(e){}
@@ -5396,7 +5396,7 @@ function buildStatusTable(items, fieldDefs, rowLabelFn, logsById){
     const offBadge = (typeof neoIsOff === 'function' && neoIsOff(item.id))
       ? ' <span style="background:#5a4a12;color:#ffcf5c;font-size:10px;padding:2px 7px;border-radius:8px;white-space:nowrap;">معطَّل</span>' : '';
     const lvBadge = (item.on_leave === true)
-      ? ' <span style="background:#123a52;color:#8fd0f0;font-size:10px;padding:2px 7px;border-radius:8px;white-space:nowrap;">🏖️ إجازة</span>' : '';
+      ? ' <span style="background:#123a52;color:#8fd0f0;font-size:10px;padding:2px 7px;border-radius:8px;white-space:nowrap;">إجازة</span>' : '';
     return `<tr${(offBadge || lvBadge) ? ' style="opacity:.6;"' : ''}><td class="code-cell">${esc(rowLabelFn(item))}${offBadge}${lvBadge}</td>${cells}${notesCell}</tr>`;
   }).join('');
   const html = `<div class="table-wrap roomy-table"><table>
@@ -5443,7 +5443,7 @@ function missRowsHtml(table){
       cells += `<td onclick="hallMissOpenNote('${table}','${it.id}','${f.key}')" style="cursor:pointer;">${neoCellMark(st)}${hasNote?' <span style="font-size:10px;">📝</span>':''}</td>`;
     }
     const lvB = (it.on_leave === true)
-      ? ' <span style="background:#123a52;color:#8fd0f0;font-size:10px;padding:2px 7px;border-radius:8px;white-space:nowrap;">🏖️ إجازة</span>' : '';
+      ? ' <span style="background:#123a52;color:#8fd0f0;font-size:10px;padding:2px 7px;border-radius:8px;white-space:nowrap;">إجازة</span>' : '';
     rows += `<tr${lvB ? ' style="opacity:.6;"' : ''}><td class="code-cell">${esc(cfg.rowLabelFn(it))}${lvB}</td>${cells}</tr>`;
     // ملاحظات مسؤول الشفت (عرض فقط)
     const parts = [];
@@ -6234,7 +6234,7 @@ function hallProgBuildRows(table){
       if (s === 'no') wrong.push(f);
     }
     const lv = (it.on_leave === true)
-      ? ' <span style="background:#123a52;color:#8fd0f0;font-size:10px;padding:2px 7px;border-radius:8px;white-space:nowrap;">🏖️ إجازة</span>' : '';
+      ? ' <span style="background:#123a52;color:#8fd0f0;font-size:10px;padding:2px 7px;border-radius:8px;white-space:nowrap;">إجازة</span>' : '';
     html += `<tr${lv ? ' style="opacity:.6;"' : ''}><td class="code-cell">${esc(cfg.rowLabelFn(it))}${lv}</td>${cells}</tr>`;
     for (const w of wrong){
       const val = (fn[w.key]||'').replace(/"/g,'&quot;');
@@ -11785,7 +11785,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.05.01";
+const APP_VERSION = "2026.09.05.02";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
