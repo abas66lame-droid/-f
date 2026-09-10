@@ -3843,8 +3843,13 @@ async function renderStaffSection(deptId){
   let rowsHtml = "";
   const staffHeader = `<tr><th>الموظف</th>${fieldDefs.map(f=>`<th>${f.label}</th>`).join('')}<th>ملاحظات</th></tr>`;
   if (!canManage){
-    /* زر الإجازة لمسؤول الشفت وحده، وفي جدول الموظفين وحده */
-    const canLeave = (window.__notifRole === 'shift');
+    /* زر الإجازة لمسؤول الشفت وحده، وفي جدول الموظفين وحده.
+       ثلاثة مصادر لا واحد: كان يعتمد على __notifRole فقط، فإن لم يُضبط
+       لأي سبب اختفى الزرّ عن مسؤول واحد دون البقية بلا سبب ظاهر. */
+    const _p = (typeof currentShiftProfile !== 'undefined' && currentShiftProfile) || null;
+    const _sv = document.getElementById('shiftView');
+    const _inShift = !!(_sv && !_sv.classList.contains('hidden'));
+    const canLeave = String((_p && _p.role) || window.__notifRole || '') === 'shift' || _inShift;
     rowsHtml = progSetup({ key:'staff', table:'staff_evaluations', idCol:'staff_id', date, shift, fields:fieldDefs,
       items: staffList.map(s => ({ id:s.id, label:s.name, disabled_fields:s.disabled_fields,
                                    on_leave: neoOnLeave(s.id, date) })),
@@ -8245,7 +8250,6 @@ async function switchSalesTab(tabId){
   else if (tabId === 'leaderboard') await renderSalesLeaderboardTab();
   else if (tabId === 'report') await renderSalesWeeklyReport();
   else if (tabId === 'trend') await renderSalesTrend();
-  else if (tabId === 'managers') await renderSalesManagersTab();
   else if (tabId === 'fleet') await renderFleetManagerTab();
   else if (tabId === 'account') await renderSalesReportsTab();
 }
@@ -8306,16 +8310,23 @@ async function renderSalesView(){
         <div style="color:#999; font-size:12px;">اضغط على أي قسم لعرض التحليل التفصيلي الكامل — التاريخ: ${date}</div>
       </div>
       ${cardsHtml}
-      <div class="card dept-card" onclick="renderSalesManagersTab()" style="cursor:pointer;">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-          <div>
-            <h3 style="margin:0;">🧑‍💼 تقييم المسؤولين</h3>
-            <div style="color:#999; font-size:12px; margin-top:4px;">الشفت والصالة معاً — يومي وأسبوعي وشهري</div>
-          </div>
-          <span style="color:#5d6d80; font-size:18px;">‹</span>
-        </div>
+      <div class="card">
+        <h2>🧑‍💼 تقييم المسؤولين</h2>
+        ${neoManagerTabsHtml()}
+      </div>
+      <div class="card">
+        <h3 style="margin:0 0 4px;">👤 مسؤولو الشفت</h3>
+        <div style="color:#999; font-size:12px; margin-bottom:8px;">نسبة إنجاز القسم الذي يديره كل مسؤول</div>
+        <div id="shiftManagersList">جاري التحميل...</div>
+      </div>
+      <div class="card">
+        <h3 style="margin:0 0 4px;">🏬 مسؤولو الصالة</h3>
+        <div style="color:#999; font-size:12px; margin-bottom:8px;">ما دقّقه كل مشرف بنفسه من عيّنته</div>
+        <div id="hallManagersList">جاري التحميل...</div>
       </div>`;
     mountSalesShell('overview', innerHtml);
+    /* القائمتان تُملآن بعد الرسم فلا يتأخّر ظهور الأقسام بسببهما */
+    neoFillManagerLists();
   try{ neoPlay('report'); }catch(e){}
   } catch (err) {
     el.innerHTML = `<div class="card" style="color:#ff7b7b;">❌ خطأ: ${err.message || JSON.stringify(err)}</div>`;
@@ -8338,6 +8349,8 @@ function setOverviewDate(dateStr){
    قاس بها قاسَ كل الأقسام بأعمدة قسمٍ واحد. هنا نقرأ الأعداد لكل قسم
    على حدة مرة واحدة، وتستعملها حاسبةُ اليوم وحاسبةُ المدى معاً — فلا
    تفترقان ولا تعود إحداهما تُصلَح دون الأخرى. */
+/* مجاميع آخر يوم حُسب — يقرؤها تثبيت النسب المتأخّرة */
+let _neoTotalsByDept = { date:'', totals:{} };
 /* عدد الخانات المؤشَّرة ✗ بملاحظة لكل قسم — يملؤه حساب اليوم ويقرأه العرض */
 let _neoWrongByDept = {};
 function neoWrongOf(deptId){ return _neoWrongByDept[String(deptId)] || 0; }
@@ -8583,6 +8596,8 @@ async function computeAllDeptsOverallPct(date){
   Object.entries(totals).forEach(([deptId, t]) => {
     pctByDept[deptId] = t.total ? Math.min(100, Math.round((t.done / t.total) * 100)) : 0;
   });
+  /* المجاميع الخام — يحتاجها تثبيت النسب المتأخّرة ليكتب total/done كما يكتبهما المسؤول */
+  try{ _neoTotalsByDept = { date, totals: JSON.parse(JSON.stringify(totals)) }; }catch(e){}
 
   /* ── المصدر الواحد: النسبة التي حفظها مسؤول الشفت تتقدّم على الحساب القديم ──
      كان هذا يُطبَّق في شاشة واحدة فقط؛ نقلناه داخل الدالة ليشمل كل من يستدعيها.
@@ -8986,36 +9001,24 @@ async function renderSalesLeaderboardTab(period){
 let salesManagersPeriod = 'daily';
 
 /* أُزيل تقسيم المسؤولين إلى فئتين — الشفت والصالة في صفحة واحدة */
-window.salesPickManagers = function(){ return renderSalesManagersTab(); };
+window.salesPickManagers = function(){ return renderSalesView(); };
 window.salesBackToDepts  = function(){ return renderSalesView(); };
 
-async function renderSalesManagersTab(period){
-  if (period) salesManagersPeriod = period;
-
-  mountSalesShell('overview', `
-    <div class="card">
-      <button class="secondary" onclick="salesBackToDepts()" style="font-size:12px;padding:7px 13px;">◀ رجوع للأقسام</button>
-      <h2 style="margin-top:10px;">🧑‍💼 تقييم المسؤولين</h2>
-      <div class="tabs">
-        <div class="tab ${salesManagersPeriod==='daily'?'active':''}" onclick="renderSalesManagersTab('daily')">يومي</div>
-        <div class="tab ${salesManagersPeriod==='weekly'?'active':''}" onclick="renderSalesManagersTab('weekly')">أسبوعي</div>
-        <div class="tab ${salesManagersPeriod==='monthly'?'active':''}" onclick="renderSalesManagersTab('monthly')">شهري</div>
-      </div>
-    </div>
-    <div class="card">
-      <h3 style="margin:0 0 4px;">👤 مسؤولو الشفت</h3>
-      <div style="color:#999; font-size:12px; margin-bottom:8px;">نسبة إنجاز القسم الذي يديره كل مسؤول</div>
-      <div id="shiftManagersList">جاري التحميل...</div>
-    </div>
-    <div class="card">
-      <h3 style="margin:0 0 4px;">🏬 مسؤولو الصالة</h3>
-      <div style="color:#999; font-size:12px; margin-bottom:8px;">ما دقّقه كل مشرف بنفسه من عيّنته</div>
-      <div id="hallManagersList">جاري التحميل...</div>
-    </div>
-`);
-  /* مقياس المصداقية مُعطَّل: كان يعطي صفراً للجميع فلا يميّز بين مجتهد ومقصّر.
-     الدالة باقية — لإعادته اجعل SHOW_CREDIBILITY = true وأعد بطاقة العرض. */
-
+/* تقييم المسؤولين لم يعد شاشة مستقلة — بطاقتاه داخل قائمة الأقسام،
+   وهذه الدالة تملؤهما أينما وُجدتا. */
+window.renderSalesManagersTab = function(period){
+  if (period){ salesManagersPeriod = period; }
+  return renderSalesView();
+};
+function neoManagerTabsHtml(){
+  return `<div class="tabs">
+      <div class="tab ${salesManagersPeriod==='daily'?'active':''}" onclick="renderSalesManagersTab('daily')">يومي</div>
+      <div class="tab ${salesManagersPeriod==='weekly'?'active':''}" onclick="renderSalesManagersTab('weekly')">أسبوعي</div>
+      <div class="tab ${salesManagersPeriod==='monthly'?'active':''}" onclick="renderSalesManagersTab('monthly')">شهري</div>
+    </div>`;
+}
+async function neoFillManagerLists(){
+  if (!document.getElementById('shiftManagersList')) return;
   try {
     const { startDate, endDate } = leaderboardRange(salesManagersPeriod, salesSelectedDate);
     const [{ data: profiles }, { data: depts }, pctByDept] = await Promise.all([
@@ -9198,7 +9201,7 @@ async function renderSalesManagerHallDetail(profileId){
     /* الأقسام مطويّة افتراضياً — التركيز على التدقيق العشوائي وحده */
     const innerHtml = `
       <div class="card">
-        <button class="secondary" onclick="renderSalesManagersTab()">◀ رجوع للمسؤولين</button>
+        <button class="secondary" onclick="renderSalesView()">◀ رجوع للأقسام</button>
         <h2 style="margin-top:10px;">🏬 ${profile?.name || ''}</h2>
         <div style="color:#999; font-size:12px;">تدقيقه العشوائي لهذا اليوم — العيّنة المخصّصة له وحده</div>
       </div>
@@ -9591,7 +9594,7 @@ async function renderEditManagerForm(profileId, role){
     const roleLabel = role === 'shift' ? 'مسؤول شفت' : 'مسؤول صالة';
     const innerHtml = `
       <div class="card">
-        <button class="secondary" onclick="renderSalesManagersTab()">◀ رجوع للمسؤولين</button>
+        <button class="secondary" onclick="renderSalesView()">◀ رجوع للأقسام</button>
         <h2 style="margin-top:10px;">✏️ إعادة تعيين حساب ${roleLabel}</h2>
         <div class="insight">استخدم هذا لإعطاء نفس حساب الدخول لموظف جديد (مثلاً بعد استقالة أو فصل المسؤول السابق) — بدون حذف أي بيانات أو سجلات قديمة.</div>
         <label style="font-size:12px; color:#999; display:block;">الاسم</label>
@@ -10745,7 +10748,6 @@ window.initSalesChat = initSalesChat;
 window.switchSalesTab = switchSalesTab;
 window.renderSalesChatTab = renderSalesChatTab;
 window.renderSalesLeaderboardTab = renderSalesLeaderboardTab;
-window.renderSalesManagersTab = renderSalesManagersTab;
 window.renderSalesManagerHallDetail = renderSalesManagerHallDetail;
 window.renderSalesDeptMissingDetail = renderSalesDeptMissingDetail;
 window.renderSalesHallAuditDetail = renderSalesHallAuditDetail;
@@ -11447,6 +11449,77 @@ async function neoToggleReports(){
     });
 }
 
+/* ══ تثبيت النسب المتأخّرة — لمدير المبيعات ══
+   المسؤول الذي نسي ضغط «حفظ وتثبيت النسبة» تبقى نسبته تقديراً لا رقماً
+   معتمداً. هذا الزرّ يُعيد حساب النسبة الحقيقية من السجلات لكل قسم في
+   آخر ثلاثة أيام ويثبّتها — كأن كل مسؤول ضغط زرّه في وقته. */
+window.neoFixLatePct = async function(btn){
+  const days = [];
+  const t0 = (typeof todayStr === 'function') ? todayStr() : new Date().toISOString().slice(0,10);
+  for (let i = 0; i < 3; i++){
+    const d = new Date(t0 + 'T12:00:00'); d.setDate(d.getDate() - i);
+    days.push(d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'));
+  }
+  const go = (typeof neoConfirm === 'function')
+    ? await neoConfirm('تثبيت النسب لآخر ٣ أيام؟',
+        'يُعاد حساب النسبة الحقيقية من السجلات لكل قسم في ' + days[2] + ' إلى ' + days[0]
+        + ' وتُثبَّت لمن لم يُثبّتها.<br><br>لا يُعدَّل أي تأشير — الحساب من السجلات كما هي.')
+    : true;
+  if (!go) return;
+
+  const old = btn ? btn.textContent : '';
+  if (btn){ btn.textContent = '⏳'; btn.disabled = true; }
+  let fixed = 0, already = 0, failed = 0;
+  try{
+    const uid = (typeof neoUserId === 'function') ? await neoUserId() : null;
+    const name = (document.getElementById('userNameLabel')?.textContent || '').trim() || 'مدير المبيعات';
+    for (const day of days){
+      /* الحساب من السجلات — نفس ما تعرضه بطاقة القسم كـ«تقدير تلقائي» */
+      const pctMap = await computeAllDeptsOverallPct(day);
+      const totals = (_neoTotalsByDept.date === day) ? _neoTotalsByDept.totals : {};
+      let saved = {};
+      try{
+        const { data } = await supabaseClient.from('daily_stats')
+          .select('department_id,pct').eq('log_date', day);
+        (data||[]).forEach(r => { saved[String(r.department_id)] = r; });
+      }catch(e){}
+      for (const deptId of Object.keys(totals)){
+        const t = totals[deptId] || {};
+        if (!t.total) continue;                       /* لا بيانات ذلك اليوم — لا نخترع رقماً */
+        const pct = Math.min(100, Math.round((t.done / t.total) * 100));
+        const prev = saved[String(deptId)];
+        if (prev && Math.round(Number(prev.pct)||0) === pct){ already++; continue; }
+        const ok = await neoSafeUpsert('daily_stats', {
+          department_id: deptId, log_date: day,
+          pct: pct, total: t.total, done: t.done,
+          saved_by: uid, saved_by_name: name + ' (تثبيت متأخّر)',
+          updated_at: new Date().toISOString()
+        }, 'department_id,log_date');
+        if (ok) fixed++; else failed++;
+      }
+      try{ delete neoStatsCache[day]; }catch(e){}
+    }
+  }catch(e){ failed++; }
+  if (btn){ btn.textContent = old; btn.disabled = false; }
+  try{
+    neoToast(fixed
+      ? ('✅ ثُبّتت ' + fixed + ' نسبة' + (already ? ' · ' + already + ' كانت مطابقة' : ''))
+      : (failed ? '⚠️ تعذّر التثبيت — أعد المحاولة' : 'كل النسب مثبّتة ومطابقة'), !failed);
+  }catch(e){}
+  try{ if (currentSalesTab === 'overview') await renderSalesView(); }catch(e){}
+};
+
+/* شريط صغير أعلى الإبلاغات — زرّ واحد بحجم ٥٠ بكسل */
+function neoLatePctBarHtml(){
+  return '<div class="card" style="display:flex;align-items:center;justify-content:space-between;gap:10px;">'
+    + '<div style="min-width:0;">'
+    + '<div style="color:#c8d4e2;font-size:13px;font-weight:700;">تثبيت النسب المتأخّرة</div>'
+    + '<div style="color:#8fa3b8;font-size:11.5px;margin-top:3px;line-height:1.7;">'
+    + 'لمن نسي الحفظ — يُعيد حساب آخر ٣ أيام ويثبّتها</div></div>'
+    + '<button onclick="neoFixLatePct(this)" title="تثبيت النسب لآخر ٣ أيام" '
+    + 'style="width:50px;height:50px;min-width:50px;padding:0;font-size:20px;border-radius:12px;'
+    + 'display:flex;align-items:center;justify-content:center;">💾</button></div>';
+}
 async function renderSalesReportsTab(){
   mountSalesShell('account', '<div class="card"><div class="status neoLoad">جاري التحميل...</div></div>');
   const KEY_AR = {};
@@ -11545,6 +11618,7 @@ async function renderSalesReportsTab(){
           </div></div>`).join('')}`;
   }
   mountSalesShell('account', `
+    ${neoLatePctBarHtml()}
     <div style="margin:14px 2px 12px;">
       <h2 style="margin:0;">🚨 إبلاغات مسؤولي الصالة</h2>
       <div style="font-size:11px;color:#6b7a8d;margin-top:4px;">مسؤول شفت علّم ✓ على شيء غير مكتمل واكتشفه التدقيق — خصم −10% لكل إبلاغ</div>
@@ -11736,7 +11810,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.05.06";
+const APP_VERSION = "2026.09.10.01";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -11831,25 +11905,51 @@ const APP_VERSION = "2026.09.05.06";
 /* ══════════ لوحة المطوّر — دخول سرّي: ٧ ضغطات على الزاوية العليا اليسرى + PIN ══════════ */
 (function(){
   const PIN_HASH = '1b9a56ed723eb5444e6aa55f6c59372fe84a3c4b95d60be3ba0da21b94136b55';   /* SHA-256 للرمز */
-  let taps = 0, timer = null, unlocked = false;
+  let taps = 0, timer = null;
+  let unlocked = false;
+  try{ unlocked = localStorage.getItem('devUnlocked') === '1'; }catch(e){}
 
   async function sha(s){
     const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
     return [...new Uint8Array(b)].map(x => x.toString(16).padStart(2,'0')).join('');
   }
 
-  /* منطقة سرّية غير مرئية */
+  /* منطقة سرّية غير مرئية.
+     كانت لا تستجيب أحياناً: مساحتها ٥٢ بكسل، وطبقتها (99997) تحت شريط
+     الطابور (999994) وشريط التحديث، فيغطّيانها فلا تصل الضغطة. ثم كانت
+     تسمع 'click' وحده وهو يضيع على الهاتف مع أدنى تمرير. */
   function mountHotspot(){
     if (document.getElementById('devHot')) return;
     const h = document.createElement('div');
     h.id = 'devHot';
-    h.style.cssText = 'position:fixed;top:0;left:0;width:52px;height:52px;z-index:99997;background:transparent;';
-    h.addEventListener('click', () => {
+    h.style.cssText = 'position:fixed;top:0;left:0;width:66px;height:66px;z-index:1000005;'
+      + 'background:transparent;touch-action:manipulation;';
+    const hit = () => {
       taps++;
       clearTimeout(timer);
-      timer = setTimeout(() => { taps = 0; }, 2500);
-      if (taps >= 7){ taps = 0; askPin(); }
-    });
+      timer = setTimeout(() => { taps = 0; }, 4000);
+      /* ارتجاجة خفيفة كل ضغطة — فيعرف أنها وصلت ولا يضغط في الهواء */
+      try{ if (navigator.vibrate) navigator.vibrate(8); }catch(e){}
+      if (taps >= 5){ taps = 0; askPin(); }
+    };
+    /* pointerdown يصل دائماً؛ ومع منع التكرار لا تُحتسب الضغطة مرتين */
+    let last = 0;
+    const once = e => {
+      const now = Date.now();
+      if (now - last < 120) return;
+      last = now;
+      hit();
+    };
+    h.addEventListener('pointerdown', once);
+    h.addEventListener('touchstart', once, { passive: true });
+    h.addEventListener('click', once);
+    /* وبديل بلا عدّ: ضغطة مطوّلة ثانيتين */
+    let hold = null;
+    const startHold = () => { clearTimeout(hold); hold = setTimeout(() => { taps = 0; askPin(); }, 2000); };
+    const endHold   = () => clearTimeout(hold);
+    h.addEventListener('pointerdown', startHold);
+    ['pointerup','pointerleave','pointercancel','touchend','touchcancel'].forEach(ev =>
+      h.addEventListener(ev, endHold));
     document.body.appendChild(h);
   }
 
@@ -11869,7 +11969,12 @@ const APP_VERSION = "2026.09.05.06";
     setTimeout(() => inp.focus(), 120);
     ov.querySelector('#dvNo').onclick = () => ov.remove();
     const go = async () => {
-      if (await sha(inp.value.trim()) === PIN_HASH){ unlocked = true; ov.remove(); openPanel(); }
+      if (await sha(inp.value.trim()) === PIN_HASH){
+        unlocked = true;
+        try{ localStorage.setItem('devUnlocked','1'); }catch(e){}
+        try{ if (window.neoMountTimeChip) window.neoMountTimeChip(); }catch(e){}
+        ov.remove(); openPanel();
+      }
       else { ov.querySelector('#dvErr').textContent = 'رمز خاطئ'; inp.value = ''; }
     };
     ov.querySelector('#dvOk').onclick = go;
@@ -14989,14 +15094,75 @@ window.__realTodayStr = function(){
   return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
 };
 (function(){
+  /* الدخول والخروج كانا يمرّان بلوحة المطوّر كاملة. الآن: زرّ عائم واحد
+     لمن فتح اللوحة مرة على هذا الجهاز، وشريط خروج بزرّ صريح. */
+  window.neoSetDevDate = function(v){
+    if (v) localStorage.setItem('devDateOverride', v);
+    else localStorage.removeItem('devDateOverride');
+    location.reload();
+  };
+  window.neoOpenTimeMachine = function(){
+    document.getElementById('tmSheet')?.remove();
+    const cur = localStorage.getItem('devDateOverride') || '';
+    const real = window.__realTodayStr ? window.__realTodayStr() : '';
+    const ov = document.createElement('div');
+    ov.id = 'tmSheet';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:1000004;background:rgba(4,8,14,0.94);'
+      + 'display:flex;align-items:center;justify-content:center;padding:20px;';
+    ov.innerHTML = '<div class="card" style="max-width:330px;width:100%;padding:18px;">'
+      + '<h3 style="margin:0 0 4px;">🕐 آلة الزمن</h3>'
+      + '<div style="color:#8fa3b8;font-size:12px;line-height:1.8;margin-bottom:12px;">'
+      + 'يجعل التطبيق كله يقرأ ويكتب في اليوم الذي تختاره. لا يُعدّل بياناتٍ بنفسه.'
+      + '<br>اليوم الحقيقي: <b style="color:#c8d4e2;">' + real + '</b></div>'
+      + (cur ? '<div style="background:#3a1418;border:1px solid #8c2f36;border-radius:9px;padding:9px;'
+             + 'color:#f0b3b8;font-size:12px;margin-bottom:11px;">مُفعّلة الآن على <b>' + cur + '</b></div>' : '')
+      + '<input id="tmDate" type="date" value="' + (cur || real) + '" style="width:100%;font-size:15px;">'
+      + '<button id="tmGo" style="width:100%;margin-top:10px;font-size:14px;padding:12px;">تطبيق</button>'
+      + '<button id="tmOff" class="secondary" style="width:100%;margin-top:8px;font-size:13px;padding:11px;">'
+      + '↩ الرجوع لليوم الحقيقي</button>'
+      + '<button id="tmNo" class="secondary" style="width:100%;margin-top:8px;font-size:13px;padding:11px;">إغلاق</button>'
+      + '</div>';
+    document.body.appendChild(ov);
+    ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
+    ov.querySelector('#tmNo').onclick  = () => ov.remove();
+    ov.querySelector('#tmOff').onclick = () => neoSetDevDate('');
+    ov.querySelector('#tmGo').onclick  = () => {
+      const v = ov.querySelector('#tmDate').value;
+      if (v) neoSetDevDate(v);
+    };
+  };
+  /* زرّ عائم صغير — لا يظهر إلا لمن فتح لوحة المطوّر على هذا الجهاز */
+  window.neoMountTimeChip = function(){
+    let unlocked = false;
+    try{ unlocked = localStorage.getItem('devUnlocked') === '1'; }catch(e){}
+    const on = !!localStorage.getItem('devDateOverride');
+    const old = document.getElementById('tmChip');
+    if (!unlocked && !on){ old && old.remove(); return; }
+    if (old) return;
+    const c = document.createElement('div');
+    c.id = 'tmChip';
+    c.textContent = '🕐';
+    c.title = 'آلة الزمن';
+    c.style.cssText = 'position:fixed;bottom:96px;left:12px;z-index:1000003;width:44px;height:44px;'
+      + 'border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:19px;'
+      + 'cursor:pointer;background:' + (on ? '#8c2f36' : 'rgba(10,18,30,0.94)')
+      + ';border:1px solid ' + (on ? '#e0777f' : 'rgba(122,167,255,0.32)') + ';';
+    c.onclick = () => neoOpenTimeMachine();
+    document.body.appendChild(c);
+  };
+
   function mount(){
+    try{ window.neoMountTimeChip(); }catch(e){}
     const ov = localStorage.getItem('devDateOverride');
     if (!ov) return;
     const b = document.createElement('div');
-    b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:999996;background:#8c2f36;color:#fff;'
-      + 'font-size:12px;padding:6px 10px;text-align:center;cursor:pointer;';
-    b.textContent = '⏳ آلة الزمن مُفعّلة — التطبيق يعمل على ' + ov + ' (اضغط للإلغاء)';
-    b.onclick = () => { localStorage.removeItem('devDateOverride'); location.reload(); };
+    b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:1000002;background:#8c2f36;color:#fff;'
+      + 'font-size:12px;padding:8px 10px;display:flex;align-items:center;justify-content:center;gap:10px;';
+    b.innerHTML = '<span style="cursor:pointer;">⏳ آلة الزمن مُفعّلة — التطبيق يعمل على <b>' + ov + '</b></span>'
+      + '<button style="font-size:11px;padding:5px 12px;background:#fff;color:#8c2f36;border:none;'
+      + 'border-radius:8px;font-weight:800;">✕ خروج</button>';
+    b.querySelector('span').onclick   = () => neoOpenTimeMachine();
+    b.querySelector('button').onclick = () => neoSetDevDate('');
     document.body.appendChild(b);
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount);
