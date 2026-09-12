@@ -1600,6 +1600,7 @@ async function neoCountLogs(table, fk, itemId){
    وعلامة التعطيل ⟦off⟧، والنقاط، والصور — فلا شيء ينفصل ولا يُفقد.
    هذا هو البديل الآمن لـ«احذف وأنشئ من جديد» التي تمحو التاريخ. */
 const NEO_NAMEABLE = {
+  staff:                  { col:'name',  kind:'الموظف',   render:'renderStaffSection' },
   locations:              { col:'code',  kind:'الموقع',   render:'renderLocationsSection' },
   daily_tasks:            { col:'name',  kind:'المهمة',   render:'renderTasksSection' },
   ipads:                  { col:'code',  kind:'الآيباد',  render:'renderIpadSection' },
@@ -4538,9 +4539,9 @@ async function renderShiftView(profile){
     <div class="card" id="subLocCard">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
         <div style="min-width:0;">
-          <h3 style="margin:0;">🏷️ المواقع الفرعية</h3>
+          <h3 style="margin:0;">✏️ التعديل</h3>
           <div style="color:#8fa3b8;font-size:12px;margin-top:4px;line-height:1.8;">
-            فرِّع أي موقع قائم: ٣٢٠ ← ٣٢٠-١ · ٣٢٠-٢ — وتظهر في جدولك أعلاه كمواقع كاملة.</div>
+            أسماء الموظفين · المواقع الفرعية — شاشة مستقلة حتى لا تزاحم جدول اليوم.</div>
         </div>
         <button onclick="neoOpenSubLocs('${deptId}')" style="font-size:13px;padding:11px 18px;white-space:nowrap;">فتح الشاشة ›</button>
       </div>
@@ -4649,15 +4650,36 @@ async function neoRenderSubLocs(){
                            .sort((a, b) => neoSubNum(a.code) - neoSubNum(b.code));
   const nextNum = base => { const k = kids(base); return k.length ? neoSubNum(k[k.length - 1].code) + 1 : 1; };
 
+  /* قسم أسماء الموظفين — تعديل فقط، بأزرار بحجم يُضغط لا بقلم مجهري */
+  let staffHtml = '';
+  try{
+    const st = (await getStaffList(deptId)).filter(x => !neoIsOff(x.id));
+    staffHtml = '<div class="card"><h3 style="margin:0 0 4px;">👤 أسماء الموظفين</h3>'
+      + '<div style="color:#8fa3b8;font-size:12px;line-height:1.8;margin-bottom:10px;">'
+      + 'تعديل الاسم وحده — لا إضافة ولا حذف. <b style="color:#ffcf5c;">الأيام السابقة تبقى على الاسم القديم</b>'
+      + ' والأيام الجديدة تأخذ الجديد.</div>'
+      + (st.length
+          ? st.map(x => '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;'
+              + 'padding:10px 2px;border-bottom:1px solid rgba(122,167,255,0.1);">'
+              + '<span style="color:#c8d4e2;font-size:14px;min-width:0;">' + esc(x.name) + '</span>'
+              + '<button class="secondary" onclick="neoSubRename(' + JSON.stringify(String(x.id)).replace(/"/g,'&quot;')
+              + ',' + JSON.stringify(String(x.name || '')).replace(/"/g,'&quot;') + ')" '
+              + 'style="font-size:13px;padding:9px 16px;white-space:nowrap;">✏️ تعديل الاسم</button></div>').join('')
+          : '<div style="color:#7487a0;font-size:13px;">لا يوجد موظفون في قسمك</div>')
+      + '</div>';
+  }catch(e){}
+
   let h = '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">'
-    + '<h2 style="margin:0;">🏷️ المواقع الفرعية</h2>'
+    + '<h2 style="margin:0;">✏️ التعديل</h2>'
     + '<span style="background:rgba(56,217,185,0.14);color:#38d9b9;font-size:12px;font-weight:700;'
     + 'padding:4px 12px;border-radius:10px;white-space:nowrap;">'
     + neoArCount(subs.length, 'فرع واحد', 'فرعان', 'فروع', 'فرعاً') + '</span></div>'
-    + '<div style="color:#8fa3b8;font-size:12.5px;line-height:1.9;margin-top:8px;">'
+    + '<div style="color:#a9c4ff;font-size:13px;margin-top:10px;">🏷️ المواقع الفرعية</div>'
+    + '<div style="color:#8fa3b8;font-size:12.5px;line-height:1.9;margin-top:6px;">'
     + 'اختر موقعاً من مواقع قسمك، ثم أضف له فروعاً مرقّمة. الفرع موقع كامل: يظهر في '
     + 'جدولك اليومي بكل أعمدته، ويدخل في نسبتك من يوم إضافته لا قبله.'
     + '<br><b style="color:#ffcf5c;">لا يمكنك إنشاء موقع باسم جديد</b> — التفريع فقط.</div></div>';
+  h += staffHtml;      /* بعد العنوان مباشرة — الأسماء أكثر استعمالاً من التفريع */
 
   if (!parents.length){
     h += '<div class="card" style="color:#8fa3b8;">لا توجد مواقع في قسمك بعد.</div>';
@@ -4789,6 +4811,12 @@ window.neoSubAdd = async function(){
   if (error){ neoNotify('تعذّرت الإضافة: ' + error.message); return; }
   try{ invalidateRefCache('locations_ref'); }catch(e){}
   try{ neoToast('➕ أُضيف ' + neoArCount(codes.length, 'فرع واحد', 'فرعان', 'فروع', 'فرعاً'), true); }catch(e){}
+  await neoRenderSubLocs();
+};
+
+/* تعديل اسم موظف من شاشة التعديل — نفس مسار مدير المبيعات ومعه حفظ التاريخ */
+window.neoSubRename = async function(staffId, current){
+  await neoRenameItem('staff', staffId, String(current || ''), _subDept);
   await neoRenderSubLocs();
 };
 
@@ -5030,15 +5058,7 @@ function progBuildRows(cfg){
       ? ` <span style="cursor:pointer;color:${onLeave ? '#3ecf6b' : '#8fb8d8'};font-size:11px;margin-inline-start:6px;"
             title="${onLeave ? 'إلغاء الإجازة — ترجع خاناته للتأشير' : 'إجازة اليوم — تظهر خاناته «—» ولا تُحتسب عليه'}"
             onclick="neoLeaveTap('${it.id}','${cfg.leaveDeptId}','${cfg.leaveDate}','${cfg.key}')">${onLeave ? 'إلغاء الإجازة' : 'تسجيل إجازة'}</span>` : '';
-    /* تعديل الاسم وحده — بلا إضافة ولا حذف */
-    const renBtn = cfg.leaveDeptId
-      ? ' <span style="cursor:pointer;color:#8fb8d8;font-size:12px;margin-inline-start:6px;"'
-        + ' title="تعديل الاسم — الأيام السابقة تبقى على الاسم القديم"'
-        + ' onclick="neoStaffRename(\'' + it.id + '\',\'' + cfg.leaveDeptId + '\',\''
-        + String(it.label || '').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;')
-        + '\',\'' + cfg.key + '\')">&#9998;</span>'
-      : '';
-    html += `<tr${(offBadge || onLeave) ? ' style="opacity:.6;"' : ''}><td class="code-cell">${esc(it.label)}${offBadge}${leaveBadge}${renBtn}${leaveBtn}</td>${cells}</tr>`;
+    html += `<tr${(offBadge || onLeave) ? ' style="opacity:.6;"' : ''}><td class="code-cell">${esc(it.label)}${offBadge}${leaveBadge}${leaveBtn}</td>${cells}</tr>`;
     for (const w of wrong){
       const val = (fn[w.key]||'').replace(/"/g,'&quot;');
       html += `<tr><td colspan="${totalCols}" style="padding:4px 8px;">
@@ -5061,22 +5081,6 @@ function progSetup(cfg){
   progSections[cfg.key] = cfg;
   return progBuildRows(cfg);
 }
-/* تعديل اسم موظف من شاشة مسؤول الشفت — نفس مسار مدير المبيعات، ومعه
-   تسجيل المدى القديم، ثم تحديث الصفّ بلا إعادة بناء الشاشة كلها. */
-window.neoStaffRename = async function(staffId, deptId, current, sectionKey){
-  const cfg = progSections[sectionKey]; if (!cfg) return;
-  const before = String(current || '');
-  await neoRenameItem('staff', staffId, before, deptId);
-  /* الاسم الجديد من القاعدة لا من افتراضنا — قد تُرفض التسمية لأي سبب */
-  try{
-    const { data } = await supabaseClient.from('staff').select('name').eq('id', staffId).maybeSingle();
-    const now = (data && data.name) || before;
-    const it = (cfg.items || []).find(x => String(x.id) === String(staffId));
-    if (it) it.label = now;
-    progRefresh(sectionKey);
-  }catch(e){}
-};
-
 /* منح الإجازة أو سحبها — يُحدّث الجدول والنسبة فوراً بلا إعادة تحميل */
 window.neoLeaveTap = async function(staffId, deptId, day, sectionKey){
   const cfg = progSections[sectionKey]; if (!cfg) return;
@@ -11894,7 +11898,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.12.01";
+const APP_VERSION = "2026.09.12.02";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
