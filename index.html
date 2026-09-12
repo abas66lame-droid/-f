@@ -1410,6 +1410,7 @@ async function neoLoadOff(force){
     if (!_neoOffSet) _neoOffSet = new Set();
   }
   await neoLoadLeave(force);
+  await neoLoadNames(force);
   return _neoOffSet;
 }
 
@@ -1444,6 +1445,57 @@ async function neoLoadLeave(force){
   }
   return _neoLeave;
 }
+/* ══ تاريخ أسماء الموظفين ══
+   إعادة التسمية تغيّر عمود الاسم، فتتغيّر معه كل الشاشات القديمة ويظهر
+   اسمٌ لم يكن موجوداً في ذلك اليوم. نحفظ مع كل تغيير الاسمَ السابق
+   والمدى الذي كان ساريَ فيه، فيبقى الماضي على اسمه ويمضي الجديد.
+
+   الصيغة: ⟦nm⟧<الموظف>|<آخر يوم بالاسم القديم>|<الاسم القديم>
+   والقراءة: أقربُ مدى ينتهي في ذلك اليوم أو بعده. فإن لم يوجد فالاسم الحالي. */
+const NEO_NAME_TAG = '⟦nm⟧';
+let _neoNames = null;
+async function neoLoadNames(force){
+  if (!force && _neoNames) return _neoNames;
+  const byId = {};
+  try{
+    const { data, error } = await supabaseClient.from('custom_fields')
+      .select('name').like('name', NEO_NAME_TAG + '%');
+    if (error) throw error;
+    (data || []).forEach(r => {
+      const body = String(r.name || '').slice(NEO_NAME_TAG.length);
+      const i = body.indexOf('|'); if (i < 0) return;
+      const j = body.indexOf('|', i + 1); if (j < 0) return;
+      const id = body.slice(0, i), until = body.slice(i + 1, j), nm = body.slice(j + 1);
+      if (!id || !until || !nm) return;
+      (byId[id] = byId[id] || []).push({ until, name: nm });
+    });
+    Object.keys(byId).forEach(k => byId[k].sort((a, b) => a.until < b.until ? -1 : 1));
+    _neoNames = byId;
+  }catch(e){ if (!_neoNames) _neoNames = byId; }
+  return _neoNames;
+}
+/* اسم الموظف كما كان في ذلك اليوم */
+function neoNameOn(staffId, day, current){
+  const arr = (_neoNames && _neoNames[String(staffId)]) || [];
+  if (!arr.length || !day) return current;
+  for (const r of arr) if (r.until >= day) return r.name;   /* مرتّبة تصاعدياً فأولُ ما يشمله هو الأقرب */
+  return current;
+}
+window.neoNameOn = neoNameOn;
+window.neoLoadNames = neoLoadNames;
+
+/* تسجيل تغيير اسم: يُكتب المدى القديم أولاً، فإن فشل لم نُغيّر الاسم أصلاً */
+async function neoRecordNameChange(staffId, deptId, oldName){
+  const today = (typeof todayStr === 'function') ? todayStr() : new Date().toISOString().slice(0,10);
+  const d = new Date(today + 'T12:00:00'); d.setDate(d.getDate() - 1);
+  const until = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+  const { error } = await supabaseClient.from('custom_fields')
+    .insert({ department_id: deptId || null, name: NEO_NAME_TAG + staffId + '|' + until + '|' + oldName });
+  if (error) return error;
+  await neoLoadNames(true);
+  return null;
+}
+
 function neoOnLeave(staffId, day){
   return !!(_neoLeave && day && _neoLeave.set.has(String(staffId) + '|' + day));
 }
@@ -1572,6 +1624,12 @@ window.neoRenameItem = async function(table, id, current, deptId){
   const t = String(v).trim();
   if (!t){ neoNotify('الاسم لا يصلح فارغاً'); return; }
   if (t === String(current || '')) return;
+  /* الموظف وحده له تاريخ أسماء: نُثبّت المدى القديم قبل تغيير الاسم،
+     فإن تعذّر لم نُغيّر شيئاً — الماضي أهمّ من تسمية تُعاد بعد دقيقة. */
+  if (table === 'staff'){
+    const hErr = await neoRecordNameChange(id, deptId, String(current || ''));
+    if (hErr){ neoNotify('تعذّر حفظ الاسم القديم — لم يُغيَّر شيء: ' + hErr.message); return; }
+  }
   const patch = {}; patch[cfg.col] = t;
   const { error } = await supabaseClient.from(table).update(patch).eq('id', id);
   if (error){ neoNotify('تعذّرت التسمية: ' + error.message); return; }
@@ -4972,7 +5030,15 @@ function progBuildRows(cfg){
       ? ` <span style="cursor:pointer;color:${onLeave ? '#3ecf6b' : '#8fb8d8'};font-size:11px;margin-inline-start:6px;"
             title="${onLeave ? 'إلغاء الإجازة — ترجع خاناته للتأشير' : 'إجازة اليوم — تظهر خاناته «—» ولا تُحتسب عليه'}"
             onclick="neoLeaveTap('${it.id}','${cfg.leaveDeptId}','${cfg.leaveDate}','${cfg.key}')">${onLeave ? 'إلغاء الإجازة' : 'تسجيل إجازة'}</span>` : '';
-    html += `<tr${(offBadge || onLeave) ? ' style="opacity:.6;"' : ''}><td class="code-cell">${esc(it.label)}${offBadge}${leaveBadge}${leaveBtn}</td>${cells}</tr>`;
+    /* تعديل الاسم وحده — بلا إضافة ولا حذف */
+    const renBtn = cfg.leaveDeptId
+      ? ' <span style="cursor:pointer;color:#8fb8d8;font-size:12px;margin-inline-start:6px;"'
+        + ' title="تعديل الاسم — الأيام السابقة تبقى على الاسم القديم"'
+        + ' onclick="neoStaffRename(\'' + it.id + '\',\'' + cfg.leaveDeptId + '\',\''
+        + String(it.label || '').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;')
+        + '\',\'' + cfg.key + '\')">&#9998;</span>'
+      : '';
+    html += `<tr${(offBadge || onLeave) ? ' style="opacity:.6;"' : ''}><td class="code-cell">${esc(it.label)}${offBadge}${leaveBadge}${renBtn}${leaveBtn}</td>${cells}</tr>`;
     for (const w of wrong){
       const val = (fn[w.key]||'').replace(/"/g,'&quot;');
       html += `<tr><td colspan="${totalCols}" style="padding:4px 8px;">
@@ -4995,6 +5061,22 @@ function progSetup(cfg){
   progSections[cfg.key] = cfg;
   return progBuildRows(cfg);
 }
+/* تعديل اسم موظف من شاشة مسؤول الشفت — نفس مسار مدير المبيعات، ومعه
+   تسجيل المدى القديم، ثم تحديث الصفّ بلا إعادة بناء الشاشة كلها. */
+window.neoStaffRename = async function(staffId, deptId, current, sectionKey){
+  const cfg = progSections[sectionKey]; if (!cfg) return;
+  const before = String(current || '');
+  await neoRenameItem('staff', staffId, before, deptId);
+  /* الاسم الجديد من القاعدة لا من افتراضنا — قد تُرفض التسمية لأي سبب */
+  try{
+    const { data } = await supabaseClient.from('staff').select('name').eq('id', staffId).maybeSingle();
+    const now = (data && data.name) || before;
+    const it = (cfg.items || []).find(x => String(x.id) === String(staffId));
+    if (it) it.label = now;
+    progRefresh(sectionKey);
+  }catch(e){}
+};
+
 /* منح الإجازة أو سحبها — يُحدّث الجدول والنسبة فوراً بلا إعادة تحميل */
 window.neoLeaveTap = async function(staffId, deptId, day, sectionKey){
   const cfg = progSections[sectionKey]; if (!cfg) return;
@@ -6176,7 +6258,9 @@ async function showHallMissingDetail(deptId){
   const staffFieldDefs = await staffFieldDefsForDeptName(dept.name, dept.id);
   flattenStaffExtraEvaluations(d.staffLogsById);
   const locTable = buildMissingTable(locsInDept, PO_LOC, l => l.code, d.locLogsById, 'daily_logs', 'location_id');
-  const staffTable = buildMissingTable(staffInDept, neoPOSort(staffFieldDefs, deptId, 'staff', 'cols', f => f.key), s => s.name, d.staffLogsById, 'staff_evaluations', 'staff_id');
+  /* اسم ذلك اليوم لا اسم اليوم — فإعادة التسمية لا تُعيد كتابة الماضي */
+  const _nmOn = day => (s => neoNameOn(s.id, day, s.name));
+  const staffTable = buildMissingTable(staffInDept, neoPOSort(staffFieldDefs, deptId, 'staff', 'cols', f => f.key), _nmOn(d.date), d.staffLogsById, 'staff_evaluations', 'staff_id');
   const ipadTable = buildMissingTable(ipadsInDept, PO_IPAD, i => i.code, d.ipadLogsById, 'ipad_logs', 'ipad_id');
   const readerTable = buildMissingTable(readersInDept, PO_RDR, r => r.code, d.readerLogsById, 'serial_reader_logs', 'reader_id');
   const ipadReaderDeviceTable = buildMissingTable(ipadReaderDevicesInDept, PO_IPRD, dv => dv.code, d.ipadReaderDeviceLogsById, 'ipad_reader_device_logs', 'device_id');
@@ -7191,7 +7275,7 @@ const inDept = (arr) => (arr || []).filter(x => String(x.department_id) === Stri
   const A_CLEAN = await neoUnifiedDefs(deptId, 'clean');
 
   const locTable = buildAuditTable(locsSample, A_LOC, l => l.code, d.locLogsById, 'daily_logs', 'location_id', locked);
-  const staffTable = buildAuditTable(staffSample, staffFieldDefs, s => s.name, d.staffLogsById, 'staff_evaluations', 'staff_id', locked);
+  const staffTable = buildAuditTable(staffSample, staffFieldDefs, s => neoNameOn(s.id, d.date, s.name), d.staffLogsById, 'staff_evaluations', 'staff_id', locked);
   const ipadTable = buildAuditTable(ipadsSample, A_IPAD, i => i.code, d.ipadLogsById, 'ipad_logs', 'ipad_id', locked);
   const readerTable = buildAuditTable(readersSample, A_RDR, r => r.code, d.readerLogsById, 'serial_reader_logs', 'reader_id', locked);
   const ipadReaderDeviceTable = buildAuditTable(ipadReaderDevicesSample, A_IRD, dv => dv.code, d.ipadReaderDeviceLogsById, 'ipad_reader_device_logs', 'device_id', locked);
@@ -9382,7 +9466,7 @@ async function renderSalesDeptMissingDetail(deptId, profileId){
     const locTable = buildStatusTable(locsInDept, F_LOC, l => l.code, locLogsById);
     const staffFieldDefs = await staffFieldDefsForDeptName(dept?.name || '', deptId);
     flattenStaffExtraEvaluations(staffLogsById);
-    const staffTable = buildStatusTable(staffInDept, staffFieldDefs, s => s.name, staffLogsById);
+    const staffTable = buildStatusTable(staffInDept, staffFieldDefs, s => neoNameOn(s.id, date, s.name), staffLogsById);
     const ipadTable = buildStatusTable(ipadsInDept, F_IPAD, i => i.code, ipadLogsById);
     const readerTable = buildStatusTable(readersInDept, F_READER, r => r.code, readerLogsById);
     const ipadReaderDeviceTable = buildStatusTable(ipadReaderDevicesInDept, F_IPRD, dv => dv.code, ipadReaderDeviceLogsById);
@@ -9511,7 +9595,7 @@ async function renderSalesHallAuditDetail(deptId, profileId){
     const U_LOC = await neoUnifiedDefs(deptId, 'loc');
     const locTable = buildStatusTable(locsSample, U_LOC, l => l.code, locVerified);
     const staffFieldDefs = await staffFieldDefsForDeptName(dept?.name || '', deptId);
-    const staffTable = buildStatusTable(staffSample, staffFieldDefs, s => s.name, staffVerified);
+    const staffTable = buildStatusTable(staffSample, staffFieldDefs, s => neoNameOn(s.id, date, s.name), staffVerified);
     /* نفس المصدر الموحّد — كانت التعريفات العامة تُظهر أعمدة محذوفة */
     const U_IPAD  = await neoUnifiedDefs(deptId, 'ipad');
     const U_RDR   = await neoUnifiedDefs(deptId, 'reader');
@@ -11810,7 +11894,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.10.01";
+const APP_VERSION = "2026.09.12.01";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
