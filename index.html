@@ -11898,7 +11898,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.12.02";
+const APP_VERSION = "2026.09.14.01";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -16962,47 +16962,94 @@ window.fleetProofPick=async function(tripId,taskId,vehId,inp){
   inp.value='';
 };
 
-/* ── كاميرا داخل الصفحة — لا تغادر الويب-فيو فلا يخرجك النظام ── */
+/* ── كاميرا داخل الصفحة — لا تغادر الويب-فيو فلا يخرجك النظام ──
+   كان زرّ الالتقاط يختفي على بعض أجهزة أندرويد: الفيديو بلا حدّ ارتفاع
+   داخل حاوية متمركزة بلا تمرير، فإن جاءت الكاميرا بنسبة طويلة (٣:٤ على
+   شاشة ضيقة) فاض الطول خارج الشاشة ودفع الأزرار إلى ما لا يُدرَك — ولا
+   يمكن التمرير إليها. الآن الفيديو يتقلّص والأزرار ثابتة أسفل الشاشة.
+   ومعها طريقان آخران للالتقاط: لمس ما تراه، وكاميرا الجهاز نفسها. */
 window.fleetCam=async function(tripId,taskId,vehId){
   if(document.getElementById('fcamOv')) return;
-  var stream=null;
+  var stream=null, armed=false, blob=null;
   var o=document.createElement('div');
   o.id='fcamOv';
-  o.style.cssText='position:fixed;inset:0;z-index:1000018;background:#04070c;display:flex;'
-    +'flex-direction:column;align-items:center;justify-content:center;padding:14px;';
-  o.innerHTML='<video id="fcamV" autoplay playsinline muted '
-    +'style="width:100%;max-width:420px;border-radius:12px;background:#000;"></video>'
+  o.style.cssText='position:fixed;inset:0;height:100dvh;max-height:100dvh;z-index:1000018;'
+    /* الحشوة داخل الارتفاع لا فوقه — بدونها يفيض آخر زرّ خارج الشاشة */
+    +'box-sizing:border-box;'
+    +'background:#04070c;display:flex;flex-direction:column;overflow:hidden;'
+    +'padding:10px 10px calc(10px + env(safe-area-inset-bottom,0px));';
+  o.innerHTML=
+     /* منطقة العرض تتقلّص — min-height:0 هو ما يسمح لها بذلك داخل flex */
+     '<div id="fcamStage" style="flex:1 1 auto;min-height:0;width:100%;display:flex;'
+    +'align-items:center;justify-content:center;position:relative;">'
+     /* مطلقة الموضع عمداً: هكذا لا يُسهم حجم الصورة في حجم الحاوية أبداً،
+        فلا تتضخّم الحاوية مهما كانت نسبة الكاميرا، وتبقى الأزرار مكانها. */
+    +'<video id="fcamV" autoplay playsinline muted '
+    +'style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;'
+    +'border-radius:12px;background:#000;"></video>'
+    +'<img id="fcamP" style="display:none;position:absolute;inset:0;width:100%;height:100%;'
+    +'object-fit:contain;border-radius:12px;">'
+    +'<div id="fcamHint" style="position:absolute;bottom:10px;left:50%;transform:translateX(-50%);'
+    +'background:rgba(4,7,12,0.72);color:#e6edf5;font-size:12px;padding:7px 14px;border-radius:999px;'
+    +'pointer-events:none;white-space:nowrap;">اضغط الشاشة للالتقاط</div>'
+    +'</div>'
     +'<canvas id="fcamC" style="display:none"></canvas>'
-    +'<img id="fcamP" style="display:none;width:100%;max-width:420px;border-radius:12px;">'
-    +'<div id="fcamS" style="color:#8fa3b8;font-size:12px;margin-top:9px;min-height:18px;text-align:center;"></div>'
-    +'<div id="fcamB1" style="display:flex;gap:8px;width:100%;max-width:420px;margin-top:12px;">'
-    +'<button id="fcamShot" style="flex:2;font-size:14px;padding:13px;background:#8c4a1e;">📷 التقاط</button>'
-    +'<button id="fcamX" class="secondary" style="flex:1;font-size:13px;padding:13px;">إلغاء</button></div>'
-    +'<div id="fcamB2" style="display:none;gap:8px;width:100%;max-width:420px;margin-top:12px;">'
-    +'<button id="fcamOk" style="flex:2;font-size:14px;padding:13px;background:#14705f;">✓ استخدام</button>'
-    +'<button id="fcamRe" class="secondary" style="flex:1;font-size:13px;padding:13px;">إعادة</button></div>';
+    +'<input id="fcamFile" type="file" accept="image/*" capture="environment" style="display:none">'
+    +'<div id="fcamS" style="flex:none;color:#8fa3b8;font-size:12px;margin-top:8px;min-height:17px;text-align:center;"></div>'
+     /* الأزرار خارج المنطقة المتقلّصة فلا تُدفع خارج الشاشة أبداً */
+    +'<div id="fcamB1" style="flex:none;display:flex;gap:8px;width:100%;max-width:420px;'
+    +'margin:9px auto 0;">'
+    +'<button id="fcamShot" style="flex:2;font-size:15px;padding:15px;background:#8c4a1e;">📷 التقاط</button>'
+    +'<button id="fcamX" class="secondary" style="flex:1;font-size:13px;padding:15px;">إلغاء</button></div>'
+    +'<div id="fcamB2" style="flex:none;display:none;gap:8px;width:100%;max-width:420px;margin:9px auto 0;">'
+    +'<button id="fcamOk" style="flex:2;font-size:15px;padding:15px;background:#14705f;">✓ استخدام</button>'
+    +'<button id="fcamRe" class="secondary" style="flex:1;font-size:13px;padding:15px;">إعادة</button></div>'
+    +'<button id="fcamNative" class="secondary" style="flex:none;width:100%;max-width:420px;'
+    +'margin:8px auto 0;font-size:12.5px;padding:12px;color:#8fb8d8;">📱 استعمل كاميرا الجهاز بدلاً من هذه</button>';
   document.documentElement.appendChild(o);
   var V=o.querySelector('#fcamV'), C=o.querySelector('#fcamC'), P=o.querySelector('#fcamP');
   var S=o.querySelector('#fcamS'), B1=o.querySelector('#fcamB1'), B2=o.querySelector('#fcamB2');
-  var blob=null;
+  var HINT=o.querySelector('#fcamHint'), STAGE=o.querySelector('#fcamStage');
+  var FILE=o.querySelector('#fcamFile');
   function say(m,c){ S.textContent=m||''; S.style.color=c||'#8fa3b8'; }
   function stop(){ try{ if(stream) stream.getTracks().forEach(function(t){ t.stop(); }); }catch(e){} stream=null; }
   function close(){ stop(); o.remove(); }
   o.querySelector('#fcamX').onclick=close;
 
-  try{
-    if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia) throw new Error('غير مدعومة');
-    stream=await navigator.mediaDevices.getUserMedia({
-      video:{ facingMode:{ideal:'environment'}, width:{ideal:1280} }, audio:false });
-    V.srcObject=stream;
-  }catch(e){
-    say('تعذّر فتح الكاميرا — تحقّق من صلاحية الوصول للكاميرا بالمتصفح','#e8a0a4');
-    return;
+  /* رفع صورة جاهزة — يخدم الالتقاط الداخلي وكاميرا الجهاز معاً */
+  async function upload(file,btn,label){
+    if(btn){ btn.disabled=true; btn.textContent='جاري الرفع…'; }
+    say('جاري رفع الصورة…');
+    try{
+      if(!navigator.onLine) throw new Error('لا يوجد اتصال');
+      var p=window.__fleetProfile||{};
+      await fleetUploadProof(file,tripId,taskId,vehId,p.id);
+      try{ neoPlay('done'); }catch(e){}
+      close();
+      await window.renderDriverView(p);
+    }catch(e){
+      if(btn){ btn.disabled=false; btn.textContent=label; }
+      say('فشل الرفع: '+((e&&e.message)||'')+' — المهمة لم تُسجَّل','#e8a0a4');
+    }
   }
 
-  o.querySelector('#fcamShot').onclick=function(){
+  /* كاميرا الجهاز — مخرج مضمون إن تعذّرت الكاميرا الداخلية على أي جهاز */
+  o.querySelector('#fcamNative').onclick=function(){ FILE.click(); };
+  FILE.onchange=async function(){
+    var f=FILE.files&&FILE.files[0]; if(!f) return;
+    if(f.size>8*1024*1024){ say('الصورة كبيرة (أكثر من ٨ ميغا)','#e8a0a4'); FILE.value=''; return; }
+    stop();
+    say('جاري ضغط الصورة…');
+    var small=f; try{ small=await fleetShrink(f); }catch(e){}
+    await upload(small,o.querySelector('#fcamNative'),'📱 استعمل كاميرا الجهاز بدلاً من هذه');
+    FILE.value='';
+  };
+
+  function shoot(){
+    if(!armed||blob) return;
     try{
-      var w=V.videoWidth||1280, h=V.videoHeight||960;
+      var w=V.videoWidth||0, h=V.videoHeight||0;
+      if(!w||!h){ say('الكاميرا لم تُعطِ صورة بعد — جرّب كاميرا الجهاز','#e8a0a4'); return; }
       var mx=960, sc=Math.min(1,mx/Math.max(w,h));
       C.width=Math.round(w*sc); C.height=Math.round(h*sc);
       C.getContext('2d').drawImage(V,0,0,C.width,C.height);
@@ -17011,31 +17058,42 @@ window.fleetCam=async function(tripId,taskId,vehId){
         blob=b;
         P.src=URL.createObjectURL(b);
         V.style.display='none'; P.style.display='';
+        HINT.style.display='none';
         B1.style.display='none'; B2.style.display='flex';
         stop();
         say('راجع الصورة ثم اضغط استخدام');
       },'image/jpeg',0.65);
     }catch(e){ say('تعذّر الالتقاط','#e8a0a4'); }
-  };
+  }
+  o.querySelector('#fcamShot').onclick=shoot;
+  /* لمس ما تراه يلتقط — مخرج ثانٍ لو غاب الزرّ أو لم يُرَ */
+  STAGE.addEventListener('click',shoot);
+
+  try{
+    if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia) throw new Error('غير مدعومة');
+    stream=await navigator.mediaDevices.getUserMedia({
+      video:{ facingMode:{ideal:'environment'}, width:{ideal:1280} }, audio:false });
+    V.srcObject=stream;
+  }catch(e){
+    HINT.style.display='none';
+    B1.style.display='none';
+    say('تعذّر فتح الكاميرا داخل التطبيق — استعمل كاميرا الجهاز بالزرّ أدناه','#e8a0a4');
+    return;
+  }
+  /* لا نُسلّح اللمس إلا بعد أن تستقرّ الصورة — فلا تلتقط الضغطةُ التي فتحتها */
+  setTimeout(function(){ armed=true; },700);
+  /* صورة سوداء لا تأتي أبداً؟ نقُل له الطريق الآخر بدل أن ينتظر */
+  setTimeout(function(){
+    if(o.isConnected && !blob && !(V.videoWidth>0))
+      say('الكاميرا لم تستجب — استعمل كاميرا الجهاز بالزرّ أدناه','#e8a0a4');
+  },4000);
 
   o.querySelector('#fcamRe').onclick=function(){ close(); window.fleetCam(tripId,taskId,vehId); };
 
-  o.querySelector('#fcamOk').onclick=async function(){
+  o.querySelector('#fcamOk').onclick=function(){
     if(!blob) return;
-    var ok2=o.querySelector('#fcamOk'); ok2.disabled=true; ok2.textContent='جاري الرفع…';
-    say('جاري رفع الصورة…');
-    try{
-      if(!navigator.onLine) throw new Error('لا يوجد اتصال');
-      var f=new File([blob],'cam_'+Date.now()+'.jpg',{type:'image/jpeg'});
-      var p=window.__fleetProfile||{};
-      await fleetUploadProof(f,tripId,taskId,vehId,p.id);
-      try{ neoPlay('done'); }catch(e){}
-      close();
-      await window.renderDriverView(p);
-    }catch(e){
-      ok2.disabled=false; ok2.textContent='✓ استخدام';
-      say('فشل الرفع: '+((e&&e.message)||'')+' — المهمة لم تُسجَّل','#e8a0a4');
-    }
+    var f=new File([blob],'cam_'+Date.now()+'.jpg',{type:'image/jpeg'});
+    return upload(f,o.querySelector('#fcamOk'),'✓ استخدام');
   };
 };
 
