@@ -1335,10 +1335,14 @@ async function cachedSelectResponse(cacheKey, table, selectStr, orderCol){
      «معطَّل». الاستثناء من النسبة يتم في الحساب لا بالإخفاء. لكن حالة التعطيل
      لازم تكون محمّلة قبل أي رسم أو حساب، فنضمن تحميلها هنا. */
   if (NEO_OFFABLE[table]) await neoLoadOff();
+  /* القسم المعطَّل عن المدير: نقطة واحدة تكفي كل شاشاته — الحالية والمقبلة */
+  if (table === 'departments'){ try{ await neoLoadDeptHide(); }catch(e){} }
+  const _out = res => (table === 'departments' && res && Array.isArray(res.data))
+    ? { data: neoDeptsVisible(res.data), error: res.error || null } : res;
   const cached = _refCache[cacheKey];
   /* لا نثق بذاكرة فارغة — قد تكون نتيجة انقطاع لحظي فتُخفي كل البيانات */
   if (cached && cached.data && cached.data.length && (Date.now() - cached.ts) < REF_CACHE_TTL_MS){
-    return { data: cached.data, error: null };
+    return _out({ data: cached.data, error: null });
   }
   const mkQ = () => {
     let x = supabaseClient.from(table).select(selectStr);
@@ -1358,7 +1362,7 @@ async function cachedSelectResponse(cacheKey, table, selectStr, orderCol){
   }
   /* نُخزّن النتائج غير الفارغة فقط */
   if (!res.error && res.data && res.data.length) _refCache[cacheKey] = { data: res.data, ts: Date.now() };
-  return res;
+  return _out(res);
 }
 function invalidateRefCache(cacheKey){
   if (cacheKey) delete _refCache[cacheKey];
@@ -1412,6 +1416,7 @@ async function neoLoadOff(force){
   await neoLoadLeave(force);
   await neoLoadNames(force);
   await neoLoadNoAudit(force);
+  await neoLoadDeptHide(force);
   return _neoOffSet;
 }
 
@@ -1506,6 +1511,82 @@ async function neoSetHallOut(deptId, id, key, on){
 window.neoHallOutItem = neoHallOutItem;
 window.neoHallOutCell = neoHallOutCell;
 window.neoSetHallOut  = neoSetHallOut;
+
+/* ══ قسم كامل خارج شاشات مدير المبيعات ══
+   قسم أُغلق أو توقّف فعلياً يظل يسحب المتوسّط ويشوّش الاتجاه والتقرير.
+   التعطيل هنا يُخرجه من شاشات المدير وحده — مسؤول الشفت ومشرف الصالة
+   يشتغلون عليه كما هم، وسجلاته لا تُمَسّ.
+
+   ومؤرَّخ: يُحسب من يوم التعطيل فصاعداً فقط، فأي رقم سبق أن رآه
+   المدير في يوم سابق يبقى كما هو.
+
+   ⟦dhide⟧<القسم>|<تاريخ البدء> */
+const NEO_DHIDE_TAG = '⟦dhide⟧';
+let _neoDHide = null;                 /* { deptId: 'YYYY-MM-DD' } */
+async function neoLoadDeptHide(force){
+  if (!force && _neoDHide) return _neoDHide;
+  const m = {};
+  try{
+    const { data, error } = await supabaseClient.from('custom_fields')
+      .select('name').like('name', NEO_DHIDE_TAG + '%');
+    if (error) throw error;
+    (data || []).forEach(r => {
+      const body = String(r.name || '').slice(NEO_DHIDE_TAG.length);
+      if (!body) return;
+      const i = body.indexOf('|');
+      m[i < 0 ? body : body.slice(0, i)] = i < 0 ? '' : body.slice(i + 1);
+    });
+    _neoDHide = m;
+  }catch(e){ if (!_neoDHide) _neoDHide = m; }
+  return _neoDHide;
+}
+/* التعطيل يخصّ شاشات المدير وحده — ويُرفع مؤقتاً في شاشة الإدارة نفسها */
+function neoDeptHideApplies(){
+  try{
+    if (window.__neoAllDepts) return false;
+    const p = window.__fleetProfile;
+    return !!(p && p.role === 'sales');
+  }catch(e){ return false; }
+}
+/* تاريخ تعطيل القسم — '' علامة قديمة بلا تاريخ، undefined غير معطَّل */
+function neoDeptHideFrom(deptId){
+  if (!_neoDHide) return undefined;
+  return _neoDHide[String(deptId)];
+}
+/* هل يُخفى هذا القسم عن المدير في هذا اليوم؟ */
+function neoDeptOut(deptId, day){
+  if (!neoDeptHideApplies()) return false;
+  const f = neoDeptHideFrom(deptId);
+  if (f === undefined) return false;
+  if (!f) return true;                                  /* علامة بلا تاريخ = دائماً */
+  let d = day;
+  if (!d){ try{ d = salesSelectedDate || null; }catch(e){} }
+  if (!d) d = (typeof todayStr === 'function') ? todayStr() : '';
+  return !!(d && d >= f);
+}
+/* ترشيح قائمة أقسام ليوم معيّن — المدخل قد يكون صفوف أقسام أو معرّفات */
+function neoDeptsVisible(list, day){
+  return (list || []).filter(x => !neoDeptOut(x && x.id !== undefined ? x.id : x, day));
+}
+async function neoSetDeptHide(deptId, on){
+  const today = (typeof todayStr === 'function') ? todayStr() : '';
+  let error = null;
+  if (on){
+    ({ error } = await supabaseClient.from('custom_fields')
+      .insert({ department_id: deptId, name: NEO_DHIDE_TAG + deptId + '|' + today }));
+  } else {
+    ({ error } = await supabaseClient.from('custom_fields')
+      .delete().like('name', NEO_DHIDE_TAG + deptId + '%'));
+  }
+  if (error){ neoNotify('تعذّر الحفظ: ' + error.message); return false; }
+  await neoLoadDeptHide(true);
+  try{ if (typeof invalidateRefCache === 'function') invalidateRefCache('departments'); }catch(e){}
+  return true;
+}
+window.neoDeptOut      = neoDeptOut;
+window.neoDeptsVisible = neoDeptsVisible;
+window.neoDeptHideFrom = neoDeptHideFrom;
+window.neoSetDeptHide  = neoSetDeptHide;
 
 /* ══ تاريخ أسماء الموظفين ══
    إعادة التسمية تغيّر عمود الاسم، فتتغيّر معه كل الشاشات القديمة ويظهر
@@ -7524,7 +7605,9 @@ async function renderSalesTrend(){
     const f = d => d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
 
     const { data: dps } = await supabaseClient.from('departments').select('id,name');
-    const depts = dps || [];
+    /* القسم المعطَّل يختفي من الاتجاه — لكن أيامه السابقة تبقى بأرقامها،
+       فيظل في القائمة ما دام جزء من الدورة قبل تاريخ تعطيله */
+    const depts = (dps || []).filter(d => !neoDeptOut(d.id, cycle.from));
     /* قائمة المشرفين */
     let hallList = [];
     try{
@@ -7540,7 +7623,8 @@ async function renderSalesTrend(){
     } else {
       const { data: st } = await supabaseClient.from('daily_stats')
         .select('department_id,pct,log_date').gte('log_date', f(start)).lte('log_date', f(end)).order('log_date');
-      rows = st || [];
+      /* يوماً بيوم: قبل تاريخ التعطيل يُحتسب، وبعده لا — فلا يتغيّر رقم ماضٍ */
+      rows = (st || []).filter(r => !neoDeptOut(r.department_id, r.log_date));
     }
     /* سلسلة الأيام */
     const days = [];
@@ -7581,8 +7665,9 @@ async function renderSalesTrend(){
       const tbl = trendMode === 'hall' ? 'hall_stats' : 'daily_stats';
       const col = trendMode === 'hall' ? 'user_id' : 'department_id';
       const { data: pv } = await supabaseClient.from(tbl)
-        .select(col + ',pct').gte('log_date', pc.from).lte('log_date', pc.to);
-      const sel = (pv||[]).filter(r => trendDept === 'all' || String(r[col]) === String(trendDept));
+        .select(col + ',' + 'pct,log_date').gte('log_date', pc.from).lte('log_date', pc.to);
+      const sel = (pv||[]).filter(r => (trendDept === 'all' || String(r[col]) === String(trendDept))
+        && !(tbl === 'daily_stats' && neoDeptOut(r[col], r.log_date)));
       if (sel.length) prevAvg = Math.round(sel.reduce((s,r)=>s+r.pct,0) / sel.length);
     }catch(e){}
     const trend = (prevAvg !== null && vals.length) ? (avg - prevAvg) : null;
@@ -8236,14 +8321,18 @@ async function renderSalesWeeklyReport(){
   try{
     const cur = neoWeekRange(0), prev = neoWeekRange(1);
     const { data: dps } = await supabaseClient.from('departments').select('id,name');
-    const depts = dps || [];
+    /* المعطَّل يخرج من التقرير، ويبقى ما دام جزء من الفترة سابقاً لتعطيله */
+    const depts = (dps || []).filter(d => !neoDeptOut(d.id, prev.from));
 
-    const [{ data: sCur }, { data: sPrev }] = await Promise.all([
+    const [{ data: _sCur0 }, { data: _sPrev0 }] = await Promise.all([
       supabaseClient.from('daily_stats').select('department_id,pct,log_date,saved_by_name')
         .gte('log_date', cur.from).lte('log_date', cur.to),
-      supabaseClient.from('daily_stats').select('department_id,pct')
+      supabaseClient.from('daily_stats').select('department_id,pct,log_date')
         .gte('log_date', prev.from).lte('log_date', prev.to)
     ]);
+    /* يوماً بيوم — فالأيام السابقة للتعطيل تبقى بأرقامها */
+    const _keep = r => !neoDeptOut(r.department_id, r.log_date);
+    const sCur = (_sCur0 || []).filter(_keep), sPrev = (_sPrev0 || []).filter(_keep);
 
     /* متوسط كل قسم في الأسبوعين */
     const avg = rows => {
@@ -12008,7 +12097,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.15.02";
+const APP_VERSION = "2026.09.15.03";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -15214,6 +15303,7 @@ window.__olSortNumeric = async function(){
       + '<button id="dvStreak" style="width:100%;font-size:13px;padding:12px;margin-bottom:7px;background:#8c4a1e;font-weight:700;">🔥 إعادة حساب السلاسل من السجل</button>'
       + '<button id="dvStreakAdm" style="width:100%;font-size:13px;padding:12px;margin-bottom:7px;background:#6b4a1e;font-weight:700;">🎛 التحكم بالسلاسل</button>'
       + '<button id="dvHallHide" style="width:100%;font-size:13px;padding:12px;margin-bottom:7px;background:#5a2f38;font-weight:700;">🙈 إخفاء أقسام عن الصالة</button>'
+      + '<button id="dvDeptHide" style="width:100%;font-size:13px;padding:12px;margin-bottom:7px;background:#7a2f2f;font-weight:700;">🚫 تعطيل أقسام عن تقاريرك</button>'
       + '<button id="dvIssues" style="width:100%;font-size:13px;padding:12px;margin-bottom:7px;background:#8c2f36;font-weight:700;">🐞 بلاغات المستخدمين<span id="dvIssueCount"></span></button>'
       + '<button id="dvNotif" style="width:100%;font-size:13px;padding:12px;margin-bottom:14px;background:#14705f;font-weight:700;">📢 إرسال إشعار</button>'
 
@@ -15262,6 +15352,7 @@ window.__olSortNumeric = async function(){
     { const _b = p.querySelector('#dvStreak'); if (_b) _b.onclick = () => { try{ window.neoBackfillStreaks(_b); }catch(e){} }; }
     { const _b = p.querySelector('#dvStreakAdm'); if (_b) _b.onclick = () => { try{ window.neoStreakAdminUI(); }catch(e){} }; }
     { const _b = p.querySelector('#dvHallHide'); if (_b) _b.onclick = () => { try{ window.neoHallHideUI(); }catch(e){} }; }
+    { const _b = p.querySelector('#dvDeptHide'); if (_b) _b.onclick = () => { try{ window.neoDeptHideUI(); }catch(e){} }; }
     { const _b = p.querySelector('#dvDept'); if (_b) _b.onclick = () => { deptReport(); SEE(); }; }
     { const _b = p.querySelector('#dvStreakTbl'); if (_b) _b.onclick = () => { streaksReport(); SEE(); }; }
     { const _b = p.querySelector('#dvCols'); if (_b) _b.onclick = () => { colsReport(); SEE(); }; }
@@ -18717,6 +18808,54 @@ window.neoHallHideSave = async function(){
   });
   var ok=await window.neoHallHiddenSet(list);
   if(ok){ toast(list.length?('أُخفي '+list.length+' قسماً'):'لا أقسام مخفية',true); o.remove(); }
+};
+
+/* ════════ قسم كامل خارج شاشات المدير ════════ */
+window.neoDeptHideUI = async function(){
+  try{
+    var dr=await SB().from('departments').select('id,name').order('name');
+    var depts=dr.data||[];
+    try{ await neoLoadDeptHide(true); }catch(e){}
+    var o=document.createElement('div');
+    o.id='dhOv';
+    o.style.cssText='position:fixed;inset:0;z-index:1000010;background:rgba(4,7,12,.9);overflow-y:auto;padding:18px;';
+    o.innerHTML='<div id="dhBody" style="max-width:420px;margin:0 auto;background:#0d1622;border-radius:14px;padding:18px;"></div>';
+    document.body.appendChild(o);
+    window.neoDeptHideDraw(depts);
+  }catch(e){ toast('تعذّر الفتح'); }
+};
+window.neoDeptHideDraw = function(depts){
+  var b=document.getElementById('dhBody'); if(!b) return;
+  window.__dhDepts = depts;
+  var h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">'
+    +'<b style="color:#c8d4e2;font-size:14px;">🚫 تعطيل أقسام عن تقاريرك</b>'
+    +'<button class="secondary" style="font-size:12px;padding:6px 12px;" onclick="document.getElementById(\'dhOv\').remove()">إغلاق</button></div>'
+    +'<div style="color:#9fb0c5;font-size:11px;line-height:1.8;margin-bottom:12px;">'
+    +'القسم المعطَّل يختفي من شاشاتك أنت: النسب والاتجاه والتقرير وقوائم الأقسام.<br>'
+    +'<b style="color:#ffb37a;">مسؤول الشفت ومشرف الصالة يشتغلون عليه كما هم.</b><br>'
+    +'ويُحسب من يوم التعطيل فصاعداً — أرقام الأيام السابقة تبقى كما رأيتها.</div>';
+  (depts||[]).forEach(function(d){
+    var from = (typeof neoDeptHideFrom==='function') ? neoDeptHideFrom(d.id) : undefined;
+    var on = from !== undefined;
+    h+='<div onclick="neoDeptHideTog(\''+esc(d.id)+'\')" '
+      +'style="display:flex;align-items:center;gap:9px;padding:10px;margin-bottom:5px;border-radius:9px;cursor:pointer;'
+      +'background:'+(on?'rgba(225,91,100,0.12)':'rgba(122,167,255,0.05)')+';">'
+      +'<span style="width:20px;height:20px;border-radius:5px;flex-shrink:0;display:flex;align-items:center;'
+      +'justify-content:center;font-size:12px;background:'+(on?'#8c2f38':'rgba(255,255,255,0.06)')+';color:#fff;">'
+      +(on?'✓':'')+'</span>'
+      +'<span style="flex:1;color:#c8d4e2;font-size:13px;">'+esc(d.name)+'</span>'
+      +'<span style="color:'+(on?'#e8a0a4':'#5d6d80')+';font-size:11px;">'
+      +(on ? (from ? ('معطَّل من '+esc(from)) : 'معطَّل') : 'ظاهر')+'</span></div>';
+  });
+  b.innerHTML=h;
+};
+window.neoDeptHideTog = async function(id){
+  var from = (typeof neoDeptHideFrom==='function') ? neoDeptHideFrom(id) : undefined;
+  var turnOn = (from === undefined);
+  var ok = await neoSetDeptHide(id, turnOn);
+  if(!ok) return;
+  toast(turnOn ? 'عُطّل القسم عن تقاريرك' : 'رجع القسم', !turnOn);
+  window.neoDeptHideDraw(window.__dhDepts||[]);
 };
 
 /* ════════ ٢) التحكم بالسلاسل ════════ */
