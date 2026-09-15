@@ -2511,7 +2511,7 @@ async function handleLoggedIn(){
     appScreen.classList.remove('hidden');
 
     document.getElementById('userNameLabel').textContent = profile.name || '';
-    const roleLabels = { shift: "مسؤول شفت", hall: "مسؤول صالة", sales: "مسؤول مبيعات", driver: "موظف توصيل", fleet: "مسؤول التوصيل", clean: "مسؤول التنظيف العام", stock: "مسؤول الجرد العام" };
+    const roleLabels = { shift: "مسؤول شفت", hall: "مسؤول صالة", sales: "مسؤول مبيعات", driver: "موظف توصيل", fleet: "مسؤول التوصيل", clean: "مسؤول التنظيف العام", stock: "مسؤول الجرد العام", dev: "مطوّر" };
     /* أُزيلت shiftLabels — نظام الشفتات ملغى ولم تكن مستخدمة في أي مكان */
     document.getElementById('userRoleLabel').textContent = roleLabels[profile.role] || profile.role;
 
@@ -2551,6 +2551,11 @@ async function handleLoggedIn(){
       document.getElementById('linkView').classList.remove('hidden');
       neoSetManageMode(false);
       await renderLinkManagerView(profile, profile.role);
+    } else if (profile.is_dev === true){
+      /* حساب المطوّر بلا دور تشغيلي: كان يقف على شاشة فارغة.
+         يرى شاشة المدير ليصل إلى كل شيء، وزرّ 🛠 معها. */
+      document.getElementById('salesView').classList.remove('hidden');
+      await renderSalesView();
     }
   } catch (err) {
     try{ console.error('خطأ في handleLoggedIn:', err); }catch(e){}
@@ -12102,7 +12107,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.15.05";
+const APP_VERSION = "2026.09.15.06";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
