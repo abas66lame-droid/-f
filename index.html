@@ -2402,6 +2402,25 @@ async function handleLoggedIn(){
       return;
     }
 
+    /* حساب مُنهى خدمته: شاشة واحدة، ولا شيء خلفها */
+    if (profile.removed === true){
+      loadingScreen.innerHTML =
+          '<div style="position:fixed;inset:0;z-index:1000030;background:#0a0f18;display:flex;'
+        + 'flex-direction:column;align-items:center;justify-content:center;gap:22px;padding:24px;'
+        + 'box-sizing:border-box;text-align:center;">'
+        + '<div style="font-size:64px;line-height:1;">⛔</div>'
+        + '<div style="color:#e15b64;font-size:30px;font-weight:900;line-height:1.5;">'
+        + 'أنت مطرود من النظام</div>'
+        + '<div style="color:#8fa3b8;font-size:14px;line-height:1.9;max-width:340px;">'
+        + 'أُوقفت صلاحياتك ولم يعد لهذا الحساب أي وصول.<br>راجع الإدارة.</div>'
+        + '<button onclick="location.reload()" style="margin-top:6px;font-size:14px;padding:12px 28px;">خروج</button>'
+        + '</div>';
+      loadingScreen.classList.remove('hidden');
+      appScreen.classList.add('hidden');
+      try{ await supabaseClient.auth.signOut(); }catch(e){}
+      return;
+    }
+
     console.log('تحميل profile:', profile);
     loadingScreen.classList.add('hidden');
     appScreen.classList.remove('hidden');
@@ -11989,7 +12008,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.15.01";
+const APP_VERSION = "2026.09.15.02";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
