@@ -1544,6 +1544,8 @@ async function neoLoadDeptHide(force){
 function neoDeptHideApplies(){
   try{
     if (window.__neoAllDepts) return false;
+    /* أثناء المحاكاة نُري المدير ما يراه الموظف فعلاً، لا ما يراه هو */
+    try{ if (sessionStorage.getItem('devSimProfile')) return false; }catch(e){}
     const p = window.__fleetProfile;
     return !!(p && p.role === 'sales');
   }catch(e){ return false; }
@@ -2436,6 +2438,8 @@ async function doLogout(){
   await supabaseClient.auth.signOut();
   document.getElementById('loginScreen').classList.remove('hidden');
   document.getElementById('appScreen').classList.add('hidden');
+  try{ window.__fleetProfile = null; }catch(e){}
+  try{ if (window.neoRefreshDevUI) window.neoRefreshDevUI(); }catch(e){}
 }
 
 window.addEventListener('DOMContentLoaded', async () => {
@@ -2518,6 +2522,7 @@ async function handleLoggedIn(){
   try{ document.getElementById('linkView').classList.add('hidden'); }catch(e){}
     try{ document.getElementById('fleetSupView').classList.add('hidden'); }catch(e){}
     try{ window.__fleetProfile = profile; }catch(e){}
+    try{ if (window.neoRefreshDevUI) window.neoRefreshDevUI(); }catch(e){}
 
     window.__notifRole = profile.role;
     window.__notifDept = (profile.department_ids && profile.department_ids[0]) || null;
@@ -12097,7 +12102,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.15.03";
+const APP_VERSION = "2026.09.15.04";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -12241,6 +12246,13 @@ const APP_VERSION = "2026.09.15.03";
   }
 
   function askPin(){
+    /* أدوات المطوّر تتبع الحساب لا الجهاز: لا شيء قبل الدخول، ولا لغير المدير */
+    try{
+      if (window.neoDevEligible && !window.neoDevEligible()){
+        if (typeof neoToast === 'function') neoToast('أدوات المطوّر لمدير المبيعات بعد الدخول');
+        return;
+      }
+    }catch(e){}
     if (unlocked){ openPanel(); return; }
     const ov = document.createElement('div');
     ov.style.cssText = 'position:fixed;inset:0;z-index:999999;background:rgba(4,8,14,0.96);display:flex;align-items:center;justify-content:center;padding:20px;';
@@ -15294,7 +15306,9 @@ window.__olSortNumeric = async function(){
     p.innerHTML =
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">'
       + '<b style="color:#38d9b9;font-size:16px;">🛠 لوحة المطوّر</b>'
-      + '<button id="dvClose" class="secondary" style="font-size:13px;padding:8px 14px;">إغلاق ✕</button></div>'
+      + '<div style="display:flex;gap:6px;">'
+      + '<button id="dvLock" class="secondary" style="font-size:13px;padding:8px 12px;color:#e15b64;">🔒 قفل</button>'
+      + '<button id="dvClose" class="secondary" style="font-size:13px;padding:8px 14px;">إغلاق ✕</button></div></div>'
       + '<div style="background:#0d1622;border:1px solid rgba(122,167,255,0.2);border-radius:10px;padding:12px;margin-bottom:12px;font-size:12px;line-height:2;color:#c8d4e2;" id="dvEnv"></div>'
       + '<div style="color:#7487a0;font-size:11px;margin:2px 0 6px;">الأهم</div>'
       + '<button id="dvStage" style="width:100%;font-size:14px;padding:14px;margin-bottom:7px;background:#2e5ca8;font-weight:800;">🔬 الفحص المتدرّج — ٨ مراحل</button>'
@@ -15351,6 +15365,15 @@ window.__olSortNumeric = async function(){
     p.querySelector('#dvClose').onclick = () => p.remove();
     { const _b = p.querySelector('#dvStreak'); if (_b) _b.onclick = () => { try{ window.neoBackfillStreaks(_b); }catch(e){} }; }
     { const _b = p.querySelector('#dvStreakAdm'); if (_b) _b.onclick = () => { try{ window.neoStreakAdminUI(); }catch(e){} }; }
+    { const _b = p.querySelector('#dvLock');
+      if (_b) _b.onclick = () => {
+        unlocked = false;
+        try{ localStorage.removeItem('devUnlocked'); }catch(e){}
+        document.getElementById('tmChip')?.remove();
+        p.remove();
+        if (typeof neoToast === 'function') neoToast('أُقفلت لوحة المطوّر — يلزم الرمز مجدداً', true);
+      };
+    }
     { const _b = p.querySelector('#dvHallHide'); if (_b) _b.onclick = () => { try{ window.neoHallHideUI(); }catch(e){} }; }
     { const _b = p.querySelector('#dvDeptHide'); if (_b) _b.onclick = () => { try{ window.neoDeptHideUI(); }catch(e){} }; }
     { const _b = p.querySelector('#dvDept'); if (_b) _b.onclick = () => { deptReport(); SEE(); }; }
@@ -15459,12 +15482,25 @@ window.__realTodayStr = function(){
       if (v) neoSetDevDate(v);
     };
   };
+  /* من يحقّ له أن يرى أدوات المطوّر أصلاً:
+     لا أحد قبل الدخول — لهذا كان الزرّ يظهر على شاشة تسجيل الدخول —
+     ولا أحد غير مدير المبيعات بعده، فالرمز وحده لم يكن يكفي. */
+  window.neoDevEligible = function(){
+    try{
+      const app = document.getElementById('appScreen');
+      if (!app || app.classList.contains('hidden')) return false;
+      const p = window.__fleetProfile;
+      if (!p) return false;
+      return p.role === 'sales';
+    }catch(e){ return false; }
+  };
   /* زرّ عائم صغير — لا يظهر إلا لمن فتح لوحة المطوّر على هذا الجهاز */
   window.neoMountTimeChip = function(){
     let unlocked = false;
     try{ unlocked = localStorage.getItem('devUnlocked') === '1'; }catch(e){}
     const on = !!localStorage.getItem('devDateOverride');
     const old = document.getElementById('tmChip');
+    if (!window.neoDevEligible()){ old && old.remove(); return; }
     if (!unlocked && !on){ old && old.remove(); return; }
     if (old) return;
     const c = document.createElement('div');
@@ -15481,9 +15517,12 @@ window.__realTodayStr = function(){
 
   function mount(){
     try{ window.neoMountTimeChip(); }catch(e){}
+    document.getElementById('tmBar')?.remove();
     const ov = localStorage.getItem('devDateOverride');
     if (!ov) return;
+    try{ if (!window.neoDevEligible()) return; }catch(e){ return; }
     const b = document.createElement('div');
+    b.id = 'tmBar';
     b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:1000002;background:#8c2f36;color:#fff;'
       + 'font-size:12px;padding:8px 10px;display:flex;align-items:center;justify-content:center;gap:10px;';
     b.innerHTML = '<span style="cursor:pointer;">⏳ آلة الزمن مُفعّلة — التطبيق يعمل على <b>' + ov + '</b></span>'
@@ -15495,6 +15534,8 @@ window.__realTodayStr = function(){
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount);
   else mount();
+  /* تُنادى بعد الدخول والخروج — فالزرّ يتبع من هو داخل النظام الآن */
+  window.neoRefreshDevUI = mount;
 })();
 </script>
 
