@@ -1411,6 +1411,7 @@ async function neoLoadOff(force){
   }
   await neoLoadLeave(force);
   await neoLoadNames(force);
+  await neoLoadNoAudit(force);
   return _neoOffSet;
 }
 
@@ -1445,6 +1446,67 @@ async function neoLoadLeave(force){
   }
   return _neoLeave;
 }
+/* ══ خارج تدقيق الصالة ══
+   أمور بسيطة يؤشّرها مسؤول الشفت ولا معنى لإعادة تدقيقها: تبقى في جدوله
+   كما هي، وتخرج من عيّنة مشرف الصالة ومن نسبة تدقيقه.
+
+   ⟦na⟧<العنصر>            — العنصر كله خارج التدقيق (مهمة يومية مثلاً)
+   ⟦na⟧<العنصر>|<الخانة>   — خانة واحدة في عنصر واحد */
+const NEO_NA_TAG = '⟦na⟧';
+let _neoNA = null;
+async function neoLoadNoAudit(force){
+  if (!force && _neoNA) return _neoNA;
+  const items = new Set(), cells = new Set();
+  try{
+    const { data, error } = await supabaseClient.from('custom_fields')
+      .select('name').like('name', NEO_NA_TAG + '%');
+    if (error) throw error;
+    (data || []).forEach(r => {
+      const body = String(r.name || '').slice(NEO_NA_TAG.length);
+      if (!body) return;
+      const i = body.indexOf('|');
+      if (i < 0) items.add(body); else cells.add(body.slice(0, i) + '|' + body.slice(i + 1));
+    });
+    _neoNA = { items, cells };
+  }catch(e){ if (!_neoNA) _neoNA = { items, cells }; }
+  return _neoNA;
+}
+/* العنصر كله خارج تدقيق الصالة؟ */
+function neoHallOutItem(id){
+  return !!(_neoNA && _neoNA.items.has(String(id)));
+}
+/* هذه الخانة خارج تدقيق الصالة؟ (والعنصر المستثنى كله خاناته مستثناة) */
+function neoHallOutCell(id, key){
+  if (!_neoNA || id === undefined || id === null) return false;
+  if (_neoNA.items.has(String(id))) return true;
+  if (_neoNA.cells.has(String(id) + '|' + key)) return true;
+  /* المفاتيح لها صيغ عدة — نطابق بالجذر كبقية القرّاء */
+  if (typeof neoSameKey === 'function'){
+    const pre = String(id) + '|';
+    for (const c of _neoNA.cells){
+      if (c.indexOf(pre) !== 0) continue;
+      if (neoSameKey(c.slice(pre.length), key)) return true;
+    }
+  }
+  return false;
+}
+async function neoSetHallOut(deptId, id, key, on){
+  const marker = NEO_NA_TAG + id + (key ? '|' + key : '');
+  let error = null;
+  if (on){
+    ({ error } = await supabaseClient.from('custom_fields')
+      .insert({ department_id: deptId || null, name: marker }));
+  } else {
+    ({ error } = await supabaseClient.from('custom_fields').delete().eq('name', marker));
+  }
+  if (error){ neoNotify('تعذّر الحفظ: ' + error.message); return false; }
+  await neoLoadNoAudit(true);
+  return true;
+}
+window.neoHallOutItem = neoHallOutItem;
+window.neoHallOutCell = neoHallOutCell;
+window.neoSetHallOut  = neoSetHallOut;
+
 /* ══ تاريخ أسماء الموظفين ══
    إعادة التسمية تغيّر عمود الاسم، فتتغيّر معه كل الشاشات القديمة ويظهر
    اسمٌ لم يكن موجوداً في ذلك اليوم. نحفظ مع كل تغيير الاسمَ السابق
@@ -2250,6 +2312,9 @@ function neoSampleAcrossDepts(list, deptIds, seed, cat, date){
 }
 
 function neoDailySample(list, seed, date){
+  /* المستثنى من تدقيق الصالة لا يدخل العيّنة أبداً — لا في الشاشة ولا في النسبة */
+  if (list && list.length && typeof neoHallOutItem === 'function')
+    list = list.filter(x => !neoHallOutItem(x && x.id));
   if (!list || !list.length) return [];
   const n = Math.max(1, Math.ceil(list.length * NEO_SAMPLE_PCT));
   if (n >= list.length) return list.slice();
@@ -5364,7 +5429,14 @@ async function computeHallAuditCompletionForDept(dept, dataSource){
 }
 async function __computeHallAuditCompletionForDeptInner(dept, d){
   let total = 0, verified = 0;
-  const count = (log, defs) => { const vf = log?.hall_verified_fields || {}; const fnn = log?.hall_field_notes || {}; (defs||[]).forEach(f => { total++; if (vf[f.key] || (fnn[f.key]||'').trim()) verified++; }); };
+  const count = (log, defs, item) => {
+    const vf = log?.hall_verified_fields || {}; const fnn = log?.hall_field_notes || {};
+    (defs||[]).forEach(f => {
+      /* الخانة المستثناة ليست متوقَّعة من المشرف فلا تدخل بسطاً ولا مقاماً */
+      if (item && typeof neoHallOutCell === 'function' && neoHallOutCell(item.id, f.key)) return;
+      total++; if (vf[f.key] || (fnn[f.key]||'').trim()) verified++;
+    });
+  };
 
   /* ⚠️ أعمدة هذا القسم تحديداً — المتغيّرات العامة تتغيّر حسب آخر قسم فُتح
      فالاعتماد عليها يفسد نسب بقية الأقسام */
@@ -5384,15 +5456,15 @@ async function __computeHallAuditCompletionForDeptInner(dept, d){
 
   const staffFieldDefs = await staffFieldDefsForDeptName(dept.name, dept.id);
   const _inD = (arr) => (arr || []).filter(x => String(x.department_id) === String(dept.id));
-  neoDailySample(_inD(d.allLocations), d.seed + '_loc',   d.date).forEach(l => count(d.locLogsById[l.id], L));
-  neoDailySample(_inD(d.allStaff),     d.seed + '_staff', d.date).forEach(s => count(d.staffLogsById[s.id], staffFieldDefs));
-  d.allTasks.filter(t => String(t.department_id) === String(dept.id)).forEach(t => { total++; const tl = d.taskLogsById[t.id]; if (tl?.hall_verified || ((tl?.hall_field_notes||{})['__task']||'').trim()) verified++; });
-  neoDailySample(_inD(d.allIpads), d.seed + '_ipad', d.date).forEach(i => count(d.ipadLogsById[i.id], I));
-  neoDailySample(_inD(d.allReaders), d.seed + '_rdr', d.date).forEach(r => count(d.readerLogsById[r.id], R));
-  neoDailySample(_inD(d.allIpadReaderDevices), d.seed + '_ird', d.date).forEach(dv => count(d.ipadReaderDeviceLogsById[dv.id], IR));
-  neoDailySample(_inD(d.allLaptops), d.seed + '_lap', d.date).forEach(l => count(d.laptopLogsById[l.id], LP));
-  neoDailySample(_inD(d.allPosDevices), d.seed + '_pos', d.date).forEach(p => count(d.posDeviceLogsById[p.id], PS));
-  count(d.cleanLogsById[dept.id], CL);
+  neoDailySample(_inD(d.allLocations), d.seed + '_loc',   d.date).forEach(l => count(d.locLogsById[l.id], L, l));
+  neoDailySample(_inD(d.allStaff),     d.seed + '_staff', d.date).forEach(s => count(d.staffLogsById[s.id], staffFieldDefs, s));
+  d.allTasks.filter(t => String(t.department_id) === String(dept.id) && !(typeof neoHallOutItem === 'function' && neoHallOutItem(t.id))).forEach(t => { total++; const tl = d.taskLogsById[t.id]; if (tl?.hall_verified || ((tl?.hall_field_notes||{})['__task']||'').trim()) verified++; });
+  neoDailySample(_inD(d.allIpads), d.seed + '_ipad', d.date).forEach(i => count(d.ipadLogsById[i.id], I, i));
+  neoDailySample(_inD(d.allReaders), d.seed + '_rdr', d.date).forEach(r => count(d.readerLogsById[r.id], R, r));
+  neoDailySample(_inD(d.allIpadReaderDevices), d.seed + '_ird', d.date).forEach(dv => count(d.ipadReaderDeviceLogsById[dv.id], IR, dv));
+  neoDailySample(_inD(d.allLaptops), d.seed + '_lap', d.date).forEach(l => count(d.laptopLogsById[l.id], LP, l));
+  neoDailySample(_inD(d.allPosDevices), d.seed + '_pos', d.date).forEach(p => count(d.posDeviceLogsById[p.id], PS, p));
+  count(d.cleanLogsById[dept.id], CL, dept);
 
   return { total, verified, isComplete: total > 0 && verified === total };
 }
@@ -5461,11 +5533,14 @@ async function computeHallAuditProgressForUser(userId, depts, date, onlyMine){
     if (log.hall_verified_by) return String(log.hall_verified_by) === String(userId);
     return false;   /* سجل قديم بلا توقيع — لا يُنسب لأحد */
   };
-  const count = (log, defs) => {
+  const count = (log, defs, item) => {
     const own = mineOnly(log);
     const vf = own ? (log?.hall_verified_fields || {}) : {};
     const fnn = own ? (log?.hall_field_notes || {}) : {};
-    defs.forEach(f => { total++; if (vf[f.key] || (fnn[f.key]||'').trim()) verified++; });
+    defs.forEach(f => {
+      if (item && typeof neoHallOutCell === 'function' && neoHallOutCell(item.id, f.key)) return;
+      total++; if (vf[f.key] || (fnn[f.key]||'').trim()) verified++;
+    });
   };
 
   flattenStaffExtraEvaluations(staffLogsById);
@@ -5483,23 +5558,23 @@ async function computeHallAuditProgressForUser(userId, depts, date, onlyMine){
     return defsCache[k];
   };
   const countScope = async (items, scope, logsMap) => {
-    for (const it of items) count(logsMap[it.id], await defsFor(it.department_id, scope));
+    for (const it of items) count(logsMap[it.id], await defsFor(it.department_id, scope), it);
   };
 
   await countScope(neoSampleAcrossDepts(allLocations, deptIdSet, userId, 'loc', date), 'loc', locLogsById);
   const staffFieldDefsCache = {};
   for (const s of neoSampleAcrossDepts(allStaff, deptIdSet, userId, 'staff', date)){
     if (!staffFieldDefsCache[s.department_id]) staffFieldDefsCache[s.department_id] = await staffFieldDefsForDeptName(deptNameById[s.department_id] || '', s.department_id);
-    count(staffLogsById[s.id], staffFieldDefsCache[s.department_id]);
+    count(staffLogsById[s.id], staffFieldDefsCache[s.department_id], s);
   }
-  (allTasks||[]).filter(t => inScope(t.department_id)).forEach(t => { total++; const tl = taskLogsById[t.id];
+  (allTasks||[]).filter(t => inScope(t.department_id) && !(typeof neoHallOutItem === 'function' && neoHallOutItem(t.id))).forEach(t => { total++; const tl = taskLogsById[t.id];
     if (mineOnly(tl) && (tl?.hall_verified || ((tl?.hall_field_notes||{})['__task']||'').trim())) verified++; });
   await countScope(neoSampleAcrossDepts(allIpads, deptIdSet, userId, 'ipad', date), 'ipad', ipadLogsById);
   await countScope(neoSampleAcrossDepts(allReaders, deptIdSet, userId, 'rdr', date), 'reader', readerLogsById);
   await countScope(neoSampleAcrossDepts(allIpadReaderDevices, deptIdSet, userId, 'ird', date), 'ipadreader', ipadReaderDeviceLogsById);
   await countScope(neoSampleAcrossDepts(allLaptops, deptIdSet, userId, 'lap', date), 'laptop', laptopLogsById);
   await countScope(neoSampleAcrossDepts(allPosDevices, deptIdSet, userId, 'pos', date), 'pos', posDeviceLogsById);
-  for (const dept of (depts||[])) count(cleanLogsById[dept.id], await defsFor(dept.id, 'clean'));
+  for (const dept of (depts||[])) count(cleanLogsById[dept.id], await defsFor(dept.id, 'clean'), dept);
   try{ neoColsDept = null; }catch(e){}   /* التعريفات العامة تُعاد تحميلها عند أول استخدام تالٍ */
 
   const __out = { total, verified, pct: total > 0 ? Math.round((verified/total)*100) : null };
@@ -5508,7 +5583,10 @@ async function computeHallAuditProgressForUser(userId, depts, date, onlyMine){
 }
 
 // جدول حالة عام: صف لكل عنصر، عمود لكل خانة، ✓/✗ للقراءة فقط (يُستخدم بشاشة النواقص)
-function buildStatusTable(items, fieldDefs, rowLabelFn, logsById){
+function buildStatusTable(items, fieldDefs, rowLabelFn, logsById, hallView){
+  /* hallView = هذه الشاشة تعرض تدقيق مشرف الصالة، فالمستثنى منه يُخفى */
+  if (hallView && typeof neoHallOutItem === 'function')
+    items = (items || []).filter(x => !neoHallOutItem(x && x.id));
   if (!items.length) return { html: '', missing: 0 };
   let missing = 0;
   const labelByKey = {}; fieldDefs.forEach(f => labelByKey[f.key] = f.label);
@@ -5517,6 +5595,9 @@ function buildStatusTable(items, fieldDefs, rowLabelFn, logsById){
     const cells = fieldDefs.map(f => {
       if (typeof neoCellDisabled === 'function' && neoCellDisabled(item, f.key)){
         return '<td><span style="color:#5d6d80;" title="لا ينطبق">—</span></td>';
+      }
+      if (hallView && typeof neoHallOutCell === 'function' && neoHallOutCell(item.id, f.key)){
+        return '<td><span style="color:#5d6d80;" title="خارج التدقيق">—</span></td>';
       }
       /* بلا شرط f.src — التعريفات القادمة من staffFieldDefsForDeptName والجداول
          المخصّصة تصل بلا وسم، فكان الشرط يُسقطها إلى قراءة بمفتاح واحد فقط */
@@ -6341,6 +6422,7 @@ function hallProgRowComplete(log, fields, item){
   for (const f of fields){
     /* المعطَّلة والمُجاز لا تُنتظر — وإلا قُفل جدول التدقيق ولم يكتمل */
     if (item && typeof neoCellDisabled === 'function' && neoCellDisabled(item, f.key)) continue;
+    if (item && typeof neoHallOutCell === 'function' && neoHallOutCell(item.id, f.key)) continue;
     const s = hallProgState(log, f.key);
     if (s === 'empty') return false;
     if (s === 'no' && !(fn[f.key]||'').trim()) return false;
@@ -6348,6 +6430,9 @@ function hallProgRowComplete(log, fields, item){
   return true;
 }
 function buildAuditTable(items, fieldDefs, rowLabelFn, logsById, table, idField, locked){
+  /* العناصر المُخرجة من تدقيق الصالة تختفي من الجدول ومن نسبة المشرف */
+  if (typeof neoHallOutItem === 'function')
+    items = (items || []).filter(x => !neoHallOutItem(x && x.id));
   if (!items.length) return '';
   hallProgSections[table] = { items, fields: fieldDefs, rowLabelFn, logsById, table, idField, locked };
   const inner = hallProgBuildRows(table);
@@ -6369,6 +6454,11 @@ function hallProgBuildRows(table){
     for (const f of cfg.fields){
       if (typeof neoCellDisabled === 'function' && neoCellDisabled(it, f.key)){
         cells += '<td><span style="color:#5d6d80;font-size:15px;" title="لا ينطبق">—</span></td>';
+        continue;
+      }
+      /* خارج التدقيق: يبقى عند مسؤول الشفت ولا يُطلب من المشرف */
+      if (typeof neoHallOutCell === 'function' && neoHallOutCell(it.id, f.key)){
+        cells += '<td><span style="color:#5d6d80;font-size:15px;" title="خارج التدقيق">—</span></td>';
         continue;
       }
       const s = hallProgState(log, f.key);
@@ -9589,7 +9679,8 @@ async function renderSalesHallAuditDetail(deptId, profileId){
     const locsSample  = neoDailySample(_dd(allLocations), profileId + '_loc',   date);
     const staffSample = neoDailySample(_dd(allStaff),     profileId + '_staff', date)
       .map(s => ({ ...s, on_leave: neoOnLeave(s.id, date) }));
-    const tasksInDept = (allTasks||[]).filter(t => String(t.department_id) === String(deptId)); // 100%
+    const tasksInDept = (allTasks||[]).filter(t => String(t.department_id) === String(deptId)
+      && !(typeof neoHallOutItem === 'function' && neoHallOutItem(t.id))); // 100%
     const ipadsSample = neoDailySample(_dd(allIpads), profileId + '_ipad', date);
     const readersSample = neoDailySample(_dd(allReaders), profileId + '_rdr', date);
     const ipadReaderDevicesSample = neoDailySample(_dd(allIpadReaderDevices), profileId + '_ird', date);
@@ -9597,9 +9688,9 @@ async function renderSalesHallAuditDetail(deptId, profileId){
     const posDevicesSample = neoDailySample(_dd(allPosDevices), profileId + '_pos', date);
 
     const U_LOC = await neoUnifiedDefs(deptId, 'loc');
-    const locTable = buildStatusTable(locsSample, U_LOC, l => l.code, locVerified);
+    const locTable = buildStatusTable(locsSample, U_LOC, l => l.code, locVerified, true);
     const staffFieldDefs = await staffFieldDefsForDeptName(dept?.name || '', deptId);
-    const staffTable = buildStatusTable(staffSample, staffFieldDefs, s => neoNameOn(s.id, date, s.name), staffVerified);
+    const staffTable = buildStatusTable(staffSample, staffFieldDefs, s => neoNameOn(s.id, date, s.name), staffVerified, true);
     /* نفس المصدر الموحّد — كانت التعريفات العامة تُظهر أعمدة محذوفة */
     const U_IPAD  = await neoUnifiedDefs(deptId, 'ipad');
     const U_RDR   = await neoUnifiedDefs(deptId, 'reader');
@@ -9607,12 +9698,12 @@ async function renderSalesHallAuditDetail(deptId, profileId){
     const U_LAP   = await neoUnifiedDefs(deptId, 'laptop');
     const U_POS   = await neoUnifiedDefs(deptId, 'pos');
     const U_CLEAN = await neoUnifiedDefs(deptId, 'clean');
-    const ipadTable = buildStatusTable(ipadsSample, U_IPAD, i => i.code, ipadVerified);
-    const readerTable = buildStatusTable(readersSample, U_RDR, r => r.code, readerVerified);
-    const ipadReaderDeviceTable = buildStatusTable(ipadReaderDevicesSample, U_IRD, dv => dv.code, ipadReaderDeviceVerified);
-    const laptopTable = buildStatusTable(laptopsSample, U_LAP, l => l.code, laptopVerified);
-    const posDeviceTable = buildStatusTable(posDevicesSample, U_POS, p => p.code, posDeviceVerified);
-    const cleanTable = buildStatusTable([{ id: deptId }], U_CLEAN, () => 'نظافة القسم', cleanVerified);
+    const ipadTable = buildStatusTable(ipadsSample, U_IPAD, i => i.code, ipadVerified, true);
+    const readerTable = buildStatusTable(readersSample, U_RDR, r => r.code, readerVerified, true);
+    const ipadReaderDeviceTable = buildStatusTable(ipadReaderDevicesSample, U_IRD, dv => dv.code, ipadReaderDeviceVerified, true);
+    const laptopTable = buildStatusTable(laptopsSample, U_LAP, l => l.code, laptopVerified, true);
+    const posDeviceTable = buildStatusTable(posDevicesSample, U_POS, p => p.code, posDeviceVerified, true);
+    const cleanTable = buildStatusTable([{ id: deptId }], U_CLEAN, () => 'نظافة القسم', cleanVerified, true);
     const csTablesH = await neoBuildCustomSectionTables(deptId, date);
 
     let tasksNotVerified = 0;
@@ -11898,7 +11989,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.14.01";
+const APP_VERSION = "2026.09.15.01";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -14762,38 +14853,61 @@ const APP_VERSION = "2026.09.14.01";
     ['serial_readers','🔍 قارئ السيريال','reader','code'],
     ['ipad_reader_devices','📲 الآيباد+القارئ','ipadreader','code'],
     ['laptops','💻 اللابتوبات','laptop','code'],
-    ['pos_devices','💳 أجهزة POS','pos','code']
+    ['pos_devices','💳 أجهزة POS','pos','code'],
+    ['daily_tasks','📝 المهام اليومية','task','name']
   ];
-  let disDept = '', disTable = 'staff';
+  /* disMode: 'off' = تعطيل نهائي للخانة، 'na' = تبقى لمسؤول الشفت وتخرج من تدقيق الصالة */
+  let disDept = '', disTable = 'staff', disMode = 'off';
   async function drawDisabled(){
     const box = document.getElementById('disList');
     box.innerHTML = '<div style="color:#8fa3b8;">جاري…</div>';
     const meta = DIS_TABLES.find(t => t[0] === disTable);
+    const isTasks = (disTable === 'daily_tasks');
+    if (isTasks && disMode !== 'na'){
+      box.innerHTML = '<div style="color:#7487a0;font-size:12px;line-height:1.9;">'
+        + 'المهمة اليومية ليس فيها خانات تُعطَّل.<br>اختر «خارج تدقيق الصالة» لإخراج مهمة من عيّنة المشرف.</div>';
+      return;
+    }
     /* أعمدة هذا القسم — مع بديل احتياطي إن تعذّر المصدر الموحّد */
     let defs = [];
-    try{ defs = await neoUnifiedDefs(disDept, meta[2]); }catch(e){}
-    if (!defs || !defs.length){
-      try{ neoColsDept = null; await neoLoadExtraCols(disDept);
-           defs = (typeof neoDefsArr === 'function' && neoDefsArr(meta[2])) || []; }catch(e){}
+    if (isTasks) defs = [];
+    else {
+      try{ defs = await neoUnifiedDefs(disDept, meta[2]); }catch(e){}
+      if (!defs || !defs.length){
+        try{ neoColsDept = null; await neoLoadExtraCols(disDept);
+             defs = (typeof neoDefsArr === 'function' && neoDefsArr(meta[2])) || []; }catch(e){}
+      }
     }
+    if (disMode === 'na'){ try{ await neoLoadNoAudit(true); }catch(e){} }
     const { data } = await supabaseClient.from(disTable).select('*').eq('department_id', disDept);
     const items = data || [];
     if (!items.length){ box.innerHTML = '<div style="color:#7487a0;">لا عناصر</div>'; return; }
+    const chip = (on, label, onclick, onColor) =>
+      '<span onclick="' + onclick + '" style="cursor:pointer;font-size:11px;padding:6px 10px;border-radius:7px;'
+      + (on ? onColor : 'background:#101c2b;color:#8fb8d8;border:1px solid rgba(122,167,255,0.25);')
+      + '">' + H(label) + '</span>';
+    const NA_ON  = 'background:#3d3560;color:#cfc4ff;';
+    const OFF_ON = 'background:#5d2f36;color:#e8c3c6;text-decoration:line-through;';
     box.innerHTML = items.map(it => {
       const raw = it.disabled_fields;
       const dis = Array.isArray(raw) ? raw : (typeof raw === 'string' ? (function(){try{return JSON.parse(raw);}catch(e){return [];}})() : []);
+      let head = '', chips = '';
+      if (disMode === 'na'){
+        const whole = (typeof neoHallOutItem === 'function') && neoHallOutItem(it.id);
+        if (whole) head = '<span style="color:#cfc4ff;font-size:11px;"> · خارج التدقيق</span>';
+        chips = chip(whole, '⬛ العنصر كله',
+                  "__toggleNoAudit('" + it.id + "','')", NA_ON)
+              + defs.map(f => chip(
+                  whole || ((typeof neoHallOutCell === 'function') && neoHallOutCell(it.id, f.key)),
+                  f.label, "__toggleNoAudit('" + it.id + "','" + f.key + "')", NA_ON)).join('');
+      } else {
+        if (dis.length) head = '<span style="color:#d3a04f;font-size:11px;"> · ' + dis.length + ' معطّلة</span>';
+        chips = defs.map(f => chip(dis.indexOf(f.key) !== -1, f.label,
+                  "__toggleDisabled('" + disTable + "','" + it.id + "','" + f.key + "')", OFF_ON)).join('');
+      }
       return '<div style="border:1px solid rgba(122,167,255,0.2);border-radius:9px;padding:10px;margin-bottom:7px;background:#0c1524;">'
-        + '<b style="color:#e8eef7;font-size:13px;">' + H(it[meta[3]] || '—') + '</b>'
-        + (dis.length ? '<span style="color:#d3a04f;font-size:11px;"> · ' + dis.length + ' معطّلة</span>' : '')
-        + '<div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:7px;">'
-        + defs.map(f => {
-            const off = dis.indexOf(f.key) !== -1;
-            return '<span onclick="__toggleDisabled(\'' + disTable + '\',\'' + it.id + '\',\'' + f.key + '\')" '
-              + 'style="cursor:pointer;font-size:11px;padding:6px 10px;border-radius:7px;'
-              + (off ? 'background:#5d2f36;color:#e8c3c6;text-decoration:line-through;' : 'background:#101c2b;color:#8fb8d8;border:1px solid rgba(122,167,255,0.25);')
-              + '">' + H(f.label) + '</span>';
-          }).join('')
-        + '</div></div>';
+        + '<b style="color:#e8eef7;font-size:13px;">' + H(it[meta[3]] || '—') + '</b>' + head
+        + '<div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:7px;">' + chips + '</div></div>';
     }).join('');
   }
   window.__toggleDisabled = async function(table, itemId, key){
@@ -14811,6 +14925,17 @@ const APP_VERSION = "2026.09.14.01";
     }catch(e){ neoToast('تعذر: ' + (e.message||e)); }
   };
 
+  /* يُبقي الخانة/العنصر لمسؤول الشفت ويُخرجها من عيّنة مشرف الصالة ومن نسبته */
+  window.__toggleNoAudit = async function(itemId, key){
+    try{
+      const on = key ? !neoHallOutCell(itemId, key) : !neoHallOutItem(itemId);
+      const ok = await neoSetHallOut(disDept, itemId, key || '', on);
+      if (!ok) return;
+      neoToast(on ? 'أُخرجت من تدقيق الصالة' : 'أُعيدت إلى تدقيق الصالة', !on);
+      drawDisabled();
+    }catch(e){ neoToast('تعذر: ' + (e.message||e)); }
+  };
+
   async function disabledReport(){
     wait('جاري التحميل');
     try{
@@ -14824,9 +14949,14 @@ const APP_VERSION = "2026.09.14.01";
         + '<div style="display:flex;gap:6px;margin-bottom:9px;">'
         + '<select id="disDept" style="flex:1;font-size:12px;">' + depts.map(d => '<option value="'+d.id+'"'+(String(d.id)===String(disDept)?' selected':'')+'>'+H(d.name)+'</option>').join('') + '</select>'
         + '<select id="disTable" style="flex:1;font-size:12px;">' + DIS_TABLES.map(t => '<option value="'+t[0]+'"'+(t[0]===disTable?' selected':'')+'>'+H(t[1])+'</option>').join('') + '</select></div>'
+        + '<select id="disMode" style="width:100%;margin-bottom:9px;font-size:12px;">'
+        + '<option value="off"'+(disMode==='off'?' selected':'')+'>🚫 تعطيل نهائي — تختفي عن الجميع</option>'
+        + '<option value="na"'+(disMode==='na'?' selected':'')+'>🏬 خارج تدقيق الصالة — تبقى لمسؤول الشفت</option>'
+        + '</select>'
         + '<div id="disList"></div>';
       document.getElementById('disDept').onchange = e => { disDept = e.target.value; drawDisabled(); };
       document.getElementById('disTable').onchange = e => { disTable = e.target.value; drawDisabled(); };
+      document.getElementById('disMode').onchange = e => { disMode = e.target.value; drawDisabled(); };
       drawDisabled();
     }catch(e){ BOX().innerHTML = '<div style="color:#e15b64;">'+H(e.message||e)+'</div>'; }
   }
