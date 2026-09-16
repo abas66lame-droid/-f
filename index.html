@@ -6856,6 +6856,9 @@ function neoComputeHallPct(){
         const fn = log.hall_field_notes || {};
         cfg.fields.forEach(f => {
           if (typeof neoCellDisabled === 'function' && neoCellDisabled(it, f.key)) return;
+          /* الخانة المُخرجة من التدقيق لا تُرسم ولا يمكنه تأشيرها،
+             فبقاؤها في المقام كان يمنع وصوله إلى ١٠٠٪ */
+          if (typeof neoHallOutCell === 'function' && neoHallOutCell(it.id, f.key)) return;
           total++;
           if (f.key === '__task'){ if (log.hall_verified === true || (fn['__task']||'').trim()) done++; }
           else if (vf[f.key] === true || (fn[f.key]||'').trim()) done++;
@@ -12107,7 +12110,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.15.06";
+const APP_VERSION = "2026.09.16.01";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
