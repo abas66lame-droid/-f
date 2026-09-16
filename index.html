@@ -12106,7 +12106,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.16.03";
+const APP_VERSION = "2026.09.16.04";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -12222,6 +12222,7 @@ const APP_VERSION = "2026.09.16.03";
     try{ sessionStorage.removeItem('devSimProfile'); }catch(e){}
     document.getElementById('devChip')?.remove();
     document.getElementById('tmChip')?.remove();
+    try{ if (window.neoRefreshDevUI) window.neoRefreshDevUI(); }catch(e){}
   }
   window.neoDevLock = devLock;
   /* مفتوحة الآن؟ — يعتمد عليها زرّ اللوحة وزرّ آلة الزمن والمحاكاة */
@@ -12538,7 +12539,12 @@ window.__realTodayStr = function(){
     document.getElementById('tmBar')?.remove();
     const ov = localStorage.getItem('devDateOverride');
     if (!ov) return;
-    try{ if (!window.neoDevEligible()) return; }catch(e){ return; }
+    /* لا يُشترط فتح اللوحة: هذا تحذير سلامة. لو أُخفي بعد القفل لعمل
+       التطبيق على يوم ماضٍ بلا أي إشارة، وهذا أخطر من إظهاره. */
+    try{
+      const app = document.getElementById('appScreen');
+      if (!app || app.classList.contains('hidden')) return;
+    }catch(e){ return; }
     const b = document.createElement('div');
     b.id = 'tmBar';
     b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:1000002;background:#8c2f36;color:#fff;'
