@@ -2512,7 +2512,7 @@ async function handleLoggedIn(){
     appScreen.classList.remove('hidden');
 
     document.getElementById('userNameLabel').textContent = profile.name || '';
-    const roleLabels = { shift: "مسؤول شفت", hall: "مسؤول صالة", sales: "مسؤول مبيعات", driver: "موظف توصيل", fleet: "مسؤول التوصيل", clean: "مسؤول التنظيف العام", stock: "مسؤول الجرد العام", dev: "مطوّر" };
+    const roleLabels = { shift: "مسؤول شفت", hall: "مسؤول صالة", sales: "مسؤول مبيعات", driver: "موظف توصيل", fleet: "مسؤول التوصيل", clean: "مسؤول التنظيف العام", stock: "مسؤول الجرد العام" };
     /* أُزيلت shiftLabels — نظام الشفتات ملغى ولم تكن مستخدمة في أي مكان */
     document.getElementById('userRoleLabel').textContent = roleLabels[profile.role] || profile.role;
 
@@ -2552,11 +2552,6 @@ async function handleLoggedIn(){
       document.getElementById('linkView').classList.remove('hidden');
       neoSetManageMode(false);
       await renderLinkManagerView(profile, profile.role);
-    } else if (profile.is_dev === true){
-      /* حساب المطوّر بلا دور تشغيلي: كان يقف على شاشة فارغة.
-         يرى شاشة المدير ليصل إلى كل شيء، وزرّ 🛠 معها. */
-      document.getElementById('salesView').classList.remove('hidden');
-      await renderSalesView();
     }
   } catch (err) {
     try{ console.error('خطأ في handleLoggedIn:', err); }catch(e){}
@@ -12111,7 +12106,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.16.02";
+const APP_VERSION = "2026.09.16.03";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -12203,85 +12198,117 @@ const APP_VERSION = "2026.09.16.02";
 </script>
 
 <script>
-/* ══════════ لوحة المطوّر — بابان لا باب ══════════
-   كان الدخول بضغطات سرّية ورمز مكتوب في الملف. وهذا لم يكن حاجزاً:
-   الرمز يُقرأ من مصدر الصفحة ويُتداول، والعلامة تبقى في الجهاز للأبد.
+/* ══════════ لوحة المطوّر — واجهة مخفية بقفل ══════════
+   لا علاقة لها بأي دور ولا بأي حساب: أداة صاحب النظام وحده.
 
-   الآن:
-   ① مَن يرى الزرّ أصلاً — صفة في الحساب (profiles.is_dev) تُمنح وتُسحب
-     من قاعدة البيانات. غير حاملها لا يرى شيئاً ولا بابَ يجرّبه.
-   ② من يدخل — كلمة سرّ حسابك نفسها، يتحقّق منها الخادم لا الملف.
-     فلا يوجد رمز في الصفحة يُقرأ، ولا شيء يُخمَّن محلياً.
+   الدخول: ٧ نقرات على الزاوية العليا اليسرى (أو ضغطة مطوّلة ثانيتين
+   في نفس المكان — بديل لأن النقرات كانت تضيع أحياناً على الهاتف)،
+   ثم الرمز.
 
-   ويبقى مفتوحاً بعد إغلاق اللوحة (فالتنقّل عمل متكرّر)، حتى تضغط
-   «🔒 قفل» فيُطلب تسجيل الدخول من جديد. ويُقفل تلقائياً مع انتهاء
-   جلسة المتصفّح. */
+   والفتح يبقى معك وأنت تتنقّل في التطبيق، تُغلق اللوحة وتفتحها كما
+   تشاء. حتى تضغط «🔒 قفل» فهو كتسجيل خروج من واجهة المطوّر وحدها:
+   يلزمك الرمز من جديد. وينتهي كذلك بانتهاء جلسة المتصفّح — لا يبقى
+   في الجهاز للأبد كما كان. */
 (function(){
+  const PIN_HASH = '1b9a56ed723eb5444e6aa55f6c59372fe84a3c4b95d60be3ba0da21b94136b55';   /* SHA-256 للرمز */
   const DEV_AUTH = 'devAuthOK';
+  let taps = 0, timer = null;
+
   function devAuthed(){
     try{ return sessionStorage.getItem(DEV_AUTH) === '1'; }catch(e){ return false; }
   }
   function devLock(){
     try{ sessionStorage.removeItem(DEV_AUTH); }catch(e){}
     try{ sessionStorage.removeItem('devSimProfile'); }catch(e){}
+    document.getElementById('devChip')?.remove();
+    document.getElementById('tmChip')?.remove();
   }
   window.neoDevLock = devLock;
-
-  /* تسجيل دخول لواجهة المطوّر — بكلمة سرّ الحساب نفسه */
-  async function devLogin(){
-    let email = '';
+  /* مفتوحة الآن؟ — يعتمد عليها زرّ اللوحة وزرّ آلة الزمن والمحاكاة */
+  window.neoDevEligible = function(){
     try{
-      const { data } = await supabaseClient.auth.getUser();
-      email = (data && data.user && data.user.email) || '';
-    }catch(e){}
-    document.getElementById('devAuthOv')?.remove();
-    const ov = document.createElement('div');
-    ov.id = 'devAuthOv';
-    ov.style.cssText = 'position:fixed;inset:0;z-index:1000020;background:rgba(4,8,14,0.96);'
-      + 'display:flex;align-items:center;justify-content:center;padding:20px;';
-    ov.innerHTML = '<div class="card" style="max-width:320px;width:100%;padding:20px;text-align:center;">'
-      + '<div style="font-size:30px;">🛠</div>'
-      + '<div style="color:#c8d4e2;font-size:14px;font-weight:700;margin-top:6px;">دخول لوحة المطوّر</div>'
-      + '<div style="color:#7487a0;font-size:11px;margin-top:5px;line-height:1.7;">'
-      + 'كلمة سرّ حسابك<br><span style="color:#5d6d80;">' + (email || '') + '</span></div>'
-      + '<input id="dvPw" type="password" autocapitalize="off" autocorrect="off" spellcheck="false" '
-      + 'placeholder="كلمة السر" style="width:100%;margin-top:12px;text-align:center;font-size:16px;">'
-      + '<div id="dvPwErr" style="color:#e15b64;font-size:12px;height:18px;margin-top:6px;"></div>'
-      + '<div style="display:flex;gap:8px;margin-top:6px;">'
-      + '<button id="dvPwOk" style="flex:1;">دخول</button>'
-      + '<button id="dvPwNo" class="secondary" style="flex:1;">إلغاء</button></div></div>';
-    document.body.appendChild(ov);
-    const inp = ov.querySelector('#dvPw');
-    setTimeout(() => inp.focus(), 120);
-    ov.querySelector('#dvPwNo').onclick = () => ov.remove();
-    const err = ov.querySelector('#dvPwErr');
-    let busy = false;
-    const go = async () => {
-      if (busy) return;
-      const pw = inp.value;
-      if (!pw){ err.textContent = 'اكتب كلمة السر'; return; }
-      if (!email){ err.textContent = 'تعذّر معرفة حسابك — أعد تحميل الصفحة'; return; }
-      busy = true; err.style.color = '#8fa3b8'; err.textContent = 'جاري التحقّق…';
-      try{
-        /* الخادم هو الذي يحكم — لا رمز في الملف يُقارَن به */
-        const { error } = await supabaseClient.auth.signInWithPassword({ email, password: pw });
-        if (error){ busy = false; err.style.color = '#e15b64';
-                    err.textContent = 'كلمة السر غير صحيحة'; inp.value = ''; return; }
-        try{ sessionStorage.setItem(DEV_AUTH, '1'); }catch(e){}
-        ov.remove();
-        openPanel();
-      }catch(e){ busy = false; err.style.color = '#e15b64'; err.textContent = 'تعذّر التحقّق'; }
+      const app = document.getElementById('appScreen');
+      if (!app || app.classList.contains('hidden')) return false;
+      return devAuthed();
+    }catch(e){ return false; }
+  };
+
+  async function sha(s){
+    const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
+    return [...new Uint8Array(b)].map(x => x.toString(16).padStart(2,'0')).join('');
+  }
+
+  /* منطقة خفية في الزاوية العليا اليسرى.
+     مساحتها ٦٦ بكسل وطبقتها فوق كل الأشرطة، وتسمع pointerdown لا click
+     وحده — وإلا ضاعت الضغطة على الهاتف مع أدنى تمرير. */
+  function mountHotspot(){
+    if (document.getElementById('devHot')) return;
+    const h = document.createElement('div');
+    h.id = 'devHot';
+    h.style.cssText = 'position:fixed;top:0;left:0;width:66px;height:66px;z-index:1000005;'
+      + 'background:transparent;touch-action:manipulation;';
+    const hit = () => {
+      if (devAuthed()){ taps = 0; openPanel(); return; }   /* مفتوحة أصلاً */
+      taps++;
+      clearTimeout(timer);
+      timer = setTimeout(() => { taps = 0; }, 4000);
+      try{ if (navigator.vibrate) navigator.vibrate(8); }catch(e){}
+      if (taps >= 7){ taps = 0; askPin(); }
     };
-    ov.querySelector('#dvPwOk').onclick = go;
+    let last = 0;
+    const once = e => {
+      const now = Date.now();
+      if (now - last < 120) return;
+      last = now;
+      hit();
+    };
+    h.addEventListener('pointerdown', once);
+    h.addEventListener('touchstart', once, { passive: true });
+    h.addEventListener('click', once);
+    /* بديل بلا عدّ: ضغطة مطوّلة ثانيتين */
+    let hold = null;
+    const startHold = () => { clearTimeout(hold); hold = setTimeout(() => {
+      taps = 0; devAuthed() ? openPanel() : askPin(); }, 2000); };
+    const endHold = () => clearTimeout(hold);
+    h.addEventListener('pointerdown', startHold);
+    ['pointerup','pointerleave','pointercancel','touchend','touchcancel'].forEach(ev =>
+      h.addEventListener(ev, endHold));
+    document.body.appendChild(h);
+  }
+
+  function askPin(){
+    if (devAuthed()){ openPanel(); return; }
+    document.getElementById('devPinOv')?.remove();
+    const ov = document.createElement('div');
+    ov.id = 'devPinOv';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:1000020;background:rgba(4,8,14,0.96);display:flex;align-items:center;justify-content:center;padding:20px;';
+    ov.innerHTML = '<div class="card" style="max-width:300px;width:100%;padding:20px;text-align:center;">'
+      + '<div style="font-size:30px;">🔐</div>'
+      + '<input id="dvPin" type="password" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="الرمز" style="width:100%;margin-top:14px;text-align:center;letter-spacing:4px;font-size:18px;">'
+      + '<div id="dvErr" style="color:#e15b64;font-size:12px;height:16px;margin-top:6px;"></div>'
+      + '<div style="display:flex;gap:8px;margin-top:10px;">'
+      + '<button id="dvOk" style="flex:1;">دخول</button>'
+      + '<button id="dvNo" class="secondary" style="flex:1;">إلغاء</button></div></div>';
+    document.body.appendChild(ov);
+    const inp = ov.querySelector('#dvPin');
+    setTimeout(() => inp.focus(), 120);
+    ov.querySelector('#dvNo').onclick = () => ov.remove();
+    const go = async () => {
+      if (await sha(inp.value.trim()) === PIN_HASH){
+        try{ sessionStorage.setItem(DEV_AUTH, '1'); }catch(e){}
+        try{ if (window.neoRefreshDevUI) window.neoRefreshDevUI(); }catch(e){}
+        ov.remove(); openPanel();
+      }
+      else { ov.querySelector('#dvErr').textContent = 'رمز خاطئ'; inp.value = ''; }
+    };
+    ov.querySelector('#dvOk').onclick = go;
     inp.onkeydown = e => { if (e.key === 'Enter') go(); };
   }
 
-  /* زرّ ظاهر لحساب المطوّر وحده — لا شيء مخفي يُكتشف بالتجربة */
+  /* زرّ مختصر يظهر بعد الفتح فقط — يريحك من تكرار النقرات */
   function mountDevChip(){
     const old = document.getElementById('devChip');
-    let ok = false;
-    try{ ok = !!(window.neoDevEligible && window.neoDevEligible()); }catch(e){}
-    if (!ok){ old && old.remove(); return; }
+    if (!window.neoDevEligible()){ old && old.remove(); return; }
     if (old) return;
     const c = document.createElement('div');
     c.id = 'devChip';
@@ -12290,7 +12317,7 @@ const APP_VERSION = "2026.09.16.02";
     c.style.cssText = 'position:fixed;bottom:148px;left:12px;z-index:1000003;width:44px;height:44px;'
       + 'border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:19px;'
       + 'cursor:pointer;background:rgba(10,18,30,0.94);border:1px solid rgba(56,217,185,0.45);';
-    c.onclick = () => { try{ devAuthed() ? openPanel() : devLogin(); }catch(e){} };
+    c.onclick = () => { try{ openPanel(); }catch(e){} };
     document.body.appendChild(c);
   }
   window.neoMountDevChip = mountDevChip;
@@ -12418,14 +12445,16 @@ const APP_VERSION = "2026.09.16.02";
     })();
   }
 
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mountDevChip);
-  else mountDevChip();
+  const _boot = () => { mountHotspot(); mountDevChip(); };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _boot);
+  else _boot();
 
   /* استعادة المحاكاة إن كانت مفعّلة قبل إعادة التحميل */
   setTimeout(() => {
     try{
       const s = sessionStorage.getItem('devSimProfile');
-      if (s && !((window.neoDevEligible && window.neoDevEligible()) && devAuthed())){
+      /* neoDevEligible تعني أصلاً: اللوحة مفتوحة في هذه الجلسة */
+      if (s && !(window.neoDevEligible && window.neoDevEligible())){
         sessionStorage.removeItem('devSimProfile');   /* لم يعد مطوّراً أو أُقفلت اللوحة */
       }
       else if (s && typeof __devApplySim === 'function'){
@@ -12482,18 +12511,9 @@ window.__realTodayStr = function(){
       if (v) neoSetDevDate(v);
     };
   };
-  /* من يحقّ له أن يرى أدوات المطوّر أصلاً:
-     لا أحد قبل الدخول — لهذا كان الزرّ يظهر على شاشة تسجيل الدخول —
-     ولا أحد غير مدير المبيعات بعده، فالرمز وحده لم يكن يكفي. */
-  window.neoDevEligible = function(){
-    try{
-      const app = document.getElementById('appScreen');
-      if (!app || app.classList.contains('hidden')) return false;
-      const p = window.__fleetProfile;
-      return !!(p && p.is_dev === true);
-    }catch(e){ return false; }
-  };
-  /* زرّ عائم صغير — لا يظهر إلا لمن فتح لوحة المطوّر على هذا الجهاز */
+  /* neoDevEligible معرَّفة في كتلة لوحة المطوّر — لا تُكرَّر هنا،
+     فآخر تعريف يُنفَّذ كان يطغى على الأول ويقلب السلوك. */
+  /* زرّ عائم صغير — لا يظهر إلا بعد فتح لوحة المطوّر في هذه الجلسة */
   window.neoMountTimeChip = function(){
     const on = !!localStorage.getItem('devDateOverride');
     const old = document.getElementById('tmChip');
