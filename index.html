@@ -12106,7 +12106,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.16.04";
+const APP_VERSION = "2026.09.16.05";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -12323,6 +12323,21 @@ const APP_VERSION = "2026.09.16.04";
   }
   window.neoMountDevChip = mountDevChip;
 
+  function env(){
+    return [
+      ['الإصدار', APP_VERSION],
+      ['التاريخ المحسوب', (typeof todayStr === 'function') ? todayStr() : '—'],
+      ['وقت الجهاز', new Date().toString().slice(0,33)],
+      ['الاتصال', navigator.onLine ? 'متصل' : 'غير متصل'],
+      ['المستخدم', (document.getElementById('userNameLabel')?.textContent || '').trim() || 'غير مسجّل'],
+      ['الدور', (document.getElementById('userRoleLabel')?.textContent || '').trim() || '—'],
+      ['وضع التبريد', localStorage.getItem('neoCoolMode') === '1' ? 'مُفعّل' : 'مطفأ'],
+      ['نظام الإبلاغ', localStorage.getItem('neoReportsOff') === '1' ? 'متوقف' : 'مُفعّل'],
+      ['الشاشة', innerWidth + '×' + innerHeight],
+      ['المتصفح', navigator.userAgent.slice(0,70)]
+    ];
+  }
+
   function openPanel(){
     document.getElementById('devPanel')?.remove();
     const p = document.createElement('div');
@@ -12380,12 +12395,21 @@ const APP_VERSION = "2026.09.16.04";
       + '<textarea id="dvTA" style="position:absolute;left:-9999px;top:0;"></textarea>';
     document.body.appendChild(p);
 
-    p.querySelector('#dvEnv').innerHTML = env()
-      .map(r => '<div><span style="color:#7487a0;">' + r[0] + ':</span> ' + r[1] + '</div>').join('');
-    const logBox = p.querySelector('#dvLog');
-    logBox.textContent = window.__devLog.length
-      ? window.__devLog.map(e => '[' + e.t + '] ' + e.type + ': ' + e.msg).join('\n')
-      : 'لا توجد أخطاء مسجّلة ✅';
+    /* صندوق المعلومات وسجلّ الأخطاء عرضٌ فقط — تعثّرهما كان يقطع
+       تنفيذ الدالة قبل ربط أي زرّ، فتظهر اللوحة كاملة وكلّها ميّت. */
+    try{
+      p.querySelector('#dvEnv').innerHTML = env()
+        .map(r => '<div><span style="color:#7487a0;">' + r[0] + ':</span> ' + r[1] + '</div>').join('');
+    }catch(e){
+      const _e = p.querySelector('#dvEnv');
+      if (_e) _e.textContent = 'تعذّر عرض معلومات البيئة';
+    }
+    try{
+      const logBox = p.querySelector('#dvLog');
+      if (logBox) logBox.textContent = (window.__devLog && window.__devLog.length)
+        ? window.__devLog.map(e => '[' + e.t + '] ' + e.type + ': ' + e.msg).join('\n')
+        : 'لا توجد أخطاء مسجّلة ✅';
+    }catch(e){}
 
     p.querySelector('#dvClose').onclick = () => p.remove();
     { const _b = p.querySelector('#dvStreak'); if (_b) _b.onclick = () => { try{ window.neoBackfillStreaks(_b); }catch(e){} }; }
@@ -12405,7 +12429,8 @@ const APP_VERSION = "2026.09.16.04";
     { const _b = p.querySelector('#dvStreakTbl'); if (_b) _b.onclick = () => { streaksReport(); SEE(); }; }
     { const _b = p.querySelector('#dvCols'); if (_b) _b.onclick = () => { colsReport(); SEE(); }; }
     { const _b = p.querySelector('#dvNet'); if (_b) _b.onclick = () => { netReport(); SEE(); }; }
-    p.querySelector('#dvCool').onclick  = () => { document.getElementById('coolBtn')?.click(); perfReport(); };
+    { const _b = p.querySelector('#dvCool');
+      if (_b) _b.onclick = () => { document.getElementById('coolBtn')?.click(); perfReport(); }; }
     { const _b = p.querySelector('#dvTime'); if (_b) _b.onclick = () => { timeReport(); SEE(); }; }
     { const _b = p.querySelector('#dvTable'); if (_b) _b.onclick = () => { tableReport(); SEE(); }; }
     { const _b = p.querySelector('#dvUsers'); if (_b) _b.onclick = () => { usersReport(); SEE(); }; }
