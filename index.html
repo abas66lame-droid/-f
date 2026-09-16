@@ -2439,6 +2439,7 @@ async function doLogout(){
   document.getElementById('loginScreen').classList.remove('hidden');
   document.getElementById('appScreen').classList.add('hidden');
   try{ window.__fleetProfile = null; }catch(e){}
+  try{ if (window.neoDevLock) window.neoDevLock(); }catch(e){}
   try{ if (window.neoRefreshDevUI) window.neoRefreshDevUI(); }catch(e){}
 }
 
@@ -12110,7 +12111,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.16.01";
+const APP_VERSION = "2026.09.16.02";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -12202,12 +12203,79 @@ const APP_VERSION = "2026.09.16.01";
 </script>
 
 <script>
-/* ══════════ لوحة المطوّر — لحساب المطوّر وحده ══════════
-   كان الدخول بضغطات سرّية ورمز محفوظ في الجهاز. وهذا لم يكن حاجزاً:
-   الرمز يُتداول، والعلامة تبقى في الجهاز للأبد، فدخلها مستخدمون.
-   الآن لا ضغطات ولا رمز — الصلاحية صفة في الحساب نفسه (profiles.is_dev)
-   تُمنح وتُسحب من قاعدة البيانات، وتسقط لحظة الخروج. */
+/* ══════════ لوحة المطوّر — بابان لا باب ══════════
+   كان الدخول بضغطات سرّية ورمز مكتوب في الملف. وهذا لم يكن حاجزاً:
+   الرمز يُقرأ من مصدر الصفحة ويُتداول، والعلامة تبقى في الجهاز للأبد.
+
+   الآن:
+   ① مَن يرى الزرّ أصلاً — صفة في الحساب (profiles.is_dev) تُمنح وتُسحب
+     من قاعدة البيانات. غير حاملها لا يرى شيئاً ولا بابَ يجرّبه.
+   ② من يدخل — كلمة سرّ حسابك نفسها، يتحقّق منها الخادم لا الملف.
+     فلا يوجد رمز في الصفحة يُقرأ، ولا شيء يُخمَّن محلياً.
+
+   ويبقى مفتوحاً بعد إغلاق اللوحة (فالتنقّل عمل متكرّر)، حتى تضغط
+   «🔒 قفل» فيُطلب تسجيل الدخول من جديد. ويُقفل تلقائياً مع انتهاء
+   جلسة المتصفّح. */
 (function(){
+  const DEV_AUTH = 'devAuthOK';
+  function devAuthed(){
+    try{ return sessionStorage.getItem(DEV_AUTH) === '1'; }catch(e){ return false; }
+  }
+  function devLock(){
+    try{ sessionStorage.removeItem(DEV_AUTH); }catch(e){}
+    try{ sessionStorage.removeItem('devSimProfile'); }catch(e){}
+  }
+  window.neoDevLock = devLock;
+
+  /* تسجيل دخول لواجهة المطوّر — بكلمة سرّ الحساب نفسه */
+  async function devLogin(){
+    let email = '';
+    try{
+      const { data } = await supabaseClient.auth.getUser();
+      email = (data && data.user && data.user.email) || '';
+    }catch(e){}
+    document.getElementById('devAuthOv')?.remove();
+    const ov = document.createElement('div');
+    ov.id = 'devAuthOv';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:1000020;background:rgba(4,8,14,0.96);'
+      + 'display:flex;align-items:center;justify-content:center;padding:20px;';
+    ov.innerHTML = '<div class="card" style="max-width:320px;width:100%;padding:20px;text-align:center;">'
+      + '<div style="font-size:30px;">🛠</div>'
+      + '<div style="color:#c8d4e2;font-size:14px;font-weight:700;margin-top:6px;">دخول لوحة المطوّر</div>'
+      + '<div style="color:#7487a0;font-size:11px;margin-top:5px;line-height:1.7;">'
+      + 'كلمة سرّ حسابك<br><span style="color:#5d6d80;">' + (email || '') + '</span></div>'
+      + '<input id="dvPw" type="password" autocapitalize="off" autocorrect="off" spellcheck="false" '
+      + 'placeholder="كلمة السر" style="width:100%;margin-top:12px;text-align:center;font-size:16px;">'
+      + '<div id="dvPwErr" style="color:#e15b64;font-size:12px;height:18px;margin-top:6px;"></div>'
+      + '<div style="display:flex;gap:8px;margin-top:6px;">'
+      + '<button id="dvPwOk" style="flex:1;">دخول</button>'
+      + '<button id="dvPwNo" class="secondary" style="flex:1;">إلغاء</button></div></div>';
+    document.body.appendChild(ov);
+    const inp = ov.querySelector('#dvPw');
+    setTimeout(() => inp.focus(), 120);
+    ov.querySelector('#dvPwNo').onclick = () => ov.remove();
+    const err = ov.querySelector('#dvPwErr');
+    let busy = false;
+    const go = async () => {
+      if (busy) return;
+      const pw = inp.value;
+      if (!pw){ err.textContent = 'اكتب كلمة السر'; return; }
+      if (!email){ err.textContent = 'تعذّر معرفة حسابك — أعد تحميل الصفحة'; return; }
+      busy = true; err.style.color = '#8fa3b8'; err.textContent = 'جاري التحقّق…';
+      try{
+        /* الخادم هو الذي يحكم — لا رمز في الملف يُقارَن به */
+        const { error } = await supabaseClient.auth.signInWithPassword({ email, password: pw });
+        if (error){ busy = false; err.style.color = '#e15b64';
+                    err.textContent = 'كلمة السر غير صحيحة'; inp.value = ''; return; }
+        try{ sessionStorage.setItem(DEV_AUTH, '1'); }catch(e){}
+        ov.remove();
+        openPanel();
+      }catch(e){ busy = false; err.style.color = '#e15b64'; err.textContent = 'تعذّر التحقّق'; }
+    };
+    ov.querySelector('#dvPwOk').onclick = go;
+    inp.onkeydown = e => { if (e.key === 'Enter') go(); };
+  }
+
   /* زرّ ظاهر لحساب المطوّر وحده — لا شيء مخفي يُكتشف بالتجربة */
   function mountDevChip(){
     const old = document.getElementById('devChip');
@@ -12222,7 +12290,7 @@ const APP_VERSION = "2026.09.16.01";
     c.style.cssText = 'position:fixed;bottom:148px;left:12px;z-index:1000003;width:44px;height:44px;'
       + 'border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:19px;'
       + 'cursor:pointer;background:rgba(10,18,30,0.94);border:1px solid rgba(56,217,185,0.45);';
-    c.onclick = () => { try{ openPanel(); }catch(e){} };
+    c.onclick = () => { try{ devAuthed() ? openPanel() : devLogin(); }catch(e){} };
     document.body.appendChild(c);
   }
   window.neoMountDevChip = mountDevChip;
@@ -12235,7 +12303,9 @@ const APP_VERSION = "2026.09.16.01";
     p.innerHTML =
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">'
       + '<b style="color:#38d9b9;font-size:16px;">🛠 لوحة المطوّر</b>'
-      + '<button id="dvClose" class="secondary" style="font-size:13px;padding:8px 14px;">إغلاق ✕</button></div>'
+      + '<div style="display:flex;gap:6px;">'
+      + '<button id="dvLock" class="secondary" style="font-size:13px;padding:8px 12px;color:#e15b64;">🔒 قفل</button>'
+      + '<button id="dvClose" class="secondary" style="font-size:13px;padding:8px 14px;">إغلاق ✕</button></div></div>'
       + '<div style="background:#0d1622;border:1px solid rgba(122,167,255,0.2);border-radius:10px;padding:12px;margin-bottom:12px;font-size:12px;line-height:2;color:#c8d4e2;" id="dvEnv"></div>'
       + '<div style="color:#7487a0;font-size:11px;margin:2px 0 6px;">الأهم</div>'
       + '<button id="dvStage" style="width:100%;font-size:14px;padding:14px;margin-bottom:7px;background:#2e5ca8;font-weight:800;">🔬 الفحص المتدرّج — ٨ مراحل</button>'
@@ -12292,6 +12362,15 @@ const APP_VERSION = "2026.09.16.01";
     p.querySelector('#dvClose').onclick = () => p.remove();
     { const _b = p.querySelector('#dvStreak'); if (_b) _b.onclick = () => { try{ window.neoBackfillStreaks(_b); }catch(e){} }; }
     { const _b = p.querySelector('#dvStreakAdm'); if (_b) _b.onclick = () => { try{ window.neoStreakAdminUI(); }catch(e){} }; }
+    { const _b = p.querySelector('#dvLock');
+      if (_b) _b.onclick = () => {
+        devLock();
+        document.getElementById('devSimBar')?.remove();
+        document.body.style.paddingTop = '';
+        p.remove();
+        if (typeof neoToast === 'function') neoToast('أُقفلت — يلزم تسجيل الدخول من جديد', true);
+      };
+    }
     { const _b = p.querySelector('#dvHallHide'); if (_b) _b.onclick = () => { try{ window.neoHallHideUI(); }catch(e){} }; }
     { const _b = p.querySelector('#dvDeptHide'); if (_b) _b.onclick = () => { try{ window.neoDeptHideUI(); }catch(e){} }; }
     { const _b = p.querySelector('#dvDept'); if (_b) _b.onclick = () => { deptReport(); SEE(); }; }
@@ -12346,8 +12425,8 @@ const APP_VERSION = "2026.09.16.01";
   setTimeout(() => {
     try{
       const s = sessionStorage.getItem('devSimProfile');
-      if (s && !(window.neoDevEligible && window.neoDevEligible())){
-        sessionStorage.removeItem('devSimProfile');   /* لم يعد مطوّراً */
+      if (s && !((window.neoDevEligible && window.neoDevEligible()) && devAuthed())){
+        sessionStorage.removeItem('devSimProfile');   /* لم يعد مطوّراً أو أُقفلت اللوحة */
       }
       else if (s && typeof __devApplySim === 'function'){
         const p = JSON.parse(s);
