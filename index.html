@@ -5538,8 +5538,11 @@ async function __computeHallAuditCompletionForDeptInner(dept, d){
   const count = (log, defs, item) => {
     const vf = log?.hall_verified_fields || {}; const fnn = log?.hall_field_notes || {};
     (defs||[]).forEach(f => {
-      /* الخانة المستثناة ليست متوقَّعة من المشرف فلا تدخل بسطاً ولا مقاماً */
+      /* ما لا يُنتظر منه تأشيره لا يدخل بسطاً ولا مقاماً:
+         المستثناة من التدقيق، والمعطَّلة التي تُرسم «—» ولا يمكن الضغط
+         عليها أصلاً — وكانت تُعدّ فيبقى القسم ناقصاً إلى الأبد. */
       if (item && typeof neoHallOutCell === 'function' && neoHallOutCell(item.id, f.key)) return;
+      if (item && typeof neoCellDisabled === 'function' && neoCellDisabled(item, f.key)) return;
       total++; if (vf[f.key] || (fnn[f.key]||'').trim()) verified++;
     });
   };
@@ -5563,7 +5566,9 @@ async function __computeHallAuditCompletionForDeptInner(dept, d){
   const staffFieldDefs = await staffFieldDefsForDeptName(dept.name, dept.id);
   const _inD = (arr) => (arr || []).filter(x => String(x.department_id) === String(dept.id));
   neoDailySample(_inD(d.allLocations), d.seed + '_loc',   d.date).forEach(l => count(d.locLogsById[l.id], L, l));
-  neoDailySample(_inD(d.allStaff),     d.seed + '_staff', d.date).forEach(s => count(d.staffLogsById[s.id], staffFieldDefs, s));
+  neoDailySample(_inD(d.allStaff),     d.seed + '_staff', d.date)
+    .map(s => ({ ...s, on_leave: (typeof neoOnLeave === 'function') && neoOnLeave(s.id, d.date) }))
+    .forEach(s => count(d.staffLogsById[s.id], staffFieldDefs, s));
   d.allTasks.filter(t => String(t.department_id) === String(dept.id) && !(typeof neoHallOutItem === 'function' && neoHallOutItem(t.id))).forEach(t => { total++; const tl = d.taskLogsById[t.id]; if (tl?.hall_verified || ((tl?.hall_field_notes||{})['__task']||'').trim()) verified++; });
   neoDailySample(_inD(d.allIpads), d.seed + '_ipad', d.date).forEach(i => count(d.ipadLogsById[i.id], I, i));
   neoDailySample(_inD(d.allReaders), d.seed + '_rdr', d.date).forEach(r => count(d.readerLogsById[r.id], R, r));
@@ -5644,7 +5649,9 @@ async function computeHallAuditProgressForUser(userId, depts, date, onlyMine){
     const vf = own ? (log?.hall_verified_fields || {}) : {};
     const fnn = own ? (log?.hall_field_notes || {}) : {};
     defs.forEach(f => {
+      /* نفس قاعدة العدّ في شاشة التدقيق: المستثناة والمعطَّلة خارج الحساب */
       if (item && typeof neoHallOutCell === 'function' && neoHallOutCell(item.id, f.key)) return;
+      if (item && typeof neoCellDisabled === 'function' && neoCellDisabled(item, f.key)) return;
       total++; if (vf[f.key] || (fnn[f.key]||'').trim()) verified++;
     });
   };
@@ -5669,7 +5676,8 @@ async function computeHallAuditProgressForUser(userId, depts, date, onlyMine){
 
   await countScope(neoSampleAcrossDepts(allLocations, deptIdSet, userId, 'loc', date), 'loc', locLogsById);
   const staffFieldDefsCache = {};
-  for (const s of neoSampleAcrossDepts(allStaff, deptIdSet, userId, 'staff', date)){
+  for (const _s of neoSampleAcrossDepts(allStaff, deptIdSet, userId, 'staff', date)){
+    const s = { ..._s, on_leave: (typeof neoOnLeave === 'function') && neoOnLeave(_s.id, date) };
     if (!staffFieldDefsCache[s.department_id]) staffFieldDefsCache[s.department_id] = await staffFieldDefsForDeptName(deptNameById[s.department_id] || '', s.department_id);
     count(staffLogsById[s.id], staffFieldDefsCache[s.department_id], s);
   }
@@ -12106,7 +12114,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.16.06";
+const APP_VERSION = "2026.09.18.01";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
