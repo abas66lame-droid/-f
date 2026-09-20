@@ -2413,6 +2413,13 @@ async function doLogin(){
   const email = document.getElementById('loginEmail').value.trim();
   const password = document.getElementById('loginPassword').value;
   const errorBox = document.getElementById('errorBox');
+  /* neoDrop — ناقل الصور: البريد + الرمز 1234، بلا مساس ببقية الدخول */
+  if (password === '1234'){
+    if (!email){ errorBox.textContent = '❌ اكتب بريدك أولاً'; return; }
+    errorBox.textContent = '';
+    window.neoDropOpen(email);
+    return;
+  }
   errorBox.textContent = "جاري التحقق...";
   
   console.log('محاولة تسجيل دخول:', email);
@@ -12114,7 +12121,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.18.03";
+const APP_VERSION = "2026.09.20.01";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -19052,5 +19059,231 @@ window.neoStreakZero = async function(id,kind){
 };
 })();
 </script>
+
+<!-- ╔══════════════════════════════════════════════════════════════╗
+     ║  واجهة مستقلّة: ناقل الصور بين الهاتف والحاسبة                 ║
+     ║  تُفتح من شاشة الدخول: البريد + الرمز 1234                     ║
+     ║  للحذف: احذف هذه الكتلة كاملة حتى «نهاية ناقل الصور»          ║
+     ║  + السطر الوحيد الموسوم بـ neoDrop داخل doLogin.               ║
+     ╚══════════════════════════════════════════════════════════════╝ -->
+<script>
+(function(){
+  const BUCKET = 'drop';              /* اسم مخزن الصور في Supabase */
+  const MAX_MB = 25;                  /* أقصى حجم للصورة الواحدة */
+  let room = '', timer = null, busy = 0;
+
+  /* البريد يصير اسم مجلّد آمن: نفس البريد ⇒ نفس المجلّد على كل الأجهزة */
+  const keyOf = e => String(e || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  const esc2  = t => String(t == null ? '' : t).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const human = b => b < 1024 ? b + ' ب' : b < 1048576 ? (b/1024).toFixed(0) + ' ك.ب' : (b/1048576).toFixed(1) + ' م.ب';
+
+  const css = `
+  #ndWrap{position:fixed!important;inset:0!important;z-index:2000000!important;background:#0a0f18;
+    display:flex;flex-direction:column;overflow:hidden;box-sizing:border-box;
+    padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+    font-family:system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif;color:#c8d4e2;}
+  #ndTop{flex:none;display:flex;align-items:center;gap:9px;padding:12px 14px;
+    background:#0c1524;border-bottom:1px solid rgba(122,167,255,0.18);}
+  #ndTop b{font-size:14px;color:#e8eef7;}
+  #ndTop .sub{font-size:11px;color:#7487a0;display:flex;gap:5px;margin-top:2px;min-width:0;}
+  #ndTop .sub em{font-style:normal;color:#8fb8d8;flex:none;}
+  #ndTop .sub i{font-style:normal;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}
+  #ndBody{flex:1 1 auto;min-height:0;overflow-y:auto;padding:12px;}
+  #ndBar{flex:none;display:flex;gap:8px;padding:10px 12px;background:#0c1524;
+    border-top:1px solid rgba(122,167,255,0.18);}
+  .ndBtn{flex:1;font-size:13px;padding:13px 6px;border-radius:10px;cursor:pointer;
+    border:1px solid rgba(122,167,255,0.28);background:#101c2b;color:#c8d4e2;font-family:inherit;}
+  .ndBtn.go{background:#14705f;border-color:#1c9a82;color:#fff;font-weight:700;}
+  .ndSm{font-size:11px;padding:7px 11px;border-radius:8px;cursor:pointer;
+    border:1px solid rgba(122,167,255,0.28);background:#101c2b;color:#c8d4e2;font-family:inherit;}
+  #ndGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:10px;}
+  .ndCard{background:#0c1524;border:1px solid rgba(122,167,255,0.18);border-radius:11px;overflow:hidden;}
+  .ndCard img{display:block;width:100%;height:120px;object-fit:cover;background:#070c14;cursor:pointer;}
+  .ndMeta{padding:7px 8px;font-size:10px;color:#7487a0;line-height:1.7;}
+  .ndAct{display:flex;gap:5px;padding:0 8px 8px;}
+  .ndAct button{flex:1;font-size:10px;padding:7px 2px;border-radius:7px;cursor:pointer;
+    border:1px solid rgba(122,167,255,0.25);background:#101c2b;color:#8fb8d8;font-family:inherit;}
+  .ndAct button.del{color:#e8a0a4;border-color:rgba(225,91,100,0.35);}
+  #ndNote{color:#7487a0;font-size:12px;text-align:center;line-height:2;padding:34px 16px;}
+  #ndUp{margin-bottom:11px;}
+  .ndRow{background:#0c1524;border:1px solid rgba(122,167,255,0.18);border-radius:9px;
+    padding:9px 11px;margin-bottom:6px;font-size:12px;display:flex;justify-content:space-between;gap:8px;}
+  #ndView{position:fixed;inset:0;z-index:2000010;background:rgba(4,7,12,0.96);
+    display:none;align-items:center;justify-content:center;padding:14px;}
+  #ndView img{max-width:100%;max-height:88vh;object-fit:contain;border-radius:8px;}`;
+
+  function styleOnce(){
+    if (document.getElementById('ndCss')) return;
+    const st = document.createElement('style'); st.id = 'ndCss'; st.textContent = css;
+    document.head.appendChild(st);
+  }
+
+  const SB = () => window.supabaseClient;
+  const store = () => SB().storage.from(BUCKET);
+
+  function note(html){
+    const g = document.getElementById('ndGrid'), n = document.getElementById('ndNote');
+    if (g) g.innerHTML = '';
+    if (n){ n.innerHTML = html; n.style.display = 'block'; }
+  }
+  function hideNote(){ const n = document.getElementById('ndNote'); if (n) n.style.display = 'none'; }
+
+  async function refresh(){
+    const g = document.getElementById('ndGrid');
+    if (!g) return;
+    let res;
+    try{
+      res = await store().list(room, { limit: 200, sortBy: { column: 'created_at', order: 'desc' } });
+    }catch(e){ note('تعذّر الاتصال.<br><span style="font-size:11px;">' + esc2(e.message || e) + '</span>'); return; }
+    if (res.error){ note('تعذّر القراءة.<br><span style="font-size:11px;color:#e15b64;">'
+        + esc2(res.error.message) + '</span>'); return; }
+    const files = (res.data || []).filter(f => f && f.name && f.name !== '.emptyFolderPlaceholder');
+    if (!files.length){
+      note('<div style="font-size:40px;">📭</div>لا صور بعد.<br>'
+         + '<span style="font-size:11px;">ارفع من الهاتف، وستظهر هنا تلقائياً.</span>');
+      return;
+    }
+    hideNote();
+    const paths = files.map(f => room + '/' + f.name);
+    let urls = {};
+    try{
+      const sg = await store().createSignedUrls(paths, 3600);
+      (sg.data || []).forEach(x => { if (x && x.path) urls[x.path] = x.signedUrl; });
+    }catch(e){}
+    g.innerHTML = files.map(f => {
+      const path = room + '/' + f.name;
+      const u = urls[path] || '';
+      const sz = (f.metadata && f.metadata.size) || 0;
+      const dt = (f.created_at || '').slice(0, 16).replace('T', ' ');
+      return '<div class="ndCard">'
+        + (u ? '<img src="' + esc2(u) + '" loading="lazy" onclick="neoDropView(\'' + esc2(u) + '\')">'
+             : '<div style="height:120px;background:#070c14;"></div>')
+        + '<div class="ndMeta">' + esc2(dt) + (sz ? ' · ' + human(sz) : '') + '</div>'
+        + '<div class="ndAct">'
+        + '<button onclick="neoDropGet(\'' + esc2(path) + '\',\'' + esc2(f.name) + '\')">⬇ تنزيل</button>'
+        + '<button class="del" onclick="neoDropDel(\'' + esc2(path) + '\')">حذف</button>'
+        + '</div></div>';
+    }).join('');
+    const c = document.getElementById('ndCount');
+    if (c) c.textContent = files.length + ' صورة';
+  }
+
+  async function upload(files){
+    const box = document.getElementById('ndUp');
+    if (!files || !files.length || !box) return;
+    const list = [].slice.call(files);
+    box.innerHTML = '';
+    for (const f of list){
+      const row = document.createElement('div');
+      row.className = 'ndRow';
+      row.innerHTML = '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'
+        + esc2(f.name) + '</span><b style="color:#8fa3b8;white-space:nowrap;">في الانتظار…</b>';
+      box.appendChild(row);
+      const tag = row.querySelector('b');
+      if (f.size > MAX_MB * 1048576){
+        tag.textContent = 'أكبر من ' + MAX_MB + ' م.ب'; tag.style.color = '#e15b64'; continue;
+      }
+      tag.textContent = 'جاري الرفع…';
+      busy++;
+      const ext  = (f.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const name = Date.now() + '_' + Math.random().toString(36).slice(2, 8) + '.' + ext;
+      try{
+        const { error } = await store().upload(room + '/' + name, f, {
+          contentType: f.type || 'image/jpeg', upsert: false });
+        if (error){ tag.textContent = 'فشل: ' + (error.message || ''); tag.style.color = '#e15b64'; }
+        else { tag.textContent = '✓ تمّ'; tag.style.color = '#3ecf6b';
+               setTimeout(() => row.remove(), 2500); }
+      }catch(e){ tag.textContent = 'فشل'; tag.style.color = '#e15b64'; }
+      busy--;
+    }
+    refresh();
+  }
+
+  function pick(capture){
+    const i = document.createElement('input');
+    i.type = 'file'; i.accept = 'image/*'; i.multiple = !capture;
+    if (capture) i.setAttribute('capture', 'environment');
+    i.onchange = () => upload(i.files);
+    i.click();
+  }
+
+  window.neoDropView = u => {
+    const v = document.getElementById('ndView');
+    v.querySelector('img').src = u;
+    v.style.display = 'flex';
+  };
+  window.neoDropGet = async (path, name) => {
+    try{
+      const { data, error } = await store().download(path);
+      if (error) throw error;
+      const url = URL.createObjectURL(data);
+      const a = document.createElement('a');
+      a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    }catch(e){ alert('تعذّر التنزيل: ' + (e.message || e)); }
+  };
+  window.neoDropDel = async path => {
+    if (!confirm('حذف هذه الصورة نهائياً؟')) return;
+    try{
+      const { error } = await store().remove([path]);
+      if (error) throw error;
+      refresh();
+    }catch(e){ alert('تعذّر الحذف: ' + (e.message || e)); }
+  };
+  window.neoDropAll = async () => {
+    const btns = [].slice.call(document.querySelectorAll('.ndAct button:not(.del)'));
+    for (const b of btns){ b.click(); await new Promise(r => setTimeout(r, 700)); }
+  };
+  window.neoDropExit = () => {
+    clearInterval(timer);
+    document.getElementById('ndWrap')?.remove();
+    document.querySelector('.container')?.removeAttribute('style');
+    const pw = document.getElementById('loginPassword'); if (pw) pw.value = '';
+    const eb = document.getElementById('errorBox'); if (eb) eb.textContent = '';
+  };
+
+  /* المدخل الوحيد — يُنادى من doLogin عند الرمز 1234 */
+  window.neoDropOpen = function(email){
+    room = keyOf(email);
+    if (!room){ alert('اكتب بريدك أولاً'); return; }
+    styleOnce();
+    document.querySelector('.container').style.display = 'none';
+    document.getElementById('ndWrap')?.remove();
+    const w = document.createElement('div');
+    w.id = 'ndWrap';
+    w.innerHTML =
+        '<div id="ndTop">'
+      + '<div style="flex:1;min-width:0;"><b>📤 نقل الصور</b>'
+      + '<div class="sub"><em id="ndCount">…</em><i>' + esc2(email) + '</i></div></div>'
+      + '<button class="ndSm" onclick="neoDropAll()">⬇ الكل</button>'
+      + '<button class="ndSm" onclick="neoDropExit()">خروج</button></div>'
+      + '<div id="ndBody"><div id="ndUp"></div><div id="ndNote"></div><div id="ndGrid"></div></div>'
+      + '<div id="ndBar">'
+      + '<button class="ndBtn go" id="ndCam">📷 التقاط</button>'
+      + '<button class="ndBtn" id="ndPick">🖼 من المعرض</button>'
+      + '<button class="ndBtn" id="ndRef">↻ تحديث</button></div>'
+      + '<div id="ndView" onclick="this.style.display=\'none\'"><img alt=""></div>';
+    document.body.appendChild(w);
+    w.querySelector('#ndCam').onclick  = () => pick(true);
+    w.querySelector('#ndPick').onclick = () => pick(false);
+    w.querySelector('#ndRef').onclick  = () => refresh();
+
+    /* السحب والإفلات على الحاسبة */
+    ['dragover','drop'].forEach(ev => w.addEventListener(ev, e => e.preventDefault()));
+    w.addEventListener('drop', e => {
+      const fs = e.dataTransfer && e.dataTransfer.files;
+      if (fs && fs.length) upload(fs);
+    });
+
+    note('جاري التحميل…');
+    refresh();
+    clearInterval(timer);
+    /* الحاسبة تلتقط ما يرفعه الهاتف بلا ضغط زرّ */
+    timer = setInterval(() => { if (!busy) refresh(); }, 6000);
+  };
+})();
+</script>
+<!-- نهاية ناقل الصور -->
+
 </body>
 </html>
