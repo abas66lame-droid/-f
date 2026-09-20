@@ -12121,7 +12121,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.20.01";
+const APP_VERSION = "2026.09.20.02";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -19160,7 +19160,8 @@ window.neoStreakZero = async function(id,kind){
              : '<div style="height:120px;background:#070c14;"></div>')
         + '<div class="ndMeta">' + esc2(dt) + (sz ? ' · ' + human(sz) : '') + '</div>'
         + '<div class="ndAct">'
-        + '<button onclick="neoDropGet(\'' + esc2(path) + '\',\'' + esc2(f.name) + '\')">⬇ تنزيل</button>'
+        + '<button data-p="' + esc2(path) + '" data-n="' + esc2(f.name) + '" '
+        + 'onclick="neoDropGet(this.getAttribute(\'data-p\'), this.getAttribute(\'data-n\'))">⬇ تنزيل</button>'
         + '<button class="del" onclick="neoDropDel(\'' + esc2(path) + '\')">حذف</button>'
         + '</div></div>';
     }).join('');
@@ -19212,15 +19213,33 @@ window.neoStreakZero = async function(id,kind){
     v.querySelector('img').src = u;
     v.style.display = 'flex';
   };
+  /* التنزيل بطريقتين: رابط موقَّت يحمل ترويسة «حفظ الملف» أولاً — وهو
+     الأوثق على الهاتف والحاسبة معاً — ثم التنزيل إلى الذاكرة كبديل. */
   window.neoDropGet = async (path, name) => {
+    let e1 = null;
+    try{
+      const { data, error } = await store().createSignedUrl(path, 300, { download: name });
+      if (error) throw error;
+      if (!data || !data.signedUrl) throw new Error('لم يرجع رابط');
+      const a = document.createElement('a');
+      a.href = data.signedUrl; a.rel = 'noopener'; a.target = '_self';
+      document.body.appendChild(a); a.click(); a.remove();
+      return true;
+    }catch(e){ e1 = e; }
     try{
       const { data, error } = await store().download(path);
       if (error) throw error;
       const url = URL.createObjectURL(data);
       const a = document.createElement('a');
       a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 4000);
-    }catch(e){ alert('تعذّر التنزيل: ' + (e.message || e)); }
+      setTimeout(() => URL.revokeObjectURL(url), 6000);
+      return true;
+    }catch(e2){
+      alert('تعذّر التنزيل\n\n'
+        + 'الطريقة ١: ' + ((e1 && (e1.message || e1.error || e1)) || '—') + '\n'
+        + 'الطريقة ٢: ' + ((e2 && (e2.message || e2.error || e2)) || '—'));
+      return false;
+    }
   };
   window.neoDropDel = async path => {
     if (!confirm('حذف هذه الصورة نهائياً؟')) return;
@@ -19230,9 +19249,19 @@ window.neoStreakZero = async function(id,kind){
       refresh();
     }catch(e){ alert('تعذّر الحذف: ' + (e.message || e)); }
   };
+  /* الكل: تنزيل متسلسل بمهلة أوسع — المتصفّح يحجب التنزيلات المتلاحقة */
   window.neoDropAll = async () => {
-    const btns = [].slice.call(document.querySelectorAll('.ndAct button:not(.del)'));
-    for (const b of btns){ b.click(); await new Promise(r => setTimeout(r, 700)); }
+    const btns = [].slice.call(document.querySelectorAll('.ndAct button[data-p]'));
+    if (!btns.length) return;
+    for (let i = 0; i < btns.length; i++){
+      const b = btns[i];
+      b.textContent = '…';
+      const ok = await window.neoDropGet(b.getAttribute('data-p'), b.getAttribute('data-n'));
+      b.textContent = ok ? '✓' : '✗';
+      setTimeout(() => { b.textContent = '⬇ تنزيل'; }, 2500);
+      if (!ok) break;                       /* لا نُغرق المستخدم برسائل متكرّرة */
+      await new Promise(r => setTimeout(r, 1200));
+    }
   };
   window.neoDropExit = () => {
     clearInterval(timer);
