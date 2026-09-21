@@ -2455,6 +2455,22 @@ window.addEventListener('DOMContentLoaded', async () => {
   if (data.session){ await handleLoggedIn(); }
 });
 
+/* ══ المسمّى الوظيفي ══
+   الدور يحدّد الصلاحيات والواجهة، والمسمّى يحدّد ما يُكتب تحت الاسم.
+   فحساب تدقيق التوصيل يبقى دوره fleet — فتعمل كل صلاحياته كما هي —
+   ويظهر باسمه الخاص. وإن اختلفت واجهته مستقبلاً فهذا هو المفتاح. */
+function neoJobTitle(profile){
+  /* الجدول داخل الدالة عمداً: خارجها كان أي تعثّر سابق يُبقيه غير مهيّأ
+     فتسقط الدالة كلها — والمسمّى يجب أن يظهر مهما حدث. */
+  const AR = { shift:"مسؤول شفت", hall:"مسؤول صالة", sales:"مسؤول مبيعات",
+    driver:"موظف توصيل", fleet:"مسؤول التوصيل", clean:"مسؤول التنظيف العام",
+    stock:"مسؤول الجرد العام" };
+  const t = profile && profile.job_title;
+  if (t && String(t).trim()) return String(t).trim();
+  return (profile && (AR[profile.role] || profile.role)) || '';
+}
+try{ window.neoJobTitle = neoJobTitle; }catch(e){}
+
 async function getMyProfile(){
   try {
     const { data: { user }, error: userError } = await supabaseClient.auth.getUser();
@@ -2519,9 +2535,10 @@ async function handleLoggedIn(){
     appScreen.classList.remove('hidden');
 
     document.getElementById('userNameLabel').textContent = profile.name || '';
-    const roleLabels = { shift: "مسؤول شفت", hall: "مسؤول صالة", sales: "مسؤول مبيعات", driver: "موظف توصيل", fleet: "مسؤول التوصيل", clean: "مسؤول التنظيف العام", stock: "مسؤول الجرد العام" };
     /* أُزيلت shiftLabels — نظام الشفتات ملغى ولم تكن مستخدمة في أي مكان */
-    document.getElementById('userRoleLabel').textContent = roleLabels[profile.role] || profile.role;
+    /* المسمّى الوظيفي يسبق اسم الدور: حسابان بنفس الدور والصلاحيات
+       يظهران بمسمّيين مختلفين، وهو المفتاح إن اختلفت واجهتاهما لاحقاً. */
+    document.getElementById('userRoleLabel').textContent = neoJobTitle(profile);
 
     document.getElementById('shiftView').classList.add('hidden');
     document.getElementById('hallView').classList.add('hidden');
@@ -9980,12 +9997,11 @@ async function resetManagerPassword(targetUserId, btnEl){
 async function renderSalesAccountTab(){
   const { data: { user } } = await supabaseClient.auth.getUser();
   const { data: profile } = await supabaseClient.from('profiles').select('*').eq('id', user.id).single();
-  const roleLabels = { shift: "مسؤول شفت", hall: "مسؤول صالة", sales: "مسؤول مبيعات", driver: "موظف توصيل", fleet: "مسؤول التوصيل", clean: "مسؤول التنظيف العام", stock: "مسؤول الجرد العام" };
   mountSalesShell('account', `
     <div class="card" style="text-align:center; padding:30px 16px;">
       <img src="${document.getElementById('neoBrandLogo')?document.getElementById('neoBrandLogo').src:''}" alt="شركة الاماني" class="brand-logo" style="margin-bottom:10px;">
       <div style="font-size:18px; font-weight:bold;">${profile?.name || ''}</div>
-      <div style="color:#9fd3ff; font-size:13px; margin-bottom:20px;">${roleLabels[profile?.role] || profile?.role || ''}</div>
+      <div style="color:#9fd3ff; font-size:13px; margin-bottom:20px;">${esc(neoJobTitle(profile))}</div>
       <button class="secondary" onclick="doLogout()">🚪 تسجيل خروج</button>
     </div>`);
 }
@@ -12121,7 +12137,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.20.02";
+const APP_VERSION = "2026.09.21.01";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
