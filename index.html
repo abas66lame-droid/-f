@@ -12137,7 +12137,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.21.01";
+const APP_VERSION = "2026.09.23.01";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -16840,7 +16840,9 @@ async function cleanOld(){
     if(ids.length){
       try{
         var pr=await SB().from('fleet_task_proofs').select('storage_path').in('trip_id',ids);
-        var paths=(pr.data||[]).map(function(x){ return x.storage_path; }).filter(Boolean);
+        var paths=[];
+        (pr.data||[]).forEach(function(x){ if(x.storage_path){
+          paths.push(x.storage_path); paths.push(fleetThumbPath(x.storage_path)); } });
         for(var i=0;i<paths.length;i+=100){
           try{ await SB().storage.from('fleet-proofs').remove(paths.slice(i,i+100)); }catch(e){}
         }
@@ -16910,15 +16912,72 @@ function fleetActor(){
   return { id:p.id, name:p.name||'' };
 }
 
+/* ══ حجم الصور ══
+   كانت صورة الإثبات تُرفع بحجمها من الكاميرا (٣–٦ ميغا) وتُعرض في مربّع
+   ٥٢ بكسل — فيُنزَّل الملف كاملاً ليُصغَّر على الشاشة. هذا وحده استهلك
+   عشرات الجيجابايتات من حصة الخارج.
+
+   الآن: نسخة عرض ١٦٠٠ بكسل (تبقى واضحة تماماً كإثبات) ومصغّرة ٢٥٦
+   للمربّعات، وكلتاهما بتخزين مؤقّت سنة — فالصورة لا تتغيّر بعد رفعها. */
+var FLEET_IMG = { mainPx:1600, mainQ:0.85, thumbPx:256, thumbQ:0.7, cache:'31536000' };
+
+/* يصغّر الصورة في الجهاز قبل الرفع. يرجع null عند أي تعثّر فنرفع الأصل
+   كما هو — الإثبات لا يُفقد مهما حدث. */
+async function fleetShrink(file, maxPx, quality){
+  try{
+    if (typeof createImageBitmap !== 'function') return null;
+    var bmp;
+    try{ bmp = await createImageBitmap(file, { imageOrientation:'from-image' }); }
+    catch(e){ bmp = await createImageBitmap(file); }
+    var w0 = bmp.width, h0 = bmp.height;
+    if (!w0 || !h0) return null;
+    var sc = Math.min(1, maxPx / Math.max(w0, h0));
+    var w = Math.max(1, Math.round(w0*sc)), h = Math.max(1, Math.round(h0*sc));
+    var c = document.createElement('canvas'); c.width=w; c.height=h;
+    c.getContext('2d').drawImage(bmp, 0, 0, w, h);
+    try{ bmp.close(); }catch(e){}
+    var blob = await new Promise(function(r){ c.toBlob(r, 'image/jpeg', quality); });
+    return blob && blob.size ? blob : null;
+  }catch(e){ return null; }
+}
+/* مسار المصغّرة مشتقّ من الأصل، فلا يحتاج عموداً جديداً في الجدول */
+function fleetThumbUrl(url){
+  if(!url) return '';
+  return String(url).replace(/\.[A-Za-z0-9]+$/, '') + '.thumb.jpg';
+}
+function fleetThumbPath(path){
+  if(!path) return '';
+  return String(path).replace(/\.[A-Za-z0-9]+$/, '') + '.thumb.jpg';
+}
+/* وسم الصورة المصغّرة: كسولة، وترجع للأصل إن لم تكن لها مصغّرة (الصور القديمة) */
+function fleetImgTag(url, px){
+  var t = fleetThumbUrl(url), u = esc(url);
+  return '<img src="'+esc(t)+'" loading="lazy" decoding="async" '
+    + 'onerror="this.onerror=null;this.src=\''+u.replace(/'/g,"\\'")+'\';" '
+    + 'onclick="fleetViewProof(\''+u.replace(/'/g,"\\'")+'\')" '
+    + 'style="width:'+px+'px;height:'+px+'px;object-fit:cover;border-radius:8px;'
+    + 'background:#0c1524;border:1px solid rgba(56,217,185,0.4);cursor:pointer;">';
+}
+
 /* ── رفع صورة إثبات المهمة إلى Supabase Storage ── */
 async function fleetUploadProof(file, tripId, taskId, vehicleId, driverId){
   if(!file) throw new Error('لا توجد صورة');
   if(!navigator.onLine) throw new Error('لا يوجد اتصال بالإنترنت');
-  var ext=(file.name||'jpg').split('.').pop().toLowerCase();
+  var small = await fleetShrink(file, FLEET_IMG.mainPx, FLEET_IMG.mainQ);
+  var body  = small || file;
+  var ext   = small ? 'jpg' : (file.name||'jpg').split('.').pop().toLowerCase();
   if(['jpg','jpeg','png','webp','heic'].indexOf(ext)===-1) ext='jpg';
-  var path='trip'+tripId+'/task'+taskId+'_'+Date.now()+'.'+ext;
-  var up=await SB().storage.from('fleet-proofs').upload(path,file,{upsert:false,contentType:file.type||'image/jpeg'});
+  var base='trip'+tripId+'/task'+taskId+'_'+Date.now();
+  var path=base+'.'+ext;
+  var up=await SB().storage.from('fleet-proofs').upload(path,body,{upsert:false,
+    contentType: small ? 'image/jpeg' : (file.type||'image/jpeg'), cacheControl:FLEET_IMG.cache});
   if(up.error) throw new Error(up.error.message||'فشل الرفع');
+  /* المصغّرة اختيارية: فشلها لا يُبطل الإثبات، والعرض يرجع للأصل */
+  try{
+    var th = await fleetShrink(file, FLEET_IMG.thumbPx, FLEET_IMG.thumbQ);
+    if (th) await SB().storage.from('fleet-proofs').upload(base+'.thumb.jpg', th,
+      { upsert:true, contentType:'image/jpeg', cacheControl:FLEET_IMG.cache });
+  }catch(e){}
   var pub=SB().storage.from('fleet-proofs').getPublicUrl(path);
   var url=(pub&&pub.data&&pub.data.publicUrl)||'';
   var ins=await SB().from('fleet_task_proofs').insert({
@@ -17157,10 +17216,7 @@ window.renderDriverView = async function(profile){
             +'<span style="flex:1;color:#c8d4e2;font-size:13px;">'+esc(t.title)+'</span></div>'
             +(ready
               ? '<div style="display:flex;align-items:center;gap:6px;margin-top:8px;flex-wrap:wrap;">'
-                +pl.map(function(p){
-                  return '<img src="'+esc(p.url)+'" style="width:52px;height:52px;object-fit:cover;border-radius:8px;'
-                    +'border:1px solid rgba(56,217,185,0.4);" onclick="fleetViewProof(\''+esc(p.url)+'\')">';
-                }).join('')
+                +pl.map(function(p){ return fleetImgTag(p.url, 52); }).join('')
                 +'<span style="color:#38d9b9;font-size:11px;">✓ '+pl.length+' صورة</span></div>'
               : '<div style="color:#ffb37a;font-size:11px;margin-top:7px;">📷 بانتظار الصورة</div>')
             +'<div style="display:flex;gap:6px;margin-top:8px;">'
@@ -17464,7 +17520,9 @@ window.fleetCam=async function(tripId,taskId,vehId){
 async function purgeTripAssets(tripId){
   try{
     var pr=await SB().from('fleet_task_proofs').select('storage_path').eq('trip_id',tripId);
-    var paths=(pr.data||[]).map(function(x){ return x.storage_path; }).filter(Boolean);
+    var paths=[];
+    (pr.data||[]).forEach(function(x){ if(x.storage_path){
+      paths.push(x.storage_path); paths.push(fleetThumbPath(x.storage_path)); } });
     if(paths.length){ try{ await SB().storage.from('fleet-proofs').remove(paths); }catch(e){} }
     await SB().from('fleet_task_proofs').delete().eq('trip_id',tripId);
   }catch(e){}
@@ -17549,10 +17607,7 @@ window.fleetTripDetail=async function(tripId){
           +(on&&checks[x.id]?'<div style="color:#5d6d80;font-size:10px;margin-top:3px;">أُنجزت '+fmt(checks[x.id])+'</div>':'')
           +(pl.length
             ? '<div style="display:flex;align-items:center;gap:8px;margin-top:7px;flex-wrap:wrap;">'
-              +pl.map(function(p){
-                return '<img src="'+esc(p.url)+'" onclick="fleetViewProof(\''+esc(p.url)+'\')" '
-                  +'style="width:56px;height:56px;object-fit:cover;border-radius:8px;border:1px solid rgba(56,217,185,0.4);">';
-              }).join('')
+              +pl.map(function(p){ return fleetImgTag(p.url, 56); }).join('')
               +'<div style="color:#38d9b9;font-size:11px;">📷 '+pl.length+' صورة</div></div>'
             : '<div style="color:#e8a0a4;font-size:11px;margin-top:6px;">📷 بلا صورة</div>')
           +'</div>';
