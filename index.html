@@ -12137,7 +12137,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.23.02";
+const APP_VERSION = "2026.09.25.01";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -17109,7 +17109,9 @@ async function fleetTripsMissingInfo(trips){
       var checks=x.phase==='out'?(t.out_checks||{}):(t.in_checks||{});
       if(!checks[x.id] || !pf[String(x.id)]) count++;
     });
-    out[t.id]={ count: count };
+    /* الرحلة المدقَّقة: راجعها مسؤول ووجدها سليمة، فنواقصها صفر.
+       يسبق منطق الرحلات المتكررة ليرى المرساةَ خاليةً من النواقص. */
+    out[t.id]= t.audited_at ? { count:0, audited:true } : { count: count };
   });
 
   /* الرحلات المتكررة: مهامها أُنجزت في الرحلة الأولى — نواقصها صفر دائماً.
@@ -17591,6 +17593,7 @@ window.fleetTripDetail=async function(tripId){
       +'<b style="color:#c8d4e2;font-size:14px;">'+kindLabel(v.kind)+' '+esc(v.plate||'?')+'</b>'
       +'<button class="secondary" style="font-size:12px;padding:6px 12px;" onclick="document.getElementById(\'ftdOv\').remove()">إغلاق</button></div>'
       +'<div style="color:#8fa3b8;font-size:12px;">'+esc(t.driver_name||'')+'</div>'
+      +fleetAuditNote(t)
       +'<div style="color:#7487a0;font-size:11px;margin-bottom:12px;">'+fmt(t.out_at)+' ← '
       +(t.in_at?fmt(t.in_at):'<span style="color:#ffb37a;">لم تُرجَع بعد</span>')+'</div>';
 
@@ -17923,9 +17926,10 @@ window.fleetSupTrips=async function(day){
       var t=g.anchor;
       var oc=Object.keys(t.out_checks||{}).length, ic=Object.keys(t.in_checks||{}).length;
       var ok=!!t.verified_at, rej=!!t.reject_note;
+      var aud=!!t.audited_at;
       var missing=(mi[t.id]&&mi[t.id].count)||0;
-      h+='<div style="padding:10px;margin-bottom:6px;border-radius:10px;background:'+(missing?'rgba(225,91,100,0.08)':'rgba(122,167,255,0.05)')+';'
-        +'border-inline-start:3px solid '+(missing?'#e15b64':rej?'#e15b64':ok?'#38d9b9':'#7487a0')+';">'
+      h+='<div style="padding:10px;margin-bottom:6px;border-radius:10px;background:'+(aud?'rgba(62,207,107,0.09)':missing?'rgba(225,91,100,0.08)':'rgba(122,167,255,0.05)')+';'
+        +'border-inline-start:3px solid '+(aud?'#3ecf6b':missing?'#e15b64':rej?'#e15b64':ok?'#38d9b9':'#7487a0')+';">'
         +'<div style="display:flex;justify-content:space-between;gap:8px;">'
         +'<div style="flex:1;"><div style="color:#c8d4e2;font-size:11px;">'+esc(t.driver_name||'')
         +fleetRepeatBadge(g.repeats.length)+'</div>'
@@ -17936,12 +17940,19 @@ window.fleetSupTrips=async function(day){
         +(t.note?'<div style="color:#ffb37a;font-size:11px;margin-top:3px;">📝 '+esc(t.note)+'</div>':'')
         +(t.reject_note?'<div style="color:#e8a0a4;font-size:11px;margin-top:3px;">⚠️ '+esc(t.reject_note)+'</div>':'')
         +(ok?'<div style="color:#38d9b9;font-size:10px;margin-top:3px;">✓ '+esc(t.verified_name||'')+'</div>':'')
+        +fleetAuditNote(t)
         +'</div>'
-        +(missing?'<span style="background:#5a2020;color:#ff8f8f;font-size:10px;font-weight:800;padding:2px 8px;border-radius:9px;flex-shrink:0;height:fit-content;">'+missing+' ناقص</span>':'')
+        +(aud
+          ? '<span style="background:#123a22;color:#3ecf6b;font-size:10px;font-weight:800;padding:2px 8px;border-radius:9px;flex-shrink:0;height:fit-content;">✓ ٠ ناقص</span>'
+          : (missing?'<span style="background:#5a2020;color:#ff8f8f;font-size:10px;font-weight:800;padding:2px 8px;border-radius:9px;flex-shrink:0;height:fit-content;">'+missing+' ناقص</span>':''))
         +'</div>'
-        +(rej?'':'<div style="display:flex;gap:6px;margin-top:8px;">'
-          +(ok?'':'<button style="flex:1;font-size:11px;padding:8px;background:#14705f;" onclick="event.stopPropagation();fleetVerify('+t.id+')">اعتماد</button>')
-          +'<button class="secondary" style="flex:1;font-size:11px;padding:8px;color:#e8a0a4;" onclick="event.stopPropagation();fleetReject('+t.id+')">تسجيل ملاحظة</button></div>')
+        +'<div style="display:flex;gap:6px;margin-top:8px;">'
+        +(aud
+          ? '<button class="secondary" style="flex:1;font-size:11px;padding:8px;color:#8fa3b8;" onclick="event.stopPropagation();fleetUnaudit('+t.id+')">↩ إلغاء التدقيق</button>'
+          : '<button style="flex:1;font-size:11px;padding:8px;background:#1c7a4a;" onclick="event.stopPropagation();fleetAudit('+t.id+')">✓ تدقيق الرحلة</button>')
+        +(rej?'':(ok?'':'<button style="flex:1;font-size:11px;padding:8px;background:#14705f;" onclick="event.stopPropagation();fleetVerify('+t.id+')">اعتماد</button>')
+          +'<button class="secondary" style="flex:1;font-size:11px;padding:8px;color:#e8a0a4;" onclick="event.stopPropagation();fleetReject('+t.id+')">ملاحظة</button>')
+        +'</div>'
         +'</div>';
       g.repeats.forEach(function(rt,ix){ h+=fleetRepeatRow(rt,ix+2,{}); });
     });
@@ -17960,6 +17971,45 @@ window.fleetSupTab=function(k){
   else { tW.classList.remove('hidden'); vW.classList.add('hidden');
     if(tB) tB.className=''; if(vB) vB.className='secondary'; }
 };
+
+/* ══ تدقيق الرحلة ══
+   المسؤول يراجعها فيجدها سليمة رغم ما يظهر من نواقص، فيضغط «تدقيق»:
+   تُصفَّر نواقصها وتخضرّ عند الجميع، ويُكتب عليها من دقّقها ومسمّاه. */
+window.fleetAudit=async function(tid){
+  var p=window.__fleetProfile; if(!p) return;
+  var title=(typeof neoJobTitle==='function') ? neoJobTitle(p) : '';
+  try{
+    var r=await SB().from('fleet_trips').update({
+      audited_at:nowISO(), audited_by:String(p.id),
+      audited_name:p.name||'', audited_title:title }).eq('id',tid);
+    if(r&&r.error) throw r.error;
+    toast('تم تدقيقها',true);
+  }catch(e){ toast('تعذّر التدقيق: '+((e&&e.message)||'')); return; }
+  await window.__fleetAfterAudit(p);
+};
+window.fleetUnaudit=async function(tid){
+  var p=window.__fleetProfile; if(!p) return;
+  if(!confirm('إلغاء تدقيق هذه الرحلة؟ سترجع نواقصها كما كانت.')) return;
+  try{
+    var r=await SB().from('fleet_trips').update({
+      audited_at:null, audited_by:null, audited_name:null, audited_title:null }).eq('id',tid);
+    if(r&&r.error) throw r.error;
+    toast('أُلغي التدقيق');
+  }catch(e){ toast('تعذّر الإلغاء: '+((e&&e.message)||'')); return; }
+  await window.__fleetAfterAudit(p);
+};
+window.__fleetAfterAudit=async function(p){
+  var sup=document.getElementById('fleetSupView');
+  if(sup && !sup.classList.contains('hidden')) await window.renderFleetSupView(p);
+  else await window.renderFleetManagerTab();
+};
+/* سطر «تم تدقيقها بواسطة…» — موضع واحد يقرأ منه كل العروض */
+function fleetAuditNote(t){
+  if(!t || !t.audited_at) return '';
+  var who=[t.audited_title||'', t.audited_name||''].filter(Boolean).join(' — ');
+  return '<div style="color:#3ecf6b;font-size:11px;margin-top:4px;">'
+    + '🔎 تم تدقيقها بواسطة ' + esc(who||'مسؤول') + '</div>';
+}
 
 window.fleetVerify=async function(tid){
   var p=window.__fleetProfile; if(!p) return;
@@ -18155,13 +18205,17 @@ window.renderFleetManagerTab=async function(){
         var t=g.anchor;
         var ok=!!t.verified_at, rej=!!t.reject_note, opn=!t.in_at;
         var missing=missingInfo[t.id].count;
-        h+='<div style="padding:9px;margin-bottom:5px;border-radius:9px;background:'+(missing?'rgba(225,91,100,0.08)':'rgba(122,167,255,0.04)')+';'
-          +'border-inline-start:3px solid '+(missing?'#e15b64':opn?'#ff8c42':rej?'#e15b64':ok?'#38d9b9':'#5d6d80')+';">'
+        var aud=!!t.audited_at;
+        h+='<div style="padding:9px;margin-bottom:5px;border-radius:9px;background:'+(aud?'rgba(62,207,107,0.09)':missing?'rgba(225,91,100,0.08)':'rgba(122,167,255,0.04)')+';'
+          +'border-inline-start:3px solid '+(aud?'#3ecf6b':missing?'#e15b64':opn?'#ff8c42':rej?'#e15b64':ok?'#38d9b9':'#5d6d80')+';">'
           +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">'
           +'<span style="color:#c8d4e2;font-size:12px;">'+esc(t.driver_name||'')
           +fleetRepeatBadge(g.repeats.length)+'</span>'
-          +(missing?'<span style="background:#5a2020;color:#ff8f8f;font-size:10px;font-weight:800;padding:2px 8px;border-radius:9px;flex-shrink:0;">'+missing+' ناقص</span>':'')
+          +(aud
+            ? '<span style="background:#123a22;color:#3ecf6b;font-size:10px;font-weight:800;padding:2px 8px;border-radius:9px;flex-shrink:0;">✓ ٠ ناقص</span>'
+            : (missing?'<span style="background:#5a2020;color:#ff8f8f;font-size:10px;font-weight:800;padding:2px 8px;border-radius:9px;flex-shrink:0;">'+missing+' ناقص</span>':''))
           +'</div>'
+          +fleetAuditNote(t)
           +'<div style="color:#7487a0;font-size:10px;">'+fmt(t.out_at)+' ← '+(t.in_at?fmt(t.in_at):'<span style="color:#ffb37a;">لم تُرجَع</span>')+'</div>'
           +'<div style="color:#7487a0;font-size:10px;">علامات: استلام '+Object.keys(t.out_checks||{}).length+' · تسليم '+Object.keys(t.in_checks||{}).length+'</div>'
           +'<div style="display:flex;gap:6px;margin-top:6px;">'
