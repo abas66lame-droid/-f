@@ -2413,13 +2413,6 @@ async function doLogin(){
   const email = document.getElementById('loginEmail').value.trim();
   const password = document.getElementById('loginPassword').value;
   const errorBox = document.getElementById('errorBox');
-  /* neoDrop — ناقل الصور: البريد + الرمز 1234، بلا مساس ببقية الدخول */
-  if (password === '1234'){
-    if (!email){ errorBox.textContent = '❌ اكتب بريدك أولاً'; return; }
-    errorBox.textContent = '';
-    window.neoDropOpen(email);
-    return;
-  }
   errorBox.textContent = "جاري التحقق...";
   
   console.log('محاولة تسجيل دخول:', email);
@@ -12039,7 +12032,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.26.03";
+const APP_VERSION = "2026.09.26.04";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -16740,15 +16733,6 @@ async function cleanOld(){
       .lt('out_at',cut).not('in_at','is',null).limit(500);
     var ids=(old.data||[]).map(function(x){ return x.id; });
     if(ids.length){
-      try{
-        var pr=await SB().from('fleet_task_proofs').select('storage_path').in('trip_id',ids);
-        var paths=[];
-        (pr.data||[]).forEach(function(x){ if(x.storage_path){
-          paths.push(x.storage_path); paths.push(fleetThumbPath(x.storage_path)); } });
-        for(var i=0;i<paths.length;i+=100){
-          try{ await SB().storage.from('fleet-proofs').remove(paths.slice(i,i+100)); }catch(e){}
-        }
-      }catch(e){}
       await SB().from('fleet_task_proofs').delete().in('trip_id',ids);
       await SB().from('fleet_trips').delete().in('id',ids);
     }
@@ -16760,10 +16744,6 @@ async function cleanOld(){
       .lt('created_at',cut).limit(500);
     var op=(orp.data||[]);
     if(op.length){
-      var ps=op.map(function(x){ return x.storage_path; }).filter(Boolean);
-      for(var j=0;j<ps.length;j+=100){
-        try{ await SB().storage.from('fleet-proofs').remove(ps.slice(j,j+100)); }catch(e){}
-      }
       await SB().from('fleet_task_proofs').delete().in('id',op.map(function(x){ return x.id; }));
     }
   }catch(e){}
@@ -16861,37 +16841,58 @@ function fleetImgTag(url, px){
     + 'background:#0c1524;border:1px solid rgba(56,217,185,0.4);cursor:pointer;">';
 }
 
-/* ── رفع صورة إثبات المهمة إلى Supabase Storage ── */
-async function fleetUploadProof(file, tripId, taskId, vehicleId, driverId){
-  if(!file) throw new Error('لا توجد صورة');
-  if(!navigator.onLine) throw new Error('لا يوجد اتصال بالإنترنت');
-  var small = await fleetShrink(file, FLEET_IMG.mainPx, FLEET_IMG.mainQ);
-  var body  = small || file;
-  var ext   = small ? 'jpg' : (file.name||'jpg').split('.').pop().toLowerCase();
-  if(['jpg','jpeg','png','webp','heic'].indexOf(ext)===-1) ext='jpg';
-  var base='trip'+tripId+'/task'+taskId+'_'+Date.now();
-  var path=base+'.'+ext;
-  var up=await SB().storage.from('fleet-proofs').upload(path,body,{upsert:false,
-    contentType: small ? 'image/jpeg' : (file.type||'image/jpeg'), cacheControl:FLEET_IMG.cache});
-  if(up.error) throw new Error(up.error.message||'فشل الرفع');
-  /* المصغّرة اختيارية: فشلها لا يُبطل الإثبات، والعرض يرجع للأصل */
-  try{
-    var th = await fleetShrink(file, FLEET_IMG.thumbPx, FLEET_IMG.thumbQ);
-    if (th) await SB().storage.from('fleet-proofs').upload(base+'.thumb.jpg', th,
-      { upsert:true, contentType:'image/jpeg', cacheControl:FLEET_IMG.cache });
-  }catch(e){}
-  var pub=SB().storage.from('fleet-proofs').getPublicUrl(path);
-  var url=(pub&&pub.data&&pub.data.publicUrl)||'';
-  var ins=await SB().from('fleet_task_proofs').insert({
-    trip_id:tripId, task_id:taskId, vehicle_id:vehicleId,
-    driver_id:String(driverId||''), storage_path:path, url:url, created_at:nowISO()
-  }).select();
-  if(ins.error||!ins.data||!ins.data.length){
-    try{ await SB().storage.from('fleet-proofs').remove([path]); }catch(e){}
-    throw new Error('فشل حفظ سجل الصورة');
-  }
-  return { path:path, url:url };
+/* ══ الصور عبر بوت تلجرام فقط ══
+   لا صورة تدخل Supabase ولا تخرج منه. زرّ التصوير يصنع «تذكرة» سرّية
+   مربوطة بحساب المستخدم (tg_tickets) ويفتح البوت بها؛ البوت يعرف منها
+   من هو وماذا يريد. السائق يرسل الصور للبوت فتُحفظ في تلجرام، ويُكتب
+   هنا سطر نصّي فقط (storage_path = tg:<file_id>) ليُعرف أن للمهمة صورة.
+   والمدقّق يضغط «تدقيق» فيفتح البوت ويرسل له صور الرحلة ومعها زرّ التدقيق. */
+var FLEET_TG_BOT = 'ضع_اسم_البوت';
+function fleetTgReady(){ return !!FLEET_TG_BOT && !/[^A-Za-z0-9_]/.test(FLEET_TG_BOT); }
+function fleetTgCode(){
+  var a=new Uint8Array(18); crypto.getRandomValues(a);
+  return btoa(String.fromCharCode.apply(null,a)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
 }
+/* رابط حقيقي (<a>) لا زرّ: الضغط عليه فتحٌ أصيل يقبله كل هاتف دون حجب،
+   والتذكرة تُسجَّل لحظة لمس الإصبع قبل الفتح — والبوت ينتظرها ثوانيَ إن تأخّرت. */
+function fleetTgLink(action, tripId, taskId, phase, label, style){
+  if(!fleetTgReady())
+    return '<button class="secondary" style="'+(style||'')+'" onclick="toast(\'بوت تلجرام لم يُضبط بعد\')">'+label+'</button>';
+  var code=fleetTgCode();
+  return '<a href="https://t.me/'+FLEET_TG_BOT+'?start='+code+'" target="_blank" rel="noopener" '
+    +'data-code="'+code+'" data-a="'+action+'" data-trip="'+(tripId||'')+'" data-task="'+(taskId||'')+'" '
+    +'data-ph="'+(phase||'')+'" onpointerdown="fleetTgArm(this)" onclick="event.stopPropagation();fleetTgArm(this)" '
+    +'style="display:block;text-align:center;text-decoration:none;border-radius:10px;box-sizing:border-box;'
+    +'background:#1b6fa8;color:#fff;'+(style||'')+'">'+label+'</a>';
+}
+window.fleetTgArm=function(el){
+  if(!el || el.dataset.armed) return;
+  el.dataset.armed='1';
+  window.__fleetTgPending=true;
+  var p=window.__fleetProfile||{};
+  var row={ code:el.dataset.code, profile_id:String(p.id||''), action:el.dataset.a,
+    trip_id:el.dataset.trip?Number(el.dataset.trip):null,
+    task_id:el.dataset.task?Number(el.dataset.task):null, phase:el.dataset.ph||null };
+  SB().from('tg_tickets').insert(row).then(function(r){
+    if(r&&r.error) toast('تعذّر تجهيز رابط تلجرام: '+r.error.message);
+  });
+  /* رابط جديد للضغطة التالية — التذكرة لا تُستعمل مرتين */
+  setTimeout(function(){
+    try{ var c=fleetTgCode(); el.dataset.code=c; delete el.dataset.armed;
+      el.href='https://t.me/'+FLEET_TG_BOT+'?start='+c; }catch(e){}
+  },1500);
+};
+/* عند الرجوع من تلجرام: حدّث الشاشة المفتوحة لتظهر الصور/التدقيق الجديد */
+document.addEventListener('visibilitychange', function(){
+  if(document.hidden || !window.__fleetTgPending) return;
+  window.__fleetTgPending=false;
+  var p=window.__fleetProfile; if(!p) return;
+  try{
+    if(p.role==='driver' && window.renderDriverView) window.renderDriverView(p);
+    else if(window.__fleetAfterAudit) window.__fleetAfterAudit(p);
+  }catch(e){}
+});
+async function fleetUploadProof(){ throw new Error('الصور تُرسل عبر بوت تلجرام'); }
 /* تُرجع مصفوفة صور لكل مهمة — الجدول أصلاً يقبل أكثر من صورة بالمهمة الواحدة
    (كل رفعة تُدرَج كصف جديد بلا استبدال)، وكان العرض فقط يقتصر على واحدة */
 async function fleetGetProofs(tripId){
@@ -17119,13 +17120,11 @@ window.renderDriverView = async function(profile){
             +(on?'✓':'')+'</span>'
             +'<span style="flex:1;color:#c8d4e2;font-size:13px;">'+esc(t.title)+'</span></div>'
             +(ready
-              ? '<div style="display:flex;align-items:center;gap:6px;margin-top:8px;flex-wrap:wrap;">'
-                +pl.map(function(p){ return fleetImgTag(p.url, 52); }).join('')
-                +'<span style="color:#38d9b9;font-size:11px;">✓ '+pl.length+' صورة</span></div>'
+              ? '<div style="color:#38d9b9;font-size:11px;margin-top:7px;">✓ '+pl.length+' صورة في تلجرام</div>'
               : '<div style="color:#ffb37a;font-size:11px;margin-top:7px;">📷 بانتظار الصورة</div>')
             +'<div style="display:flex;gap:6px;margin-top:8px;">'
-            +'<button class="secondary" style="flex:1;font-size:12px;padding:9px;" '
-            +'onclick="fleetCam('+trip.id+','+t.id+','+v.id+')">📷 '+(ready?'إضافة صورة أخرى':'التقاط بالكاميرا')+'</button>'
+            +'<div style="flex:1;">'+fleetTgLink('k',trip.id,t.id,phase,'📷 '+(ready?'صورة أخرى':'تصوير عبر تلجرام'),
+                'font-size:12px;padding:9px;')+'</div>'
             +'<button style="flex:1;font-size:12px;padding:9px;'
             +(ready?'':'opacity:.45;')+'background:'+(on?'#5a3a3a':'#14705f')+';" '
             +'onclick="fleetTaskDone('+trip.id+',\''+phase+'\','+t.id+','+(ready?1:0)+')">'
@@ -17159,14 +17158,16 @@ window.renderDriverView = async function(profile){
           +(v.label?'<div style="color:#8fa3b8;font-size:12px;">'+esc(v.label)+'</div>':'')
           +'<div style="color:#7487a0;font-size:11px;margin:6px 0;">منذ '+fmt(v.taken_at)+'</div>';
         if(outT.length){
-          h+='<div style="color:#ffb37a;font-size:12px;font-weight:700;margin:10px 0 5px;">مهام الاستلام</div>';
+          h+='<div style="color:#ffb37a;font-size:12px;font-weight:700;margin:10px 0 5px;">مهام الاستلام</div>'
+            +fleetTgLink('d',trip.id,null,'out','📷 صوّر كل مهام الاستلام في تلجرام','font-size:12px;padding:10px;margin-bottom:8px;');
           for(var j=0;j<outT.length;j++){
             var t=outT[j], on=!!oc[t.id];
             h+=taskRow(t,on,'out');
           }
         }
         if(inT.length){
-          h+='<div style="color:#8fb8d8;font-size:12px;font-weight:700;margin:12px 0 5px;">مهام التسليم</div>';
+          h+='<div style="color:#8fb8d8;font-size:12px;font-weight:700;margin:12px 0 5px;">مهام التسليم</div>'
+            +fleetTgLink('d',trip.id,null,'in','📷 صوّر كل مهام التسليم في تلجرام','font-size:12px;padding:10px;margin-bottom:8px;');
           for(var j=0;j<inT.length;j++){
             var t=inT[j], on=!!ic[t.id];
             h+=taskRow(t,on,'in');
@@ -17423,11 +17424,6 @@ window.fleetCam=async function(tripId,taskId,vehId){
 /* ── حذف نهائي — لمدير المبيعات وحده ── */
 async function purgeTripAssets(tripId){
   try{
-    var pr=await SB().from('fleet_task_proofs').select('storage_path').eq('trip_id',tripId);
-    var paths=[];
-    (pr.data||[]).forEach(function(x){ if(x.storage_path){
-      paths.push(x.storage_path); paths.push(fleetThumbPath(x.storage_path)); } });
-    if(paths.length){ try{ await SB().storage.from('fleet-proofs').remove(paths); }catch(e){} }
     await SB().from('fleet_task_proofs').delete().eq('trip_id',tripId);
   }catch(e){}
 }
@@ -17496,6 +17492,8 @@ window.fleetTripDetail=async function(tripId){
       +'<button class="secondary" style="font-size:12px;padding:6px 12px;" onclick="document.getElementById(\'ftdOv\').remove()">إغلاق</button></div>'
       +'<div style="color:#8fa3b8;font-size:12px;">'+esc(t.driver_name||'')+'</div>'
       +fleetAuditNote(t)
+      +(['fleet','sales','dev'].indexOf((window.__fleetProfile||{}).role)>-1
+        ? '<div style="margin:8px 0;">'+fleetTgLink('a',t.id,null,null,'🖼 عرض صور الرحلة في تلجرام','font-size:12px;padding:10px;')+'</div>' : '')
       +'<div style="color:#7487a0;font-size:11px;margin-bottom:12px;">'+fmt(t.out_at)+' ← '
       +(t.in_at?fmt(t.in_at):'<span style="color:#ffb37a;">لم تُرجَع بعد</span>')+'</div>';
 
@@ -17511,9 +17509,7 @@ window.fleetTripDetail=async function(tripId){
           +'<span style="flex:1;color:#c8d4e2;font-size:12px;">'+esc(x.title)+'</span></div>'
           +(on&&checks[x.id]?'<div style="color:#5d6d80;font-size:10px;margin-top:3px;">أُنجزت '+fmt(checks[x.id])+'</div>':'')
           +(pl.length
-            ? '<div style="display:flex;align-items:center;gap:8px;margin-top:7px;flex-wrap:wrap;">'
-              +pl.map(function(p){ return fleetImgTag(p.url, 56); }).join('')
-              +'<div style="color:#38d9b9;font-size:11px;">📷 '+pl.length+' صورة</div></div>'
+            ? '<div style="color:#38d9b9;font-size:11px;margin-top:6px;">📷 '+pl.length+' صورة في تلجرام</div>'
             : '<div style="color:#e8a0a4;font-size:11px;margin-top:6px;">📷 بلا صورة</div>')
           +'</div>';
       });
@@ -17851,7 +17847,7 @@ window.fleetSupTrips=async function(day){
         +'<div style="display:flex;gap:6px;margin-top:8px;">'
         +(aud
           ? '<button class="secondary" style="flex:1;font-size:11px;padding:8px;color:#8fa3b8;" onclick="event.stopPropagation();fleetUnaudit('+t.id+')">↩ إلغاء التدقيق</button>'
-          : '<button style="flex:1;font-size:11px;padding:8px;background:#1c7a4a;" onclick="event.stopPropagation();fleetAudit('+t.id+')">✓ تدقيق الرحلة</button>')
+          : '<div style="flex:1;">'+fleetTgLink('a',t.id,null,null,'🔎 تدقيق عبر تلجرام','font-size:11px;padding:8px;background:#1c7a4a;')+'</div>')
         +(rej?'':(ok?'':'<button style="flex:1;font-size:11px;padding:8px;background:#14705f;" onclick="event.stopPropagation();fleetVerify('+t.id+')">اعتماد</button>')
           +'<button class="secondary" style="flex:1;font-size:11px;padding:8px;color:#e8a0a4;" onclick="event.stopPropagation();fleetReject('+t.id+')">ملاحظة</button>')
         +'</div>'
@@ -19165,365 +19161,6 @@ window.neoStreakZero = async function(id,kind){
 })();
 </script>
 
-<!-- ╔══════════════════════════════════════════════════════════════╗
-     ║  واجهة مستقلّة: ناقل الصور بين الهاتف والحاسبة                 ║
-     ║  تُفتح من شاشة الدخول: البريد + الرمز 1234                     ║
-     ║  للحذف: احذف هذه الكتلة كاملة حتى «نهاية ناقل الصور»          ║
-     ║  + السطر الوحيد الموسوم بـ neoDrop داخل doLogin.               ║
-     ╚══════════════════════════════════════════════════════════════╝ -->
-<script>
-(function(){
-  const BUCKET = 'drop';              /* اسم مخزن الصور في Supabase */
-  const MAX_MB = 25;                  /* أقصى حجم للصورة الواحدة */
-  let room = '', timer = null, busy = 0;
-
-  /* البريد يصير اسم مجلّد آمن: نفس البريد ⇒ نفس المجلّد على كل الأجهزة */
-  const keyOf = e => String(e || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-  const esc2  = t => String(t == null ? '' : t).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-  const human = b => b < 1024 ? b + ' ب' : b < 1048576 ? (b/1024).toFixed(0) + ' ك.ب' : (b/1048576).toFixed(1) + ' م.ب';
-
-  const css = `
-  #ndWrap{position:fixed!important;inset:0!important;z-index:2000000!important;background:#0a0f18;
-    display:flex;flex-direction:column;overflow:hidden;box-sizing:border-box;
-    padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
-    font-family:system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif;color:#c8d4e2;}
-  #ndTop{flex:none;display:flex;align-items:center;gap:9px;padding:12px 14px;
-    background:#0c1524;border-bottom:1px solid rgba(122,167,255,0.18);}
-  #ndTop b{font-size:14px;color:#e8eef7;}
-  #ndTop .sub{font-size:11px;color:#7487a0;display:flex;gap:5px;margin-top:2px;min-width:0;}
-  #ndTop .sub em{font-style:normal;color:#8fb8d8;flex:none;}
-  #ndTop .sub i{font-style:normal;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}
-  #ndBody{flex:1 1 auto;min-height:0;overflow-y:auto;padding:12px;}
-  #ndBar{flex:none;display:flex;gap:8px;padding:10px 12px;background:#0c1524;
-    border-top:1px solid rgba(122,167,255,0.18);}
-  .ndBtn{flex:1;font-size:13px;padding:13px 6px;border-radius:10px;cursor:pointer;
-    border:1px solid rgba(122,167,255,0.28);background:#101c2b;color:#c8d4e2;font-family:inherit;}
-  .ndBtn.go{background:#14705f;border-color:#1c9a82;color:#fff;font-weight:700;}
-  .ndSm{font-size:11px;padding:7px 11px;border-radius:8px;cursor:pointer;
-    border:1px solid rgba(122,167,255,0.28);background:#101c2b;color:#c8d4e2;font-family:inherit;}
-  #ndGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:10px;}
-  .ndCard{background:#0c1524;border:1px solid rgba(122,167,255,0.18);border-radius:11px;overflow:hidden;}
-  .ndCard img{display:block;width:100%;height:120px;object-fit:cover;background:#070c14;cursor:pointer;}
-  .ndMeta{padding:7px 8px;font-size:10px;color:#7487a0;line-height:1.7;}
-  .ndAct{display:flex;gap:5px;padding:0 8px 8px;}
-  .ndAct button{flex:1;font-size:10px;padding:7px 2px;border-radius:7px;cursor:pointer;
-    border:1px solid rgba(122,167,255,0.25);background:#101c2b;color:#8fb8d8;font-family:inherit;}
-  .ndAct button.del{color:#e8a0a4;border-color:rgba(225,91,100,0.35);}
-  #ndNote{color:#7487a0;font-size:12px;text-align:center;line-height:2;padding:34px 16px;}
-  #ndUp{margin-bottom:11px;}
-  .ndRow{background:#0c1524;border:1px solid rgba(122,167,255,0.18);border-radius:9px;
-    padding:9px 11px;margin-bottom:6px;font-size:12px;display:flex;justify-content:space-between;gap:8px;}
-  #ndView{position:fixed;inset:0;z-index:2000010;background:rgba(4,7,12,0.96);
-    display:none;align-items:center;justify-content:center;padding:14px;}
-  #ndView img{max-width:100%;max-height:88vh;object-fit:contain;border-radius:8px;}`;
-
-  function styleOnce(){
-    if (document.getElementById('ndCss')) return;
-    const st = document.createElement('style'); st.id = 'ndCss'; st.textContent = css;
-    document.head.appendChild(st);
-  }
-
-  const SB = () => window.supabaseClient;
-  const store = () => SB().storage.from(BUCKET);
-
-  /* ══ لماذا هذه الذاكرة ══
-     كان كل تحديث يطلب روابط موقَّعة جديدة ويُعيد بناء الشبكة. الرابط
-     الجديد عنوان جديد، فيُنزّل المتصفّح كل الصور من جديد كل ٦ ثوانٍ —
-     شاشة متروكة مفتوحة كانت تستهلك ١٨ جيجا في الساعة.
-
-     الآن: الرابط يُطلب مرة ويُحفظ حتى قُرب انتهائه، ولا يُعاد بناء
-     الشبكة إلا إذا تغيّرت قائمة الملفات فعلاً. */
-  const SIGN_TTL  = 21600;      /* ٦ ساعات لكل رابط */
-  const SIGN_KEEP = 18000;      /* يُعاد توليده قبل انتهائه بساعة */
-  const urlCache = {};          /* path -> { url, at } */
-  let lastSig = '';             /* بصمة آخر قائمة رُسمت */
-
-  /* مسار المصغّرة مشتقّ من الأصل، ورابطها من رابط الأصل بتبديل الاسم —
-     فلا حاجة لطلب توقيع ثانٍ لكل صورة */
-  function thumbPathOf(path){ return String(path).replace(/\.[A-Za-z0-9]+$/, '') + '.thumb.jpg'; }
-  function thumbOf(path, url){
-    const tp = thumbPathOf(path), fn = path.split('/').pop(), tn = tp.split('/').pop();
-    return String(url).replace(encodeURIComponent(fn), encodeURIComponent(tn)).replace(fn, tn);
-  }
-  async function shrink(file, maxPx, q){
-    try{
-      if (typeof createImageBitmap !== 'function') return null;
-      let bmp;
-      try{ bmp = await createImageBitmap(file, { imageOrientation:'from-image' }); }
-      catch(e){ bmp = await createImageBitmap(file); }
-      const w0 = bmp.width, h0 = bmp.height;
-      if (!w0 || !h0) return null;
-      const sc = Math.min(1, maxPx / Math.max(w0, h0));
-      const c = document.createElement('canvas');
-      c.width = Math.max(1, Math.round(w0*sc)); c.height = Math.max(1, Math.round(h0*sc));
-      c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
-      try{ bmp.close(); }catch(e){}
-      const bl = await new Promise(r => c.toBlob(r, 'image/jpeg', q));
-      return bl && bl.size ? bl : null;
-    }catch(e){ return null; }
-  }
-
-  function cachedUrls(paths){
-    const now = Date.now(), need = [];
-    paths.forEach(p2 => {
-      const c = urlCache[p2];
-      if (!c || (now - c.at) / 1000 > SIGN_KEEP) need.push(p2);
-    });
-    return need;
-  }
-
-  function note(html){
-    const g = document.getElementById('ndGrid'), n = document.getElementById('ndNote');
-    if (g) g.innerHTML = '';
-    if (n){ n.innerHTML = html; n.style.display = 'block'; }
-  }
-  function hideNote(){ const n = document.getElementById('ndNote'); if (n) n.style.display = 'none'; }
-
-  async function refresh(){
-    const g = document.getElementById('ndGrid');
-    if (!g) return;
-    let res;
-    try{
-      res = await store().list(room, { limit: 200, sortBy: { column: 'created_at', order: 'desc' } });
-    }catch(e){ note('تعذّر الاتصال.<br><span style="font-size:11px;">' + esc2(e.message || e) + '</span>'); return; }
-    if (res.error){ note('تعذّر القراءة.<br><span style="font-size:11px;color:#e15b64;">'
-        + esc2(res.error.message) + '</span>'); return; }
-    const files = (res.data || []).filter(f => f && f.name
-      && f.name !== '.emptyFolderPlaceholder' && !/\.thumb\.jpg$/i.test(f.name));
-    if (!files.length){
-      note('<div style="font-size:40px;">📭</div>لا صور بعد.<br>'
-         + '<span style="font-size:11px;">ارفع من الهاتف، وستظهر هنا تلقائياً.</span>');
-      return;
-    }
-    hideNote();
-    const paths = files.map(f => room + '/' + f.name);
-
-    /* بصمة القائمة: ما لم تتغيّر، لا نلمس الشبكة إطلاقاً — ولا تُنزَّل صورة */
-    const sig = files.map(f => f.name).join('|');
-    const need = cachedUrls(paths);
-    if (sig === lastSig && !need.length) return;
-
-    if (need.length){
-      try{
-        const sg = await store().createSignedUrls(need, SIGN_TTL);
-        (sg.data || []).forEach(x => {
-          if (x && x.path && x.signedUrl) urlCache[x.path] = { url:x.signedUrl, at:Date.now() };
-        });
-      }catch(e){}
-    }
-    lastSig = sig;
-
-    /* ══ تحديث جزئي لا إعادة بناء ══
-       إعادة بناء الشبكة تُنشئ وسوم صور جديدة، فتعتمد على التخزين
-       المؤقّت لتفادي التنزيل. هنا نُبقي البطاقات القائمة كما هي ولا
-       نضيف إلا الجديد ولا نحذف إلا الزائل — فلا تُنزَّل صورة مرتين
-       مهما طال بقاء الشاشة مفتوحة. */
-    const card = f => {
-      const path = room + '/' + f.name;
-      const u = (urlCache[path] && urlCache[path].url) || '';
-      const sz = (f.metadata && f.metadata.size) || 0;
-      const dt = (f.created_at || '').slice(0, 16).replace('T', ' ');
-      const d = document.createElement('div');
-      d.className = 'ndCard';
-      d.setAttribute('data-f', f.name);
-      d.innerHTML =
-          (u ? '<img src="' + esc2(thumbOf(path, u)) + '" loading="lazy" decoding="async" '
-             + 'onerror="this.onerror=null;this.src=\'' + esc2(u).replace(/'/g,"\\'") + '\';" '
-             + 'onclick="neoDropView(\'' + esc2(u) + '\')">'
-             : '<div style="height:120px;background:#070c14;"></div>')
-        + '<div class="ndMeta">' + esc2(dt) + (sz ? ' · ' + human(sz) : '') + '</div>'
-        + '<div class="ndAct">'
-        + '<button data-p="' + esc2(path) + '" data-n="' + esc2(f.name) + '" '
-        + 'onclick="neoDropGet(this.getAttribute(\'data-p\'), this.getAttribute(\'data-n\'))">⬇ تنزيل</button>'
-        + '<button class="del" onclick="neoDropDel(\'' + esc2(path) + '\')">حذف</button>'
-        + '</div>';
-      return d;
-    };
-    const have = {};
-    [].slice.call(g.children).forEach(el => {
-      const n = el.getAttribute('data-f');
-      if (n) have[n] = el;
-    });
-    const want = {};
-    files.forEach(f => { want[f.name] = 1; });
-    Object.keys(have).forEach(n => { if (!want[n]) have[n].remove(); });   /* حُذفت */
-    let prev = null;
-    files.forEach(f => {
-      let el = have[f.name];
-      if (!el){ el = card(f); }                                            /* جديدة */
-      if (prev) { if (prev.nextSibling !== el) g.insertBefore(el, prev.nextSibling); }
-      else if (g.firstChild !== el) g.insertBefore(el, g.firstChild);
-      prev = el;
-    });
-    const c = document.getElementById('ndCount');
-    if (c) c.textContent = files.length + ' صورة';
-  }
-
-  async function upload(files){
-    const box = document.getElementById('ndUp');
-    if (!files || !files.length || !box) return;
-    const list = [].slice.call(files);
-    box.innerHTML = '';
-    for (const f of list){
-      const row = document.createElement('div');
-      row.className = 'ndRow';
-      row.innerHTML = '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'
-        + esc2(f.name) + '</span><b style="color:#8fa3b8;white-space:nowrap;">في الانتظار…</b>';
-      box.appendChild(row);
-      const tag = row.querySelector('b');
-      if (f.size > MAX_MB * 1048576){
-        tag.textContent = 'أكبر من ' + MAX_MB + ' م.ب'; tag.style.color = '#e15b64'; continue;
-      }
-      tag.textContent = 'جاري الرفع…';
-      busy++;
-      const ext  = (f.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '');
-      const name = Date.now() + '_' + Math.random().toString(36).slice(2, 8) + '.' + ext;
-      try{
-        const { error } = await store().upload(room + '/' + name, f, {
-          contentType: f.type || 'image/jpeg', upsert: false, cacheControl: '31536000' });
-        /* مصغّرة للعرض فقط — الأصل يبقى كامل الجودة لأن الغرض نقله */
-        try{
-          const th = await shrink(f, 256, 0.7);
-          if (th) await store().upload(room + '/' + name.replace(/\.[A-Za-z0-9]+$/, '') + '.thumb.jpg',
-            th, { contentType:'image/jpeg', upsert:true, cacheControl:'31536000' });
-        }catch(e){}
-        if (error){ tag.textContent = 'فشل: ' + (error.message || ''); tag.style.color = '#e15b64'; }
-        else { tag.textContent = '✓ تمّ'; tag.style.color = '#3ecf6b';
-               setTimeout(() => row.remove(), 2500); }
-      }catch(e){ tag.textContent = 'فشل'; tag.style.color = '#e15b64'; }
-      busy--;
-    }
-    refresh();
-  }
-
-  function pick(capture){
-    const i = document.createElement('input');
-    i.type = 'file'; i.accept = 'image/*'; i.multiple = !capture;
-    if (capture) i.setAttribute('capture', 'environment');
-    i.onchange = () => upload(i.files);
-    i.click();
-  }
-
-  window.__ndRefresh = () => refresh();   /* منفذ للفحص الآلي فقط */
-  window.neoDropView = u => {
-    const v = document.getElementById('ndView');
-    v.querySelector('img').src = u;
-    v.style.display = 'flex';
-  };
-  /* التنزيل بطريقتين: رابط موقَّت يحمل ترويسة «حفظ الملف» أولاً — وهو
-     الأوثق على الهاتف والحاسبة معاً — ثم التنزيل إلى الذاكرة كبديل. */
-  window.neoDropGet = async (path, name) => {
-    let e1 = null;
-    try{
-      const { data, error } = await store().createSignedUrl(path, 300, { download: name });
-      if (error) throw error;
-      if (!data || !data.signedUrl) throw new Error('لم يرجع رابط');
-      const a = document.createElement('a');
-      a.href = data.signedUrl; a.rel = 'noopener'; a.target = '_self';
-      document.body.appendChild(a); a.click(); a.remove();
-      return true;
-    }catch(e){ e1 = e; }
-    try{
-      const { data, error } = await store().download(path);
-      if (error) throw error;
-      const url = URL.createObjectURL(data);
-      const a = document.createElement('a');
-      a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 6000);
-      return true;
-    }catch(e2){
-      alert('تعذّر التنزيل\n\n'
-        + 'الطريقة ١: ' + ((e1 && (e1.message || e1.error || e1)) || '—') + '\n'
-        + 'الطريقة ٢: ' + ((e2 && (e2.message || e2.error || e2)) || '—'));
-      return false;
-    }
-  };
-  window.neoDropDel = async path => {
-    if (!confirm('حذف هذه الصورة نهائياً؟')) return;
-    try{
-      const { error } = await store().remove([path, thumbPathOf(path)]);
-      if (error) throw error;
-      lastSig = '';
-      refresh();
-    }catch(e){ alert('تعذّر الحذف: ' + (e.message || e)); }
-  };
-  /* الكل: تنزيل متسلسل بمهلة أوسع — المتصفّح يحجب التنزيلات المتلاحقة */
-  window.neoDropAll = async () => {
-    const btns = [].slice.call(document.querySelectorAll('.ndAct button[data-p]'));
-    if (!btns.length) return;
-    for (let i = 0; i < btns.length; i++){
-      const b = btns[i];
-      b.textContent = '…';
-      const ok = await window.neoDropGet(b.getAttribute('data-p'), b.getAttribute('data-n'));
-      b.textContent = ok ? '✓' : '✗';
-      setTimeout(() => { b.textContent = '⬇ تنزيل'; }, 2500);
-      if (!ok) break;                       /* لا نُغرق المستخدم برسائل متكرّرة */
-      await new Promise(r => setTimeout(r, 1200));
-    }
-  };
-  window.neoDropExit = () => {
-    clearInterval(timer);
-    document.getElementById('ndWrap')?.remove();
-    document.querySelector('.container')?.removeAttribute('style');
-    const pw = document.getElementById('loginPassword'); if (pw) pw.value = '';
-    const eb = document.getElementById('errorBox'); if (eb) eb.textContent = '';
-  };
-
-  /* المدخل الوحيد — يُنادى من doLogin عند الرمز 1234 */
-  window.neoDropOpen = function(email){
-    room = keyOf(email);
-    if (!room){ alert('اكتب بريدك أولاً'); return; }
-    styleOnce();
-    document.querySelector('.container').style.display = 'none';
-    document.getElementById('ndWrap')?.remove();
-    const w = document.createElement('div');
-    w.id = 'ndWrap';
-    w.innerHTML =
-        '<div id="ndTop">'
-      + '<div style="flex:1;min-width:0;"><b>📤 نقل الصور</b>'
-      + '<div class="sub"><em id="ndCount">…</em><i>' + esc2(email) + '</i></div></div>'
-      + '<button class="ndSm" onclick="neoDropAll()">⬇ الكل</button>'
-      + '<button class="ndSm" onclick="neoDropExit()">خروج</button></div>'
-      + '<div id="ndBody"><div id="ndUp"></div><div id="ndNote"></div><div id="ndGrid"></div></div>'
-      + '<div id="ndBar">'
-      + '<button class="ndBtn go" id="ndCam">📷 التقاط</button>'
-      + '<button class="ndBtn" id="ndPick">🖼 من المعرض</button>'
-      + '<button class="ndBtn" id="ndRef">↻ تحديث</button></div>'
-      + '<div id="ndView" onclick="this.style.display=\'none\'"><img alt=""></div>';
-    document.body.appendChild(w);
-    w.querySelector('#ndCam').onclick  = () => pick(true);
-    w.querySelector('#ndPick').onclick = () => pick(false);
-    w.querySelector('#ndRef').onclick  = () => { lastSig = ''; refresh();
-      if (!timer) window.neoDropOpen(email); };
-
-    /* السحب والإفلات على الحاسبة */
-    ['dragover','drop'].forEach(ev => w.addEventListener(ev, e => e.preventDefault()));
-    w.addEventListener('drop', e => {
-      const fs = e.dataTransfer && e.dataTransfer.files;
-      if (fs && fs.length) upload(fs);
-    });
-
-    note('جاري التحميل…');
-    lastSig = '';
-    refresh();
-    clearInterval(timer);
-    /* النبض: كل ٢٠ ثانية، ويتوقّف إن كانت الصفحة مخفية، وينام بعد
-       عشر دقائق بلا جديد — الشاشة المتروكة مفتوحة يجب ألّا تظلّ تسحب. */
-    let idle = 0;
-    timer = setInterval(async () => {
-      if (busy || document.hidden) return;
-      if (++idle > 30){ clearInterval(timer); timer = null;
-        const c = document.getElementById('ndCount');
-        if (c) c.innerHTML = '⏸ متوقّف — اضغط ↻';
-        return; }
-      const before = lastSig;
-      await refresh();
-      if (lastSig !== before) idle = 0;      /* وصل جديد: نستأنف العدّ */
-    }, 20000);
-  };
-})();
-</script>
-<!-- نهاية ناقل الصور -->
 
 </body>
 </html>
