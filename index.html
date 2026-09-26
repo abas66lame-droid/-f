@@ -12137,7 +12137,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.25.01";
+const APP_VERSION = "2026.09.26.01";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -19324,6 +19324,52 @@ window.neoStreakZero = async function(id,kind){
   const SB = () => window.supabaseClient;
   const store = () => SB().storage.from(BUCKET);
 
+  /* ══ لماذا هذه الذاكرة ══
+     كان كل تحديث يطلب روابط موقَّعة جديدة ويُعيد بناء الشبكة. الرابط
+     الجديد عنوان جديد، فيُنزّل المتصفّح كل الصور من جديد كل ٦ ثوانٍ —
+     شاشة متروكة مفتوحة كانت تستهلك ١٨ جيجا في الساعة.
+
+     الآن: الرابط يُطلب مرة ويُحفظ حتى قُرب انتهائه، ولا يُعاد بناء
+     الشبكة إلا إذا تغيّرت قائمة الملفات فعلاً. */
+  const SIGN_TTL  = 21600;      /* ٦ ساعات لكل رابط */
+  const SIGN_KEEP = 18000;      /* يُعاد توليده قبل انتهائه بساعة */
+  const urlCache = {};          /* path -> { url, at } */
+  let lastSig = '';             /* بصمة آخر قائمة رُسمت */
+
+  /* مسار المصغّرة مشتقّ من الأصل، ورابطها من رابط الأصل بتبديل الاسم —
+     فلا حاجة لطلب توقيع ثانٍ لكل صورة */
+  function thumbPathOf(path){ return String(path).replace(/\.[A-Za-z0-9]+$/, '') + '.thumb.jpg'; }
+  function thumbOf(path, url){
+    const tp = thumbPathOf(path), fn = path.split('/').pop(), tn = tp.split('/').pop();
+    return String(url).replace(encodeURIComponent(fn), encodeURIComponent(tn)).replace(fn, tn);
+  }
+  async function shrink(file, maxPx, q){
+    try{
+      if (typeof createImageBitmap !== 'function') return null;
+      let bmp;
+      try{ bmp = await createImageBitmap(file, { imageOrientation:'from-image' }); }
+      catch(e){ bmp = await createImageBitmap(file); }
+      const w0 = bmp.width, h0 = bmp.height;
+      if (!w0 || !h0) return null;
+      const sc = Math.min(1, maxPx / Math.max(w0, h0));
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(w0*sc)); c.height = Math.max(1, Math.round(h0*sc));
+      c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+      try{ bmp.close(); }catch(e){}
+      const bl = await new Promise(r => c.toBlob(r, 'image/jpeg', q));
+      return bl && bl.size ? bl : null;
+    }catch(e){ return null; }
+  }
+
+  function cachedUrls(paths){
+    const now = Date.now(), need = [];
+    paths.forEach(p2 => {
+      const c = urlCache[p2];
+      if (!c || (now - c.at) / 1000 > SIGN_KEEP) need.push(p2);
+    });
+    return need;
+  }
+
   function note(html){
     const g = document.getElementById('ndGrid'), n = document.getElementById('ndNote');
     if (g) g.innerHTML = '';
@@ -19340,7 +19386,8 @@ window.neoStreakZero = async function(id,kind){
     }catch(e){ note('تعذّر الاتصال.<br><span style="font-size:11px;">' + esc2(e.message || e) + '</span>'); return; }
     if (res.error){ note('تعذّر القراءة.<br><span style="font-size:11px;color:#e15b64;">'
         + esc2(res.error.message) + '</span>'); return; }
-    const files = (res.data || []).filter(f => f && f.name && f.name !== '.emptyFolderPlaceholder');
+    const files = (res.data || []).filter(f => f && f.name
+      && f.name !== '.emptyFolderPlaceholder' && !/\.thumb\.jpg$/i.test(f.name));
     if (!files.length){
       note('<div style="font-size:40px;">📭</div>لا صور بعد.<br>'
          + '<span style="font-size:11px;">ارفع من الهاتف، وستظهر هنا تلقائياً.</span>');
@@ -19348,26 +19395,64 @@ window.neoStreakZero = async function(id,kind){
     }
     hideNote();
     const paths = files.map(f => room + '/' + f.name);
-    let urls = {};
-    try{
-      const sg = await store().createSignedUrls(paths, 3600);
-      (sg.data || []).forEach(x => { if (x && x.path) urls[x.path] = x.signedUrl; });
-    }catch(e){}
-    g.innerHTML = files.map(f => {
+
+    /* بصمة القائمة: ما لم تتغيّر، لا نلمس الشبكة إطلاقاً — ولا تُنزَّل صورة */
+    const sig = files.map(f => f.name).join('|');
+    const need = cachedUrls(paths);
+    if (sig === lastSig && !need.length) return;
+
+    if (need.length){
+      try{
+        const sg = await store().createSignedUrls(need, SIGN_TTL);
+        (sg.data || []).forEach(x => {
+          if (x && x.path && x.signedUrl) urlCache[x.path] = { url:x.signedUrl, at:Date.now() };
+        });
+      }catch(e){}
+    }
+    lastSig = sig;
+
+    /* ══ تحديث جزئي لا إعادة بناء ══
+       إعادة بناء الشبكة تُنشئ وسوم صور جديدة، فتعتمد على التخزين
+       المؤقّت لتفادي التنزيل. هنا نُبقي البطاقات القائمة كما هي ولا
+       نضيف إلا الجديد ولا نحذف إلا الزائل — فلا تُنزَّل صورة مرتين
+       مهما طال بقاء الشاشة مفتوحة. */
+    const card = f => {
       const path = room + '/' + f.name;
-      const u = urls[path] || '';
+      const u = (urlCache[path] && urlCache[path].url) || '';
       const sz = (f.metadata && f.metadata.size) || 0;
       const dt = (f.created_at || '').slice(0, 16).replace('T', ' ');
-      return '<div class="ndCard">'
-        + (u ? '<img src="' + esc2(u) + '" loading="lazy" onclick="neoDropView(\'' + esc2(u) + '\')">'
+      const d = document.createElement('div');
+      d.className = 'ndCard';
+      d.setAttribute('data-f', f.name);
+      d.innerHTML =
+          (u ? '<img src="' + esc2(thumbOf(path, u)) + '" loading="lazy" decoding="async" '
+             + 'onerror="this.onerror=null;this.src=\'' + esc2(u).replace(/'/g,"\\'") + '\';" '
+             + 'onclick="neoDropView(\'' + esc2(u) + '\')">'
              : '<div style="height:120px;background:#070c14;"></div>')
         + '<div class="ndMeta">' + esc2(dt) + (sz ? ' · ' + human(sz) : '') + '</div>'
         + '<div class="ndAct">'
         + '<button data-p="' + esc2(path) + '" data-n="' + esc2(f.name) + '" '
         + 'onclick="neoDropGet(this.getAttribute(\'data-p\'), this.getAttribute(\'data-n\'))">⬇ تنزيل</button>'
         + '<button class="del" onclick="neoDropDel(\'' + esc2(path) + '\')">حذف</button>'
-        + '</div></div>';
-    }).join('');
+        + '</div>';
+      return d;
+    };
+    const have = {};
+    [].slice.call(g.children).forEach(el => {
+      const n = el.getAttribute('data-f');
+      if (n) have[n] = el;
+    });
+    const want = {};
+    files.forEach(f => { want[f.name] = 1; });
+    Object.keys(have).forEach(n => { if (!want[n]) have[n].remove(); });   /* حُذفت */
+    let prev = null;
+    files.forEach(f => {
+      let el = have[f.name];
+      if (!el){ el = card(f); }                                            /* جديدة */
+      if (prev) { if (prev.nextSibling !== el) g.insertBefore(el, prev.nextSibling); }
+      else if (g.firstChild !== el) g.insertBefore(el, g.firstChild);
+      prev = el;
+    });
     const c = document.getElementById('ndCount');
     if (c) c.textContent = files.length + ' صورة';
   }
@@ -19393,7 +19478,13 @@ window.neoStreakZero = async function(id,kind){
       const name = Date.now() + '_' + Math.random().toString(36).slice(2, 8) + '.' + ext;
       try{
         const { error } = await store().upload(room + '/' + name, f, {
-          contentType: f.type || 'image/jpeg', upsert: false });
+          contentType: f.type || 'image/jpeg', upsert: false, cacheControl: '31536000' });
+        /* مصغّرة للعرض فقط — الأصل يبقى كامل الجودة لأن الغرض نقله */
+        try{
+          const th = await shrink(f, 256, 0.7);
+          if (th) await store().upload(room + '/' + name.replace(/\.[A-Za-z0-9]+$/, '') + '.thumb.jpg',
+            th, { contentType:'image/jpeg', upsert:true, cacheControl:'31536000' });
+        }catch(e){}
         if (error){ tag.textContent = 'فشل: ' + (error.message || ''); tag.style.color = '#e15b64'; }
         else { tag.textContent = '✓ تمّ'; tag.style.color = '#3ecf6b';
                setTimeout(() => row.remove(), 2500); }
@@ -19411,6 +19502,7 @@ window.neoStreakZero = async function(id,kind){
     i.click();
   }
 
+  window.__ndRefresh = () => refresh();   /* منفذ للفحص الآلي فقط */
   window.neoDropView = u => {
     const v = document.getElementById('ndView');
     v.querySelector('img').src = u;
@@ -19447,8 +19539,9 @@ window.neoStreakZero = async function(id,kind){
   window.neoDropDel = async path => {
     if (!confirm('حذف هذه الصورة نهائياً؟')) return;
     try{
-      const { error } = await store().remove([path]);
+      const { error } = await store().remove([path, thumbPathOf(path)]);
       if (error) throw error;
+      lastSig = '';
       refresh();
     }catch(e){ alert('تعذّر الحذف: ' + (e.message || e)); }
   };
@@ -19498,7 +19591,8 @@ window.neoStreakZero = async function(id,kind){
     document.body.appendChild(w);
     w.querySelector('#ndCam').onclick  = () => pick(true);
     w.querySelector('#ndPick').onclick = () => pick(false);
-    w.querySelector('#ndRef').onclick  = () => refresh();
+    w.querySelector('#ndRef').onclick  = () => { lastSig = ''; refresh();
+      if (!timer) window.neoDropOpen(email); };
 
     /* السحب والإفلات على الحاسبة */
     ['dragover','drop'].forEach(ev => w.addEventListener(ev, e => e.preventDefault()));
@@ -19508,10 +19602,22 @@ window.neoStreakZero = async function(id,kind){
     });
 
     note('جاري التحميل…');
+    lastSig = '';
     refresh();
     clearInterval(timer);
-    /* الحاسبة تلتقط ما يرفعه الهاتف بلا ضغط زرّ */
-    timer = setInterval(() => { if (!busy) refresh(); }, 6000);
+    /* النبض: كل ٢٠ ثانية، ويتوقّف إن كانت الصفحة مخفية، وينام بعد
+       عشر دقائق بلا جديد — الشاشة المتروكة مفتوحة يجب ألّا تظلّ تسحب. */
+    let idle = 0;
+    timer = setInterval(async () => {
+      if (busy || document.hidden) return;
+      if (++idle > 30){ clearInterval(timer); timer = null;
+        const c = document.getElementById('ndCount');
+        if (c) c.innerHTML = '⏸ متوقّف — اضغط ↻';
+        return; }
+      const before = lastSig;
+      await refresh();
+      if (lastSig !== before) idle = 0;      /* وصل جديد: نستأنف العدّ */
+    }, 20000);
   };
 })();
 </script>
