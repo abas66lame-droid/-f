@@ -2545,7 +2545,7 @@ async function handleLoggedIn(){
     window.__notifRole = profile.role;
     window.__notifDept = (profile.department_ids && profile.department_ids[0]) || null;
     setTimeout(() => { try{ neoInitNotifs(profile.role, window.__notifDept); }catch(e){} }, 2200);
-    setInterval(() => { try{ if (!document.getElementById('notifPanel')) neoInitNotifs(window.__notifRole, window.__notifDept); }catch(e){} }, 180000);
+    setInterval(() => { try{ if (!document.hidden && !document.getElementById('notifPanel')) neoInitNotifs(window.__notifRole, window.__notifDept); }catch(e){} }, 180000);
     if (profile.role === 'shift'){
       document.getElementById('shiftView').classList.remove('hidden');
       currentShiftChoice = 'morning';
@@ -12032,7 +12032,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.26.04";
+const APP_VERSION = "2026.09.26.05";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -12045,11 +12045,25 @@ const APP_VERSION = "2026.09.26.04";
   });
 
   let notified = false;
+  /* فحص خفيف: نطلب رأس الصفحة فقط (HEAD — بلا محتوى) ونقارن بصمتها.
+     سابقاً كانت الصفحة كاملة (~٤٠٠ ك.ب) تُنزَّل كل ١٠ دقائق ومع كل رجوع
+     للتطبيق لكل جهاز — وهذا وحده يستهلك عشرات الغيغات شهرياً من الاستضافة. */
+  let baseTag = null, lastFull = 0;
   async function checkUpdate(){
     if (notified || document.hidden) return;
     try{
-      const res = await fetch(location.pathname + '?v=' + Date.now(), { cache: 'no-store' });
-      const txt = await res.text();
+      const url = location.pathname + '?v=' + Date.now();
+      const h = await fetch(url, { method: 'HEAD', cache: 'no-store' });
+      const tag = h.headers.get('etag') || h.headers.get('last-modified');
+      if (tag){
+        if (baseTag === null){ baseTag = tag; return; }
+        if (tag !== baseTag){ notified = true; showUpdateBar(); }
+        return;
+      }
+      /* الخادم لا يعطي بصمة — الطريقة القديمة، لكن مرة كل ساعة فقط */
+      if (Date.now() - lastFull < 3600000) return;
+      lastFull = Date.now();
+      const txt = await (await fetch(url, { cache: 'no-store' })).text();
       const m = txt.match(/APP_VERSION\s*=\s*"([^"]+)"/);
       if (m && m[1] !== APP_VERSION){
         notified = true;
@@ -13171,7 +13185,7 @@ const APP_VERSION = "2026.09.26.04";
     await draw();
     clearInterval(liveTimer);
     liveTimer = setInterval(() => {
-      if (document.getElementById('devPanel') && BOX()) draw(); else clearInterval(liveTimer);
+      if (!(document.getElementById('devPanel') && BOX())) clearInterval(liveTimer); else if (!document.hidden) draw();
     }, 10000);
   }
 
