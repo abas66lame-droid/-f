@@ -12032,7 +12032,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.26.05";
+const APP_VERSION = "2026.09.26.06";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -17847,8 +17847,6 @@ window.fleetSupTrips=async function(day){
         +fleetRepeatBadge(g.repeats.length)+'</div>'
         +'<div style="color:#7487a0;font-size:10px;">'+fmt(t.out_at)+' ← '+fmt(t.in_at)+'</div>'
         +'<div style="color:#7487a0;font-size:10px;">علامات: استلام '+oc+' · تسليم '+ic+'</div>'
-        +'<button class="secondary" style="width:100%;font-size:11px;padding:7px;margin-top:7px;" '
-        +'onclick="event.stopPropagation();fleetTripDetail('+t.id+')">📋 تفاصيل المهام والصور</button>'
         +(t.note?'<div style="color:#ffb37a;font-size:11px;margin-top:3px;">📝 '+esc(t.note)+'</div>':'')
         +(t.reject_note?'<div style="color:#e8a0a4;font-size:11px;margin-top:3px;">⚠️ '+esc(t.reject_note)+'</div>':'')
         +(ok?'<div style="color:#38d9b9;font-size:10px;margin-top:3px;">✓ '+esc(t.verified_name||'')+'</div>':'')
@@ -17861,7 +17859,7 @@ window.fleetSupTrips=async function(day){
         +'<div style="display:flex;gap:6px;margin-top:8px;">'
         +(aud
           ? '<button class="secondary" style="flex:1;font-size:11px;padding:8px;color:#8fa3b8;" onclick="event.stopPropagation();fleetUnaudit('+t.id+')">↩ إلغاء التدقيق</button>'
-          : '<div style="flex:1;">'+fleetTgLink('a',t.id,null,null,'🔎 تدقيق عبر تلجرام','font-size:11px;padding:8px;background:#1c7a4a;')+'</div>')
+          : '<div style="flex:1;">'+fleetTgLink('a',t.id,null,null,'🔎 الصور والتدقيق في تلجرام','font-size:11px;padding:8px;background:#1c7a4a;')+'</div>')
         +(rej?'':(ok?'':'<button style="flex:1;font-size:11px;padding:8px;background:#14705f;" onclick="event.stopPropagation();fleetVerify('+t.id+')">اعتماد</button>')
           +'<button class="secondary" style="flex:1;font-size:11px;padding:8px;color:#e8a0a4;" onclick="event.stopPropagation();fleetReject('+t.id+')">ملاحظة</button>')
         +'</div>'
@@ -18131,8 +18129,7 @@ window.renderFleetManagerTab=async function(){
           +'<div style="color:#7487a0;font-size:10px;">'+fmt(t.out_at)+' ← '+(t.in_at?fmt(t.in_at):'<span style="color:#ffb37a;">لم تُرجَع</span>')+'</div>'
           +'<div style="color:#7487a0;font-size:10px;">علامات: استلام '+Object.keys(t.out_checks||{}).length+' · تسليم '+Object.keys(t.in_checks||{}).length+'</div>'
           +'<div style="display:flex;gap:6px;margin-top:6px;">'
-          +'<button class="secondary" style="flex:2;font-size:11px;padding:7px;" '
-          +'onclick="fleetTripDetail('+t.id+')">📋 تفاصيل المهام والصور</button>'
+          +'<div style="flex:2;">'+fleetTgLink('a',t.id,null,null,'🔎 الصور والتدقيق في تلجرام','font-size:11px;padding:7px;background:#1c7a4a;')+'</div>'
           +'<button class="secondary" style="flex:1;font-size:11px;padding:7px;color:#ff6b74;" '
           +'onclick="fleetPurgeTrip('+t.id+')">حذف</button></div>'
           +(t.note?'<div style="color:#ffb37a;font-size:11px;">📝 '+esc(t.note)+'</div>':'')
