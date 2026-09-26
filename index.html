@@ -6854,11 +6854,7 @@ async function renderHallAuditList(){
       + '</div></div>';
     try{
       const _st = await neoGetStreak(uid, 'hall');
-      if (_st) myBox += '<div id="streakBox">'
-        + (window.neoStreakOpen
-            ? neoStreakCard(_st, true) + '<div onclick="neoStreakToggle()" style="text-align:center;color:#5d6d80;font-size:11px;padding:5px;cursor:pointer;">▴ طيّ</div>'
-            : neoStreakStrip(_st))
-        + '</div>';
+      if (_st) myBox += '<div id="streakBox">' + neoStreakStrip(_st) + '</div>';
     }catch(e){}
   }catch(e){}
 
@@ -7146,70 +7142,6 @@ window.neoBackfillStreaks = async function(btn){
   if (btn){ btn.disabled = false; btn.textContent = lbl || '🔥 إعادة حساب السلاسل من السجل'; }
 };
 
-/* شعلة الالتزام — رسم SVG متدرّج حسب المستوى */
-function neoFlameSVG(cur, frozen, size){
-  var T;
-  if (frozen)        T = {a:'#8fd4ff',b:'#1e70c8',c:'#e6f6ff',g:'rgba(110,198,255,.45)',s:1.00};
-  else if (cur>=100) T = {a:'#ffc83d',b:'#ff4400',c:'#ffffff',g:'rgba(255,190,60,.75)',s:1.16};
-  else if (cur>=60)  T = {a:'#ff8a1f',b:'#d92b0e',c:'#fff3b0',g:'rgba(255,120,30,.60)',s:1.10};
-  else if (cur>=30)  T = {a:'#ffa000',b:'#ef3d0e',c:'#fff0a8',g:'rgba(255,160,0,.50)',s:1.04};
-  else if (cur>=14)  T = {a:'#ff8a1f',b:'#f03e18',c:'#ffe89a',g:'rgba(255,140,40,.40)',s:0.97};
-  else if (cur>=7)   T = {a:'#ff7a2f',b:'#ef4423',c:'#ffdd80',g:'rgba(255,140,60,.32)',s:0.90};
-  else if (cur>=3)   T = {a:'#ff8c42',b:'#ff5722',c:'#ffd166',g:'rgba(255,140,60,.25)',s:0.82};
-  else               T = {a:'#5a6b80',b:'#2d3748',c:'#c98a3a',g:'rgba(0,0,0,0)',s:0.62};
-  var id = 'fl' + Math.random().toString(36).slice(2,8);
-  var w  = Math.round((size||56) * T.s);
-  var ember = (!frozen && cur<3);
-  var body = ember
-    ? '<path d="M32 20 C 40 34 46 40 46 50 C 46 62 40 70 32 70 C 24 70 18 62 18 50 C 18 40 24 34 32 20 Z" fill="url(#'+id+'a)"/>'
-      + '<ellipse cx="32" cy="55" rx="6" ry="8" fill="'+T.c+'" opacity=".95"/>'
-    : '<path d="M32 2 C 38 16 52 24 52 42 C 52 60 43 73 32 73 C 21 73 12 60 12 42 C 12 30 20 24 24 13 C 26 22 30 24 32 2 Z" fill="url(#'+id+'a)"/>'
-      + '<path d="M32 29 C 36 39 43 44 43 52 C 43 63 38 69 32 69 C 26 69 21 63 21 52 C 21 44 28 39 32 29 Z" fill="'+T.c+'" opacity=".97"/>';
-  return '<svg width="'+w+'" height="'+Math.round(w*1.16)+'" viewBox="0 0 64 78" '
-    + 'style="filter:drop-shadow(0 0 '+(frozen?10:12)+'px '+T.g+');overflow:visible;">'
-    + '<defs><linearGradient id="'+id+'a" x1="0" y1="0" x2="0" y2="1">'
-    + '<stop offset="0" stop-color="'+T.a+'"/><stop offset="1" stop-color="'+T.b+'"/>'
-    + '</linearGradient></defs>' + body
-    + '<ellipse cx="32" cy="75" rx="14" ry="2.4" fill="'+(frozen?'#2aa9c9':'#2fb9a3')+'" opacity=".5"/>'
-    + '</svg>';
-}
-window.neoFlameSVG = neoFlameSVG;
-
-/* شعلة الستريك — بطاقة العرض */
-function neoStreakCard(s, canRepair){
-  if (!s) return '';
-  const cur = s.current || 0, best = s.best || 0;
-  const frozen = !!s.frozen_date;
-  const flame = neoFlameSVG(cur, frozen, 56);
-  const col = frozen ? '#d3a04f' : cur >= 30 ? '#f0b323' : cur >= 7 ? '#ff8c42' : cur > 0 ? '#38d9b9' : '#7487a0';
-  const next = [3,7,14,30,60,100].find(m => m > cur);
-  return ''
-    + '<div class="card" style="border-color:' + col + '55;text-align:center;">'
-    + '<div style="line-height:0;padding:4px 0 6px;">' + flame + '</div>'
-    + '<div style="font-size:34px;font-weight:800;color:' + col + ';margin-top:4px;">' + cur + '</div>'
-    + '<div style="color:#8fa3b8;font-size:12px;">' + (cur === 1 ? 'يوم متتالٍ' : 'يوم متتالٍ') + '</div>'
-    + (frozen
-        ? '<div style="background:rgba(211,160,79,0.15);border-radius:9px;padding:9px;margin-top:10px;">'
-          + '<div style="color:#d3a04f;font-size:12px;font-weight:700;">⏳ سلسلتك متجمّدة</div>'
-          + '<div style="color:#a9b8c9;font-size:11px;margin-top:3px;line-height:1.7;">'
-          + 'أنجز ٩٥٪ اليوم لتنقذها — وإلا تُصفّر غداً.</div></div>'
-        : cur > 0
-          ? '<div style="color:#7487a0;font-size:11px;margin-top:7px;">'
-            + (next ? 'باقٍ ' + (next - cur) + ' يوم للوسام التالي (' + next + ')' : 'أنت في القمة') + '</div>'
-          : '<div style="color:#7487a0;font-size:11px;margin-top:7px;">أنجز ٩٥٪ اليوم لتبدأ سلسلتك</div>')
-    + '<div style="display:flex;justify-content:space-around;margin-top:12px;padding-top:10px;border-top:1px solid rgba(122,167,255,0.12);">'
-    + '<div><div style="color:#8fa3b8;font-size:11px;">أطول سلسلة</div>'
-    + '<div style="font-size:18px;font-weight:800;color:#f0b323;">' + best + '</div></div>'
-    + '<div><div style="color:#8fa3b8;font-size:11px;">إجمالي الأيام</div>'
-    + '<div style="font-size:18px;font-weight:800;color:#8fb8d8;">' + (s.total_days||0) + '</div></div></div>'
-    + (canRepair && frozen
-        ? '<button onclick="neoRepairStreak(\'' + s.owner_id + '\',\'' + s.owner_kind + '\')" '
-          + 'style="width:100%;margin-top:10px;font-size:13px;padding:11px;background:#8c6f2f;">🔧 استخدم الترميم الشهري</button>'
-        : '')
-    + '</div>';
-}
-window.neoStreakCard = neoStreakCard;
-
 /* احتفال عند بلوغ محطة */
 window.neoStreakCheer = function(res){
   if (!res) return;
@@ -7234,40 +7166,13 @@ window.neoStreakCheer = function(res){
   }catch(e){}
 };
 
-/* شريط مضغوط — سطر واحد فقط، يتوسّع باللمس */
-window.neoStreakOpen = false;
+/* الستريك — رقم برتقالي فقط */
 function neoStreakStrip(s){
   if (!s) return '';
-  window.__lastStreak = s;
-  const cur = s.current || 0, best = s.best || 0;
-  const frozen = !!s.frozen_date;
-  const col = frozen ? '#6ec6ff' : cur >= 30 ? '#f0b323' : cur >= 7 ? '#ff8c42' : cur > 0 ? '#38d9b9' : '#7487a0';
-  const next = [3,7,14,30,60,100].find(m => m > cur);
-  const hint = frozen ? '❄️ متجمّدة — أنجز ٩٥٪ اليوم'
-             : cur > 0 ? (next ? 'باقٍ ' + (next - cur) + ' للوسام ' + next : 'في القمة')
-             : 'أنجز ٩٥٪ لتبدأ';
-  return ''
-    + '<div onclick="neoStreakToggle()" style="display:flex;align-items:center;gap:9px;'
-    + 'background:rgba(122,167,255,0.05);border:1px solid ' + col + '33;border-radius:10px;'
-    + 'padding:7px 11px;margin-bottom:8px;cursor:pointer;">'
-    + '<div style="line-height:0;flex-shrink:0;">' + neoFlameSVG(cur, frozen, 24) + '</div>'
-    + '<div style="font-size:19px;font-weight:800;color:' + col + ';line-height:1;">' + cur + '</div>'
-    + '<div style="color:#8fa3b8;font-size:11px;flex:1;">' + hint + '</div>'
-    + '<div style="color:#5d6d80;font-size:10px;">أطول ' + best + '</div>'
-    + '<div style="color:#5d6d80;font-size:11px;">▾</div></div>';
+  return '<div title="أيام متتالية" style="text-align:center;font-size:22px;font-weight:800;'
+    + 'color:#ff8c42;line-height:1;margin:2px 0 10px;">' + (s.current || 0) + '</div>';
 }
 window.neoStreakStrip = neoStreakStrip;
-
-window.neoStreakToggle = function(){
-  const el = document.getElementById('streakBox');
-  const s = (el && el.__s) || window.__lastStreak;
-  if (!el || !s) return;
-  window.neoStreakOpen = !window.neoStreakOpen;
-  el.__s = s;
-  el.innerHTML = window.neoStreakOpen
-    ? neoStreakCard(s, true) + '<div onclick="neoStreakToggle()" style="text-align:center;color:#5d6d80;font-size:11px;padding:5px;cursor:pointer;">▴ طيّ</div>'
-    : neoStreakStrip(s);
-};
 
 /* يرسم بطاقة الستريك في مكانها */
 window.renderStreakBox = async function(ownerId, kind){
@@ -7275,10 +7180,7 @@ window.renderStreakBox = async function(ownerId, kind){
     const el = document.getElementById('streakBox');
     if (!el) return;
     const s = await neoGetStreak(ownerId, kind);
-    el.__s = s;
-    el.innerHTML = window.neoStreakOpen
-      ? neoStreakCard(s, true) + '<div onclick="neoStreakToggle()" style="text-align:center;color:#5d6d80;font-size:11px;padding:5px;cursor:pointer;">▴ طيّ</div>'
-      : neoStreakStrip(s);
+    el.innerHTML = neoStreakStrip(s);
   }catch(e){}
 };
 
@@ -12137,7 +12039,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.26.01";
+const APP_VERSION = "2026.09.26.02";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
