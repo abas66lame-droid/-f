@@ -12032,7 +12032,7 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 <script>
 /* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.26.06";
+const APP_VERSION = "2026.09.27.01";
 (function(){
   /* منع تخزين الصفحة في ذاكرة المتصفح */
   const noCache = [
@@ -16861,7 +16861,7 @@ function fleetImgTag(url, px){
    من هو وماذا يريد. السائق يرسل الصور للبوت فتُحفظ في تلجرام، ويُكتب
    هنا سطر نصّي فقط (storage_path = tg:<file_id>) ليُعرف أن للمهمة صورة.
    والمدقّق يضغط «تدقيق» فيفتح البوت ويرسل له صور الرحلة ومعها زرّ التدقيق. */
-var FLEET_TG_BOT = 'ضع_اسم_البوت';
+var FLEET_TG_BOT = 'Dramani1bot';
 function fleetTgReady(){ return !!FLEET_TG_BOT && !/[^A-Za-z0-9_]/.test(FLEET_TG_BOT); }
 function fleetTgCode(){
   var a=new Uint8Array(18); crypto.getRandomValues(a);
