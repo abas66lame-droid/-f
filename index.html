@@ -16907,6 +16907,14 @@ document.addEventListener('visibilitychange', function(){
   }catch(e){}
 });
 async function fleetUploadProof(){ throw new Error('الصور تُرسل عبر بوت تلجرام'); }
+/* «٣ صور و١ فيديو» — نوع كل إثبات من علامته: tgv: فيديو، tgn: فيديو دائري، والباقي صورة */
+function fleetProofCount(pl){
+  var v=0; (pl||[]).forEach(function(x){ if(/^tg[vn]:/.test(String(x.storage_path||''))) v++; });
+  var ph=(pl||[]).length-v, parts=[];
+  if(ph) parts.push(ph+' صورة');
+  if(v) parts.push(v+' فيديو');
+  return parts.join(' و');
+}
 /* تُرجع مصفوفة صور لكل مهمة — الجدول أصلاً يقبل أكثر من صورة بالمهمة الواحدة
    (كل رفعة تُدرَج كصف جديد بلا استبدال)، وكان العرض فقط يقتصر على واحدة */
 async function fleetGetProofs(tripId){
@@ -17134,10 +17142,10 @@ window.renderDriverView = async function(profile){
             +(on?'✓':'')+'</span>'
             +'<span style="flex:1;color:#c8d4e2;font-size:13px;">'+esc(t.title)+'</span></div>'
             +(ready
-              ? '<div style="color:#38d9b9;font-size:11px;margin-top:7px;">✓ '+pl.length+' صورة في تلجرام</div>'
-              : '<div style="color:#ffb37a;font-size:11px;margin-top:7px;">📷 بانتظار الصورة</div>')
+              ? '<div style="color:#38d9b9;font-size:11px;margin-top:7px;">✓ '+fleetProofCount(pl)+' في تلجرام</div>'
+              : '<div style="color:#ffb37a;font-size:11px;margin-top:7px;">📷 بانتظار صورة أو فيديو</div>')
             +'<div style="display:flex;gap:6px;margin-top:8px;">'
-            +'<div style="flex:1;">'+fleetTgLink('k',trip.id,t.id,phase,'📷 '+(ready?'صورة أخرى':'تصوير عبر تلجرام'),
+            +'<div style="flex:1;">'+fleetTgLink('k',trip.id,t.id,phase,(ready?'📷 صورة أو فيديو آخر':'📷🎥 صورة أو فيديو عبر تلجرام'),
                 'font-size:12px;padding:9px;')+'</div>'
             +'<button style="flex:1;font-size:12px;padding:9px;'
             +(ready?'':'opacity:.45;')+'background:'+(on?'#5a3a3a':'#14705f')+';" '
@@ -17173,7 +17181,7 @@ window.renderDriverView = async function(profile){
           +'<div style="color:#7487a0;font-size:11px;margin:6px 0;">منذ '+fmt(v.taken_at)+'</div>';
         if(outT.length){
           h+='<div style="color:#ffb37a;font-size:12px;font-weight:700;margin:10px 0 5px;">مهام الاستلام</div>'
-            +fleetTgLink('d',trip.id,null,'out','📷 صوّر كل مهام الاستلام في تلجرام','font-size:12px;padding:10px;margin-bottom:8px;');
+            +fleetTgLink('d',trip.id,null,'out','📷🎥 صوّر كل مهام الاستلام في تلجرام','font-size:12px;padding:10px;margin-bottom:8px;');
           for(var j=0;j<outT.length;j++){
             var t=outT[j], on=!!oc[t.id];
             h+=taskRow(t,on,'out');
@@ -17181,7 +17189,7 @@ window.renderDriverView = async function(profile){
         }
         if(inT.length){
           h+='<div style="color:#8fb8d8;font-size:12px;font-weight:700;margin:12px 0 5px;">مهام التسليم</div>'
-            +fleetTgLink('d',trip.id,null,'in','📷 صوّر كل مهام التسليم في تلجرام','font-size:12px;padding:10px;margin-bottom:8px;');
+            +fleetTgLink('d',trip.id,null,'in','📷🎥 صوّر كل مهام التسليم في تلجرام','font-size:12px;padding:10px;margin-bottom:8px;');
           for(var j=0;j<inT.length;j++){
             var t=inT[j], on=!!ic[t.id];
             h+=taskRow(t,on,'in');
@@ -17523,8 +17531,8 @@ window.fleetTripDetail=async function(tripId){
           +'<span style="flex:1;color:#c8d4e2;font-size:12px;">'+esc(x.title)+'</span></div>'
           +(on&&checks[x.id]?'<div style="color:#5d6d80;font-size:10px;margin-top:3px;">أُنجزت '+fmt(checks[x.id])+'</div>':'')
           +(pl.length
-            ? '<div style="color:#38d9b9;font-size:11px;margin-top:6px;">📷 '+pl.length+' صورة في تلجرام</div>'
-            : '<div style="color:#e8a0a4;font-size:11px;margin-top:6px;">📷 بلا صورة</div>')
+            ? '<div style="color:#38d9b9;font-size:11px;margin-top:6px;">📷 '+fleetProofCount(pl)+' في تلجرام</div>'
+            : '<div style="color:#e8a0a4;font-size:11px;margin-top:6px;">📷 بلا صورة أو فيديو</div>')
           +'</div>';
       });
       return b;
