@@ -41,6 +41,7 @@ async function hookSecret(): Promise<string> {
 async function tg(method: string, body: unknown) {
   const r = await fetch(`https://api.telegram.org/bot${TOKEN}/${method}`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   const j = await r.json().catch(() => ({}));
   if (!j.ok) console.error(method, JSON.stringify(j).slice(0, 300));
@@ -53,6 +54,7 @@ const say = (chat: number, text: string, extra: Record<string, unknown> = {}) =>
 async function db(path: string, init: RequestInit = {}, prefer = "return=representation") {
   const r = await fetch(`${SB_URL}/rest/v1/${path}`, {
     ...init,
+    signal: AbortSignal.timeout(10000),
     headers: {
       apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`,
       "Content-Type": "application/json", Prefer: prefer,
@@ -298,10 +300,12 @@ async function onCallback(q: any) {
 }
 
 /* ══ نقطة الدخول ══ */
-const SECRET = await hookSecret();
+let SECRET = "";
 
 Deno.serve(async (req) => {
   const url = new URL(req.url);
+  console.log("طلب", req.method, url.search);
+  if (!SECRET) SECRET = await hookSecret();
   if (req.method === "GET") {
     if (url.searchParams.get("setup") === "1") {
       if (!TOKEN) return Response.json({ ok: false, error: "BOT_TOKEN غير مضبوط في Secrets" });
