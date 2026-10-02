@@ -17685,15 +17685,31 @@ async function fleetRenderStops(t){
     return;
   }
   var stops=fleetStops(pts);
+  /* أسباب الوقفات كما أجاب السائق في البوت وقتها — تُطابَق بوقت بداية الوقفة */
+  var reasons=[];
+  try{
+    var rr=await SB().from('fleet_stop_reasons').select('from_s,reason').eq('trip_id',t.id);
+    reasons=(rr.data||[]).map(function(r){ return {at:Number(r.from_s)*1000, reason:r.reason}; });
+  }catch(e){}
+  var reasonOf=function(s){
+    var m=reasons.filter(function(r){ return r.at>=s.from-120000 && r.at<=s.to; })
+                 .sort(function(a,b){ return Math.abs(a.at-s.from)-Math.abs(b.at-s.from); })[0];
+    return m ? (m.reason || '') : '';
+  };
   if(!stops.length) h+='<div style="color:#38d9b9;font-size:12px;">✓ لا وقفات تتجاوز ٣ دقائق</div>';
   stops.forEach(function(s,k){
+    var why=reasonOf(s);
     h+='<div style="padding:9px;margin-bottom:6px;border-radius:10px;background:rgba(255,179,122,0.08);'
       +'display:flex;align-items:center;gap:8px;">'
       +'<div style="flex:1;">'
       +'<div style="color:#c8d4e2;font-size:12px;">⏸ وقفة '+(k+1)+' — <b style="color:#ffb37a;">'+fleetDur(s.ms)+'</b></div>'
       +'<div style="color:#7487a0;font-size:11px;margin-top:2px;">'+hm(s.from)+' ← '
       +(s.last?(t.in_at?hm(s.to):'مستمرة حتى آخر تحديث '+hm(s.to)):hm(s.to))
-      +(s.approx?' · <span style="color:#d3a04f;">تقريبية (انقطع الموقع)</span>':'')+'</div></div>'
+      +(s.approx?' · <span style="color:#d3a04f;">تقريبية (انقطع الموقع)</span>':'')+'</div>'
+      +(why
+        ? '<div style="color:#38d9b9;font-size:12px;margin-top:3px;">📝 '+esc(why)+'</div>'
+        : '<div style="color:#e8a0a4;font-size:11px;margin-top:3px;">⚠️ بلا سبب</div>')
+      +'</div>'
       +'<a href="'+fleetMapUrl(s.lat,s.lng)+'" target="_blank" rel="noopener" '
       +'style="text-decoration:none;background:#2e5ca8;color:#fff;border-radius:9px;padding:8px 10px;font-size:12px;white-space:nowrap;">📍 الموقع</a>'
       +'</div>';

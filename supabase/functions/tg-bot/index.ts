@@ -295,9 +295,72 @@ async function gotLocation(chat: number, st: any, m: any, edited: boolean) {
       }),
     }, "return=minimal");
   }
+  try { await checkStop(chat, who, trip.id, { ...pt, at: at.getTime() }); } catch (e) { console.error("checkStop", e); }
   if (edited) return;
   return say(chat, "✓ بدأ تتبّع رحلتك — ارجع للتطبيق، ستظهر مهام الاستلام.\n" +
     "يستمر حتى والشاشة مطفأة، وينتهي تلقائياً عند إرجاع المركبة.");
+}
+
+/* ══ سبب الوقفة — يُسأل السائق في وقتها ══
+   نفس قاعدة التطبيق: نقاط متتالية ضمن ١٠ أمتار من مركزها = وقفة، وأكثر من ٣ دقائق تُسأل.
+   تُسأل الوقفة الجارية حين تبلغ ٣ دقائق، والتي انتهت للتو إن لم تُسأل (حين لا يصل تحديث
+   والسائق واقف). كل وقفة تُسأل مرة واحدة: صفّها في fleet_stop_reasons هو علامة السؤال. */
+const STOP_MS = 3 * 60000;
+const STOP_REASONS: Record<string, string> = {
+  t: "🚦 إشارة مرور", j: "🚗 زحام", d: "📦 تسليم/استلام طلب", f: "⛽ وقود", r: "☕ استراحة", o: "✏️ أخرى",
+};
+function stopClusters(pts: { lat: number; lng: number; at: number }[]) {
+  const out: { lat: number; lng: number; from: number; last: number; end: number; closed: boolean }[] = [];
+  let i = 0;
+  while (i < pts.length) {
+    let c = { lat: pts[i].lat, lng: pts[i].lng }, n = 1, j = i + 1;
+    while (j < pts.length && distM(c, pts[j]) <= GPS_MOVE_M) {
+      n++; c = { lat: c.lat + (pts[j].lat - c.lat) / n, lng: c.lng + (pts[j].lng - c.lng) / n }; j++;
+    }
+    const closed = j < pts.length;
+    out.push({ ...c, from: pts[i].at, last: pts[j - 1].at, end: closed ? pts[j].at : pts[j - 1].at, closed });
+    i = j;
+  }
+  return out;
+}
+const hmB = (ms: number) => {
+  try { return new Date(ms).toLocaleTimeString("ar-IQ", { timeZone: "Asia/Baghdad", hour: "numeric", minute: "2-digit" }); }
+  catch { return ""; }
+};
+async function checkStop(chat: number, who: any, tripId: number, cur: { lat: number; lng: number; at: number }) {
+  const rows: any[] = (await db(`fleet_gps?trip_id=eq.${tripId}&select=lat,lng,at&order=at.desc&limit=200`)) ?? [];
+  const pts = rows.reverse().map((r) => ({ lat: Number(r.lat), lng: Number(r.lng), at: new Date(r.at).getTime() }));
+  if (!pts.length || pts[pts.length - 1].at < cur.at) pts.push(cur);
+  const cl = stopClusters(pts).slice(-2);
+  const due = cl.filter((c) => c.end - c.from >= STOP_MS);
+  if (!due.length) return;
+  const asked = new Set(((await db(`fleet_stop_reasons?trip_id=eq.${tripId}&select=from_s`)) ?? [])
+    .map((r: any) => String(r.from_s)));
+  for (const c of due) {
+    const fromS = Math.floor(c.from / 1000);
+    if (asked.has(String(fromS))) continue;
+    await db("fleet_stop_reasons?on_conflict=trip_id,from_s", {
+      method: "POST",
+      body: JSON.stringify({
+        trip_id: tripId, from_s: fromS, from_at: new Date(c.from).toISOString(),
+        lat: c.lat, lng: c.lng, driver_id: String(who.id),
+      }),
+    }, "resolution=ignore-duplicates,return=minimal");
+    const mins = Math.round((c.end - c.from) / 60000);
+    const keys = Object.keys(STOP_REASONS);
+    const kb = [];
+    for (let k = 0; k < keys.length; k += 2) {
+      kb.push(keys.slice(k, k + 2).map((x) => ({ text: STOP_REASONS[x], callback_data: `sr:${tripId}:${fromS}:${x}` })));
+    }
+    await say(chat,
+      (c.closed ? `⏸ توقفت ${mins} دقيقة عند ${hmB(c.from)}` : `⏸ أنت متوقف منذ ${hmB(c.from)} (أكثر من ٣ دقائق)`) +
+      " — ما السبب؟", { reply_markup: { inline_keyboard: kb } });
+  }
+}
+async function saveStopReason(tripId: string, fromS: string, reason: string) {
+  await db(`fleet_stop_reasons?trip_id=eq.${tripId}&from_s=eq.${fromS}`, {
+    method: "PATCH", body: JSON.stringify({ reason, answered_at: new Date().toISOString() }),
+  }, "return=minimal");
 }
 
 /* ══ الرسائل ══ */
@@ -333,6 +396,12 @@ async function onMessage(m: any) {
 
   const st = await getState(chat);
   if (m.location) return gotLocation(chat, st, m, false);
+  if (st.await_reason && text && !text.startsWith("/")) {
+    const ar = st.await_reason;
+    await saveStopReason(String(ar.trip), String(ar.from), text.trim().slice(0, 200));
+    await setState(chat, { ...st, await_reason: null });
+    return say(chat, `✓ سُجّل سبب الوقفة: ${text.trim().slice(0, 200)}`);
+  }
   const album = m.media_group_id ? String(m.media_group_id) : undefined;
   if (m.photo && m.photo.length) return gotPhoto(chat, st, "tg:" + m.photo[m.photo.length - 1].file_id, album);
   if (m.video) return gotPhoto(chat, st, "tgv:" + m.video.file_id, album);
@@ -355,6 +424,25 @@ async function onCallback(q: any) {
     await setState(chat, st);
     await tg("answerCallbackQuery", { callback_query_id: q.id });
     return say(chat, `📷 أرسل صورة أو فيديو آخر: «${st.job.queue[st.job.i].title}»`);
+  }
+
+  if (data.startsWith("sr:")) {
+    const [, tripId, fromS, code] = data.split(":");
+    const trip = await one(`fleet_trips?id=eq.${tripId}&select=driver_id`);
+    if (!trip || !st.who || String(trip.driver_id) !== String(st.who.id))
+      return tg("answerCallbackQuery", { callback_query_id: q.id, text: "غير مسموح", show_alert: true });
+    if (code === "o") {
+      await setState(chat, { ...st, await_reason: { trip: tripId, from: fromS } });
+      await tg("answerCallbackQuery", { callback_query_id: q.id });
+      return say(chat, "✏️ اكتب سبب الوقفة في رسالة:");
+    }
+    const reason = STOP_REASONS[code] || code;
+    await saveStopReason(tripId, fromS, reason);
+    await tg("answerCallbackQuery", { callback_query_id: q.id, text: "✓ سُجّل السبب" });
+    return tg("editMessageText", {
+      chat_id: chat, message_id: q.message.message_id,
+      text: (q.message.text || "") + `\n\n✓ السبب: ${reason}`,
+    });
   }
 
   if (data.startsWith("au:")) {
