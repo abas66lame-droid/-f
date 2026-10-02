@@ -1428,26 +1428,49 @@ async function neoLoadOff(force){
    تُخزَّن كصفّ علامة مثل ⟦off⟧ و⟦lnk⟧: ⟦leave⟧<الموظف>|<التاريخ>
    فلا عمود جديد ولا جدول جديد. */
 const NEO_LEAVE_TAG = '⟦leave⟧';
+/* ══ «ليس في هذا الشفت» — لأقسام مقسومة صباحي/مسائي فقط ══
+   القسم الذي في اسمه «صباحي» أو «مسائي» قسمٌ مستقل بكامله (موظفوه وسجلاته
+   ونسبته له وحده). وزرّه هذا يقول: الموظف اليوم ليس في هذا الشفت — يُعامَل
+   تماماً كالإجازة في كل حساب، ويختلف عنها في الاسم الظاهر فقط.
+   ⟦ns:ص⟧<الموظف>|<التاريخ> صباحي · ⟦ns:م⟧<الموظف>|<التاريخ> مسائي */
+const NEO_NS_TAG = { 'ص': '⟦ns:ص⟧', 'م': '⟦ns:م⟧' };
+const NEO_NS_LABEL = { 'ص': 'ليس في الصباحي', 'م': 'ليس في المسائي' };
+/* نوع القسم من اسمه: 'ص' صباحي، 'م' مسائي، '' قسم عادي */
+function neoShiftSplitKind(deptName){
+  const n = String(deptName || '');
+  if (/صباح/.test(n)) return 'ص';
+  if (/مسائ|مساء/.test(n)) return 'م';
+  return '';
+}
 let _neoLeave = null;
 async function neoLoadLeave(force){
   if (!force && _neoLeave) return _neoLeave;
-  const set = new Set(), byStaff = {};
+  /* kind: سبب الغياب لكل «موظف|يوم» — 'leave' إجازة، أو 'ص'/'م' ليس في الشفت */
+  const set = new Set(), byStaff = {}, kind = {};
+  const take = (rows, tag, k) => (rows || []).forEach(r => {
+    const body = String(r.name || '').slice(tag.length);
+    const i = body.indexOf('|'); if (i < 0) return;
+    const sid = body.slice(0, i), day = body.slice(i + 1);
+    if (!sid || !day) return;
+    const key = sid + '|' + day;
+    if (set.has(key)) return;
+    set.add(key); kind[key] = k;
+    (byStaff[sid] = byStaff[sid] || []).push(day);
+  });
   try{
-    const { data, error } = await supabaseClient.from('custom_fields')
-      .select('name').like('name', NEO_LEAVE_TAG + '%');
-    if (error) throw error;
-    (data || []).forEach(r => {
-      const body = String(r.name || '').slice(NEO_LEAVE_TAG.length);
-      const i = body.indexOf('|'); if (i < 0) return;
-      const sid = body.slice(0, i), day = body.slice(i + 1);
-      if (!sid || !day) return;
-      set.add(sid + '|' + day);
-      (byStaff[sid] = byStaff[sid] || []).push(day);
+    const [lv, ns] = await Promise.all([
+      supabaseClient.from('custom_fields').select('name').like('name', NEO_LEAVE_TAG + '%'),
+      supabaseClient.from('custom_fields').select('name').like('name', '⟦ns:%'),
+    ]);
+    if (lv.error) throw lv.error;
+    take(lv.data, NEO_LEAVE_TAG, 'leave');
+    if (!ns.error) (ns.data || []).forEach(r => {
+      for (const k in NEO_NS_TAG) if (String(r.name || '').startsWith(NEO_NS_TAG[k])) take([r], NEO_NS_TAG[k], k);
     });
-    _neoLeave = { set, byStaff };
+    _neoLeave = { set, byStaff, kind };
   }catch(e){
     /* عند فشل الشبكة لا نمنح إجازة لم تُطلب — الأسلم أن يظهر الجميع عاملين */
-    if (!_neoLeave) _neoLeave = { set, byStaff };
+    if (!_neoLeave) _neoLeave = { set, byStaff, kind };
   }
   return _neoLeave;
 }
@@ -1644,6 +1667,16 @@ async function neoRecordNameChange(staffId, deptId, oldName){
 function neoOnLeave(staffId, day){
   return !!(_neoLeave && day && _neoLeave.set.has(String(staffId) + '|' + day));
 }
+/* سبب الغياب: null حاضر، 'leave' إجازة، 'ص'/'م' ليس في الشفت */
+function neoLeaveKind(staffId, day){
+  if (!neoOnLeave(staffId, day)) return null;
+  return (_neoLeave.kind && _neoLeave.kind[String(staffId) + '|' + day]) || 'leave';
+}
+/* الاسم الظاهر على الشارة */
+function neoLeaveLabel(staffId, day){
+  const k = neoLeaveKind(staffId, day);
+  return NEO_NS_LABEL[k] || 'إجازة';
+}
 /* كم يوم إجازة داخل مدة — لطرحها من أيام المدى */
 function neoLeaveDaysIn(staffId, from, to){
   const arr = (_neoLeave && _neoLeave.byStaff[String(staffId)]) || [];
@@ -1662,7 +1695,23 @@ async function neoSetLeave(deptId, staffId, day, on){
   await neoLoadLeave(true);
   return true;
 }
+async function neoSetNoShift(deptId, staffId, day, k, on){
+  if (!NEO_NS_TAG[k]) return false;
+  const marker = NEO_NS_TAG[k] + staffId + '|' + day;
+  let error = null;
+  if (on){
+    ({ error } = await supabaseClient.from('custom_fields')
+      .insert({ department_id: deptId, name: marker }));
+  } else {
+    ({ error } = await supabaseClient.from('custom_fields').delete().eq('name', marker));
+  }
+  if (error){ neoNotify('تعذّر الحفظ: ' + error.message); return false; }
+  await neoLoadLeave(true);
+  return true;
+}
 window.neoOnLeave = neoOnLeave;
+window.neoLeaveKind = neoLeaveKind;
+window.neoLeaveLabel = neoLeaveLabel;
 window.neoSetLeave = neoSetLeave;
 window.neoLoadLeave = neoLoadLeave;
 function neoIsOff(id){ return !!(_neoOffSet && _neoOffSet.has(String(id))); }
@@ -4099,9 +4148,10 @@ async function renderStaffSection(deptId){
     const canLeave = String((_p && _p.role) || window.__notifRole || '') === 'shift' || _inShift;
     rowsHtml = progSetup({ key:'staff', table:'staff_evaluations', idCol:'staff_id', date, shift, fields:fieldDefs,
       items: staffList.map(s => ({ id:s.id, label:s.name, disabled_fields:s.disabled_fields,
-                                   on_leave: neoOnLeave(s.id, date) })),
+                                   on_leave: neoOnLeave(s.id, date), leave_kind: neoLeaveKind(s.id, date) })),
       logsMap:evalMap, tableId:'progT_staff', headerHtml:staffHeader, includeNotes:true, staffExtras:true,
-      leaveDeptId: canLeave ? deptId : null, leaveDate: date });
+      leaveDeptId: canLeave ? deptId : null, leaveDate: date,
+      nsKind: canLeave ? neoShiftSplitKind(deptName) : '' });
   } else for (let idx = 0; idx < staffList.length; idx++){
     const s = staffList[idx];
     const ev = evalMap[s.id];
@@ -5239,14 +5289,21 @@ function progBuildRows(cfg){
     const offBadge = (typeof neoIsOff === 'function' && neoIsOff(it.id))
       ? ' <span style="background:#5a4a12;color:#ffcf5c;font-size:10px;padding:2px 7px;border-radius:8px;white-space:nowrap;">معطَّل</span>' : '';
     const onLeave = (it.on_leave === true);
+    /* سبب الغياب: إجازة، أو «ليس في الصباحي/المسائي» في الأقسام المقسومة */
+    const lvKind = onLeave ? (it.leave_kind || 'leave') : null;
     const leaveBadge = onLeave
-      ? ' <span style="background:#123a52;color:#8fd0f0;font-size:10px;padding:2px 7px;border-radius:8px;white-space:nowrap;">إجازة</span>' : '';
-    /* الزر يظهر فقط حيث سُمح به — جدول الموظفين عند مسؤول الشفت */
-    const leaveBtn = cfg.leaveDeptId
+      ? ' <span style="background:#123a52;color:#8fd0f0;font-size:10px;padding:2px 7px;border-radius:8px;white-space:nowrap;">' + (NEO_NS_LABEL[lvKind] || 'إجازة') + '</span>' : '';
+    /* الزر يظهر فقط حيث سُمح به — جدول الموظفين عند مسؤول الشفت.
+       الغائب بسبب يظهر له زرّ إلغاء ذلك السبب وحده */
+    const leaveBtn = (cfg.leaveDeptId && lvKind !== 'ص' && lvKind !== 'م')
       ? ` <span style="cursor:pointer;color:${onLeave ? '#3ecf6b' : '#8fb8d8'};font-size:11px;margin-inline-start:6px;"
             title="${onLeave ? 'إلغاء الإجازة — ترجع خاناته للتأشير' : 'إجازة اليوم — تظهر خاناته «—» ولا تُحتسب عليه'}"
             onclick="neoLeaveTap('${it.id}','${cfg.leaveDeptId}','${cfg.leaveDate}','${cfg.key}')">${onLeave ? 'إلغاء الإجازة' : 'تسجيل إجازة'}</span>` : '';
-    html += `<tr${(offBadge || onLeave) ? ' style="opacity:.6;"' : ''}><td class="code-cell">${esc(it.label)}${offBadge}${leaveBadge}${leaveBtn}</td>${cells}</tr>`;
+    const nsBtn = (cfg.leaveDeptId && cfg.nsKind && lvKind !== 'leave')
+      ? ` <span style="cursor:pointer;color:${onLeave ? '#3ecf6b' : '#d3a04f'};font-size:11px;margin-inline-start:6px;"
+            title="${onLeave ? 'إلغاء — يرجع للتأشير في هذا الشفت' : 'الموظف اليوم ليس في هذا الشفت — تظهر خاناته «—» ولا تُحتسب عليه'}"
+            onclick="neoNoShiftTap('${it.id}','${cfg.leaveDeptId}','${cfg.leaveDate}','${cfg.key}')">${onLeave ? 'إلغاء «' + NEO_NS_LABEL[cfg.nsKind] + '»' : NEO_NS_LABEL[cfg.nsKind]}</span>` : '';
+    html += `<tr${(offBadge || onLeave) ? ' style="opacity:.6;"' : ''}><td class="code-cell">${esc(it.label)}${offBadge}${leaveBadge}${leaveBtn}${nsBtn}</td>${cells}</tr>`;
     for (const w of wrong){
       const val = (fn[w.key]||'').replace(/"/g,'&quot;');
       html += `<tr><td colspan="${totalCols}" style="padding:4px 8px;">
@@ -5275,10 +5332,21 @@ window.neoLeaveTap = async function(staffId, deptId, day, sectionKey){
   const it = (cfg.items || []).find(x => String(x.id) === String(staffId)); if (!it) return;
   const to = !(it.on_leave === true);
   if (!await neoSetLeave(deptId, staffId, day, to)) return;
-  it.on_leave = to;
+  it.on_leave = to; it.leave_kind = to ? 'leave' : null;
   progRefresh(sectionKey);
   try{ neoToast(to ? 'سُجّلت إجازة اليوم — خاناته لا تُحتسب'
                    : 'أُلغيت الإجازة — خاناته رجعت للتأشير', true); }catch(e){}
+};
+/* «ليس في الصباحي/المسائي» — نفس أثر الإجازة، لليوم نفسه فقط */
+window.neoNoShiftTap = async function(staffId, deptId, day, sectionKey){
+  const cfg = progSections[sectionKey]; if (!cfg || !cfg.nsKind) return;
+  const it = (cfg.items || []).find(x => String(x.id) === String(staffId)); if (!it) return;
+  const to = !(it.on_leave === true);
+  if (!await neoSetNoShift(deptId, staffId, day, cfg.nsKind, to)) return;
+  it.on_leave = to; it.leave_kind = to ? cfg.nsKind : null;
+  progRefresh(sectionKey);
+  try{ neoToast(to ? 'سُجّل: ' + NEO_NS_LABEL[cfg.nsKind] + ' — خاناته لا تُحتسب'
+                   : 'أُلغي — خاناته رجعت للتأشير', true); }catch(e){}
 };
 function progRefresh(key){
   try{ if (window.neoRefreshShiftPctBox && shiftRowsState) neoRefreshShiftPctBox(shiftRowsState.deptId, shiftRowsState.date); }catch(e){}
@@ -5584,7 +5652,7 @@ async function __computeHallAuditCompletionForDeptInner(dept, d){
   const _inD = (arr) => (arr || []).filter(x => String(x.department_id) === String(dept.id));
   neoDailySample(_inD(d.allLocations), d.seed + '_loc',   d.date).forEach(l => count(d.locLogsById[l.id], L, l));
   neoDailySample(_inD(d.allStaff),     d.seed + '_staff', d.date)
-    .map(s => ({ ...s, on_leave: (typeof neoOnLeave === 'function') && neoOnLeave(s.id, d.date) }))
+    .map(s => ({ ...s, on_leave: (typeof neoOnLeave === 'function') && neoOnLeave(s.id, d.date), leave_kind: (typeof neoLeaveKind === 'function') ? neoLeaveKind(s.id, d.date) : null }))
     .forEach(s => count(d.staffLogsById[s.id], staffFieldDefs, s));
   d.allTasks.filter(t => String(t.department_id) === String(dept.id) && !(typeof neoHallOutItem === 'function' && neoHallOutItem(t.id))).forEach(t => { total++; const tl = d.taskLogsById[t.id]; if (tl?.hall_verified || ((tl?.hall_field_notes||{})['__task']||'').trim()) verified++; });
   neoDailySample(_inD(d.allIpads), d.seed + '_ipad', d.date).forEach(i => count(d.ipadLogsById[i.id], I, i));
@@ -5694,7 +5762,7 @@ async function computeHallAuditProgressForUser(userId, depts, date, onlyMine){
   await countScope(neoSampleAcrossDepts(allLocations, deptIdSet, userId, 'loc', date), 'loc', locLogsById);
   const staffFieldDefsCache = {};
   for (const _s of neoSampleAcrossDepts(allStaff, deptIdSet, userId, 'staff', date)){
-    const s = { ..._s, on_leave: (typeof neoOnLeave === 'function') && neoOnLeave(_s.id, date) };
+    const s = { ..._s, on_leave: (typeof neoOnLeave === 'function') && neoOnLeave(_s.id, date), leave_kind: (typeof neoLeaveKind === 'function') ? neoLeaveKind(_s.id, date) : null };
     if (!staffFieldDefsCache[s.department_id]) staffFieldDefsCache[s.department_id] = await staffFieldDefsForDeptName(deptNameById[s.department_id] || '', s.department_id);
     count(staffLogsById[s.id], staffFieldDefsCache[s.department_id], s);
   }
@@ -5756,7 +5824,7 @@ function buildStatusTable(items, fieldDefs, rowLabelFn, logsById, hallView){
     const offBadge = (typeof neoIsOff === 'function' && neoIsOff(item.id))
       ? ' <span style="background:#5a4a12;color:#ffcf5c;font-size:10px;padding:2px 7px;border-radius:8px;white-space:nowrap;">معطَّل</span>' : '';
     const lvBadge = (item.on_leave === true)
-      ? ' <span style="background:#123a52;color:#8fd0f0;font-size:10px;padding:2px 7px;border-radius:8px;white-space:nowrap;">إجازة</span>' : '';
+      ? ' <span style="background:#123a52;color:#8fd0f0;font-size:10px;padding:2px 7px;border-radius:8px;white-space:nowrap;">' + (NEO_NS_LABEL[item.leave_kind] || 'إجازة') + '</span>' : '';
     return `<tr${(offBadge || lvBadge) ? ' style="opacity:.6;"' : ''}><td class="code-cell">${esc(rowLabelFn(item))}${offBadge}${lvBadge}</td>${cells}${notesCell}</tr>`;
   }).join('');
   const html = `<div class="table-wrap roomy-table"><table>
@@ -5803,7 +5871,7 @@ function missRowsHtml(table){
       cells += `<td onclick="hallMissOpenNote('${table}','${it.id}','${f.key}')" style="cursor:pointer;">${neoCellMark(st)}${hasNote?' <span style="font-size:10px;">📝</span>':''}</td>`;
     }
     const lvB = (it.on_leave === true)
-      ? ' <span style="background:#123a52;color:#8fd0f0;font-size:10px;padding:2px 7px;border-radius:8px;white-space:nowrap;">إجازة</span>' : '';
+      ? ' <span style="background:#123a52;color:#8fd0f0;font-size:10px;padding:2px 7px;border-radius:8px;white-space:nowrap;">' + (NEO_NS_LABEL[it.leave_kind] || 'إجازة') + '</span>' : '';
     rows += `<tr${lvB ? ' style="opacity:.6;"' : ''}><td class="code-cell">${esc(cfg.rowLabelFn(it))}${lvB}</td>${cells}</tr>`;
     // ملاحظات مسؤول الشفت (عرض فقط)
     const parts = [];
@@ -6454,7 +6522,7 @@ async function showHallMissingDetail(deptId){
   const _id = x => x.id;
   const locsInDept = neoPOSort(d.allLocations.filter(l => String(l.department_id) === String(dept.id)), deptId, 'loc', 'rows', _id);
   const staffInDept = neoPOSort(d.allStaff.filter(s => String(s.department_id) === String(dept.id))
-    .map(s => ({ ...s, on_leave: neoOnLeave(s.id, d.date || (typeof todayStr === 'function' ? todayStr() : '')) })),
+    .map(s => ({ ...s, on_leave: neoOnLeave(s.id, d.date || (typeof todayStr === 'function' ? todayStr() : '')), leave_kind: neoLeaveKind(s.id, d.date || (typeof todayStr === 'function' ? todayStr() : '')) })),
     deptId, 'staff', 'rows', _id);
   const tasksInDept = neoPOSort(d.allTasks.filter(t => String(t.department_id) === String(dept.id)), deptId, 'tasks', 'rows', _id);
   const ipadsInDept = neoPOSort(d.allIpads.filter(i => String(i.department_id) === String(dept.id)), deptId, 'ipad', 'rows', _id);
@@ -6604,7 +6672,7 @@ function hallProgBuildRows(table){
       if (s === 'no') wrong.push(f);
     }
     const lv = (it.on_leave === true)
-      ? ' <span style="background:#123a52;color:#8fd0f0;font-size:10px;padding:2px 7px;border-radius:8px;white-space:nowrap;">إجازة</span>' : '';
+      ? ' <span style="background:#123a52;color:#8fd0f0;font-size:10px;padding:2px 7px;border-radius:8px;white-space:nowrap;">' + (NEO_NS_LABEL[it.leave_kind] || 'إجازة') + '</span>' : '';
     html += `<tr${lv ? ' style="opacity:.6;"' : ''}><td class="code-cell">${esc(cfg.rowLabelFn(it))}${lv}</td>${cells}</tr>`;
     for (const w of wrong){
       const val = (fn[w.key]||'').replace(/"/g,'&quot;');
@@ -7384,7 +7452,7 @@ const inDept = (arr) => (arr || []).filter(x => String(x.department_id) === Stri
 
   const locsSample                = neoDailySample(inDept(d.allLocations),           d.seed + '_loc',    d.date);
   const staffSample               = neoDailySample(inDept(d.allStaff),               d.seed + '_staff',  d.date)
-    .map(s => ({ ...s, on_leave: neoOnLeave(s.id, d.date) }));
+    .map(s => ({ ...s, on_leave: neoOnLeave(s.id, d.date), leave_kind: neoLeaveKind(s.id, d.date) }));
   const tasksSample = inDept(d.allTasks); // 100%
   const ipadsSample               = neoDailySample(inDept(d.allIpads),               d.seed + '_ipad',   d.date);
   const readersSample             = neoDailySample(inDept(d.allReaders),             d.seed + '_rdr',    d.date);
@@ -9593,7 +9661,7 @@ async function renderSalesDeptMissingDetail(deptId, profileId){
     const locsInDept = (allLocations||[]).filter(l => String(l.department_id) === String(deptId));
     /* المُجاز ذلك اليوم يُعلَّم، فتُرسم خاناته «—» ولا تُعدّ نقصاً */
     const staffInDept = (allStaff||[]).filter(s => String(s.department_id) === String(deptId))
-      .map(s => ({ ...s, on_leave: neoOnLeave(s.id, date) }));
+      .map(s => ({ ...s, on_leave: neoOnLeave(s.id, date), leave_kind: neoLeaveKind(s.id, date) }));
     const tasksInDept = (allTasks||[]).filter(t => String(t.department_id) === String(deptId));
     const ipadsInDept = (allIpads||[]).filter(i => String(i.department_id) === String(deptId));
     const readersInDept = (allReaders||[]).filter(r => String(r.department_id) === String(deptId));
@@ -9722,7 +9790,7 @@ async function renderSalesHallAuditDetail(deptId, profileId){
     const _dd = (arr) => (arr || []).filter(x => String(x.department_id) === String(deptId));
     const locsSample  = neoDailySample(_dd(allLocations), profileId + '_loc',   date);
     const staffSample = neoDailySample(_dd(allStaff),     profileId + '_staff', date)
-      .map(s => ({ ...s, on_leave: neoOnLeave(s.id, date) }));
+      .map(s => ({ ...s, on_leave: neoOnLeave(s.id, date), leave_kind: neoLeaveKind(s.id, date) }));
     const tasksInDept = (allTasks||[]).filter(t => String(t.department_id) === String(deptId)
       && !(typeof neoHallOutItem === 'function' && neoHallOutItem(t.id))); // 100%
     const ipadsSample = neoDailySample(_dd(allIpads), profileId + '_ipad', date);
