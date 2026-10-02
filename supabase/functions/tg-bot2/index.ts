@@ -1,5 +1,8 @@
 // ══════════════════════════════════════════════════════════════════
-//  بوت تلجرام لصور وفيديوهات التوصيل — tg-bot
+//  بوت تلجرام للتوصيل — tg-bot2 (صور، فيديو، تتبّع الموقع، أسباب الوقفات)
+//
+//  دالة مستقلة عن tg-bot القديمة: تُنشأ بجانبها، وفتح <رابطها>?setup=1 ينقل
+//  البوت إليها. للرجوع للقديمة افتح <رابط tg-bot>?setup=1.
 //
 //  السائق يرسل صورة أو فيديو (أو فيديو دائري، أو ملفاً من نوع صورة/فيديو)،
 //  ويُحفظ كل واحد بعلامة تميّز نوعه في storage_path:
@@ -23,7 +26,8 @@
 const TOKEN  = Deno.env.get("BOT_TOKEN") ?? "";
 const SB_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SB_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? Deno.env.get("SB_SECRET") ?? "";
-const FN_URL = SB_URL + "/functions/v1/tg-bot";
+const FN_NAME = "tg-bot2";
+const FN_URL = SB_URL + "/functions/v1/" + FN_NAME;
 
 const TICKET_TTL_MIN = 30;
 const REVIEWERS = ["fleet", "sales", "dev"];
