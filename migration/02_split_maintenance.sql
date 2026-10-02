@@ -47,18 +47,38 @@ declare
     'custom_section_columns','custom_section_rows','custom_fields'];
   uuid_re text := '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';
   src text; dst text; n int; tbl text; cond text; r record; j text; ctype text; pass int;
+  e_dept text;   -- قسم مسائي موجود مسبقاً (فارغ) يُنسخ إليه بدل إنشاء قسم جديد
 begin
   if not exists (select 1 from public.profiles where id::text = m_mgr) then
     raise exception 'لم يُعثر على مسؤول الصباحي بالمعرّف %', m_mgr; end if;
+
+  /* معرّف المسائي: مسؤول، أو حساب دخول بلا صف مسؤول، أو قسم أُنشئ مسبقاً */
   if not exists (select 1 from public.profiles where id::text = e_mgr) then
-    raise exception 'لم يُعثر على مسؤول المسائي بالمعرّف %', e_mgr; end if;
-  if exists (select 1 from public.departments where name = e_name) then
-    raise exception 'قسم «%» موجود مسبقاً — لم يُنفَّذ شيء', e_name; end if;
+    if exists (select 1 from public.departments where id::text = e_mgr) then
+      e_dept := e_mgr; e_mgr := null;
+    elsif exists (select 1 from auth.users where id::text = e_mgr) then
+      execute format('insert into public.profiles (id, name, role) values (%L, %L, %L)', e_mgr,
+        (select coalesce(nullif(raw_user_meta_data->>'name', ''), split_part(email, '@', 1), 'مسؤول المسائي')
+           from auth.users where id::text = e_mgr), 'shift');
+    else
+      raise exception 'المعرّف % ليس مسؤولاً ولا حساب دخول ولا قسماً — تأكد منه', e_mgr;
+    end if;
+  end if;
+  if e_dept is null then
+    select id::text into e_dept from public.departments where name = e_name;
+  end if;
+  if e_dept is not null and (
+       exists (select 1 from public.staff where department_id::text = e_dept)
+    or exists (select 1 from public.locations where department_id::text = e_dept)) then
+    raise exception 'القسم المسائي موجود مسبقاً وفيه بيانات — لم يُنفَّذ شيء';
+  end if;
 
   /* قسم الصيانة الحالي: الوحيد الذي في اسمه «صيان»، وإلا قسم مسؤول الصباحي */
-  select count(*) into n from public.departments where name like '%صيان%';
+  select count(*) into n from public.departments
+   where name like '%صيان%' and id::text is distinct from e_dept;
   if n = 1 then
-    select id::text into src from public.departments where name like '%صيان%';
+    select id::text into src from public.departments
+     where name like '%صيان%' and id::text is distinct from e_dept;
   else
     select d.id::text into src from public.departments d, public.profiles p
      where p.id::text = m_mgr and d.id::text = (p.department_ids)[1]::text and d.name like '%صيان%';
@@ -70,13 +90,19 @@ begin
 
   create temp table neo_map (old text primary key, new text) on commit drop;
 
-  /* القسم المسائي: نسخة من صف القسم نفسه باسم جديد */
-  dst := pg_temp.neo_newid('departments');
-  insert into neo_map values (src, dst);
-  select to_jsonb(d)::text into j from public.departments d where id::text = src;
-  j := (pg_temp.neo_remap(j)::jsonb || jsonb_build_object('name', e_name))::text;
-  execute 'insert into public.departments overriding system value
-           select * from jsonb_populate_record(null::public.departments, $1::jsonb)' using j;
+  /* القسم المسائي: الموجود الفارغ، أو نسخة جديدة من صف القسم نفسه */
+  if e_dept is not null then
+    dst := e_dept;
+    insert into neo_map values (src, dst);
+    update public.departments set name = e_name where id::text = dst;
+  else
+    dst := pg_temp.neo_newid('departments');
+    insert into neo_map values (src, dst);
+    select to_jsonb(d)::text into j from public.departments d where id::text = src;
+    j := (pg_temp.neo_remap(j)::jsonb || jsonb_build_object('name', e_name))::text;
+    execute 'insert into public.departments overriding system value
+             select * from jsonb_populate_record(null::public.departments, $1::jsonb)' using j;
+  end if;
   update public.departments set name = m_name where id::text = src;
 
   /* الجولة ١: معرّف جديد لكل صف · الجولة ٢: النسخ مع تبديل كل المعرّفات */
@@ -112,7 +138,7 @@ begin
       if r.j ? 'id' then j := (j::jsonb || jsonb_build_object('id', pg_temp.neo_newid('user_prefs')))::text; end if;
       execute 'insert into public.user_prefs select * from jsonb_populate_record(null::public.user_prefs, $1::jsonb)
                on conflict do nothing' using j;
-      if r.j->>'user_id' = m_mgr then
+      if r.j->>'user_id' = m_mgr and e_mgr is not null then
         j := (j::jsonb || jsonb_build_object('user_id', e_mgr)
               || case when r.j ? 'id' then jsonb_build_object('id', pg_temp.neo_newid('user_prefs')) else '{}'::jsonb end)::text;
         execute 'insert into public.user_prefs select * from jsonb_populate_record(null::public.user_prefs, $1::jsonb)
@@ -126,8 +152,10 @@ begin
    where attrelid = 'public.profiles'::regclass and attname = 'department_ids';
   execute format('update public.profiles set role = %L, department_ids = array[%L]::%s where id::text = %L',
                  'shift', src, ctype, m_mgr);
-  execute format('update public.profiles set role = %L, department_ids = array[%L]::%s where id::text = %L',
-                 'shift', dst, ctype, e_mgr);
+  if e_mgr is not null then
+    execute format('update public.profiles set role = %L, department_ids = array[%L]::%s where id::text = %L',
+                   'shift', dst, ctype, e_mgr);
+  end if;
 end $$;
 
 /* النتيجة: القسمان، مسؤولاهما، وعدد ما في كل منهما */
