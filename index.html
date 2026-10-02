@@ -8600,6 +8600,10 @@ async function renderSalesView(){
         <div style="color:#999; font-size:12px;">اضغط على أي قسم لعرض التحليل التفصيلي الكامل — التاريخ: ${date}</div>
       </div>
       ${cardsHtml}
+      <div class="card" style="text-align:center;">
+        <button onclick="neoAddDept()" style="width:100%;font-size:14px;padding:12px;">➕ إضافة قسم جديد</button>
+        <div style="color:#7487a0;font-size:11px;margin-top:6px;">قسم فارغ باسم تختاره — تُضاف له المواقع والموظفون والمهام كأي قسم، ويُربط بمسؤوله من لوحة المطوّر</div>
+      </div>
       <div class="card">
         <h2>🧑‍💼 تقييم المسؤولين</h2>
         ${neoManagerTabsHtml()}
@@ -8622,6 +8626,33 @@ async function renderSalesView(){
     el.innerHTML = `<div class="card" style="color:#ff7b7b;">❌ خطأ: ${err.message || JSON.stringify(err)}</div>`;
   }
 }
+
+/* ══ إضافة قسم جديد — لمدير المبيعات ══
+   معرّفات الأقسام نصّية (dept10، dept11 ...) بلا قيمة افتراضية في القاعدة،
+   فنعطي الجديد الرقم التالي. وإن لم تكن على هذا النمط تركنا القاعدة تولّده. */
+window.neoAddDept = async function(){
+  const nv = await neoPrompt('قسم جديد', 'اكتب اسم القسم الجديد', '');
+  if (nv === null) return;
+  const name = String(nv).trim();
+  if (!name){ neoNotify('الاسم لا يصلح فارغاً'); return; }
+  const rd = await supabaseClient.from('departments').select('id,name');
+  if (rd.error){ neoNotify('تعذّرت قراءة الأقسام: ' + rd.error.message); return; }
+  const all = rd.data || [];
+  if (all.some(d => String(d.name || '').trim() === name)){ neoNotify('يوجد قسم بهذا الاسم مسبقاً'); return; }
+  const nums = all.map(d => (/^dept(\d+)$/.exec(String(d.id)) || [])[1]).filter(Boolean).map(Number);
+  const row = { name };
+  if (nums.length) row.id = 'dept' + (Math.max.apply(null, nums) + 1);
+  /* select() بعد insert يُرجع الصف المُضاف فعلاً — لا نثق بغياب الخطأ وحده */
+  const up = await supabaseClient.from('departments').insert(row).select('id,name');
+  if (up.error || !up.data || !up.data.length){
+    neoNotify('رفضت القاعدة إضافة القسم' + (up.error ? ': ' + up.error.message : '')
+      + ' — غالباً صلاحيات RLS على جدول departments تمنع الإضافة. أرسل هذه الرسالة للمطوّر.');
+    return;
+  }
+  try{ if (typeof invalidateRefCache === 'function') invalidateRefCache('departments'); }catch(e){}
+  try{ neoToast('أُضيف قسم «' + name + '»', true); }catch(e){}
+  await renderSalesView();
+};
 
 function changeOverviewDate(deltaDays){
   salesSelectedDate = addDaysStr(salesSelectedDate || todayStr(), deltaDays);
