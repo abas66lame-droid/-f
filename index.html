@@ -16847,6 +16847,7 @@ async function cleanOld(){
     var ids=(old.data||[]).map(function(x){ return x.id; });
     if(ids.length){
       await SB().from('fleet_task_proofs').delete().in('trip_id',ids);
+      try{ await SB().from('fleet_gps').delete().in('trip_id',ids); }catch(e){}
       await SB().from('fleet_trips').delete().in('id',ids);
     }
   }catch(e){}
@@ -17261,6 +17262,7 @@ window.renderDriverView = async function(profile){
             +' <span style="color:#38d9b9;font-size:12px;">بحوزتك</span></h2>'
             +(v.label?'<div style="color:#8fa3b8;font-size:12px;">'+esc(v.label)+'</div>':'')
             +'<div style="color:#7487a0;font-size:11px;margin:6px 0;">منذ '+fmt(v.taken_at)+'</div>'
+            +fleetGpsLink(trip)
             +'<div style="background:rgba(56,217,185,0.10);border:1px solid rgba(56,217,185,0.28);'
             +'border-radius:11px;padding:12px;margin-top:10px;">'
             +'<div style="color:#38d9b9;font-size:13px;font-weight:800;">🔁 رحلة متكررة رقم '+rep.seq+'</div>'
@@ -17277,7 +17279,8 @@ window.renderDriverView = async function(profile){
         h+='<div class="card" style="border:1px solid rgba(56,217,185,0.35);">'
           +'<h2>'+kindLabel(v.kind)+' '+esc(v.plate)+' <span style="color:#38d9b9;font-size:12px;">بحوزتك</span></h2>'
           +(v.label?'<div style="color:#8fa3b8;font-size:12px;">'+esc(v.label)+'</div>':'')
-          +'<div style="color:#7487a0;font-size:11px;margin:6px 0;">منذ '+fmt(v.taken_at)+'</div>';
+          +'<div style="color:#7487a0;font-size:11px;margin:6px 0;">منذ '+fmt(v.taken_at)+'</div>'
+          +fleetGpsLink(trip);
         if(outT.length){
           h+='<div style="color:#ffb37a;font-size:12px;font-weight:700;margin:10px 0 5px;">مهام الاستلام</div>'
             +fleetTgLink('d',trip.id,null,'out','📷🎥 صوّر كل مهام الاستلام في تلجرام','font-size:12px;padding:10px;margin-bottom:8px;');
@@ -17547,6 +17550,7 @@ async function purgeTripAssets(tripId){
   try{
     await SB().from('fleet_task_proofs').delete().eq('trip_id',tripId);
   }catch(e){}
+  try{ await SB().from('fleet_gps').delete().eq('trip_id',tripId); }catch(e){}
 }
 
 window.fleetPurgeTrip=async function(tripId){
@@ -17594,6 +17598,89 @@ window.fleetPurgeVehicle=async function(vid){
   }catch(e){ toast('تعذّر'); }
 };
 
+/* ══ تتبّع الموقع (GPS) عبر الموقع المباشر في تلجرام ══
+   البوت يخزّن نقاط الرحلة في fleet_gps، وهنا تُستخرج منها الوقفات:
+   التحرّك ضمن ١٠ أمتار لا يُعدّ مشياً، والبقاء ضمنها أكثر من ٣ دقائق وقفة. */
+var FLEET_STOP_M = 10, FLEET_STOP_MS = 3 * 60000, FLEET_GAP_MS = 10 * 60000;
+function fleetGpsLink(trip){
+  if(!trip) return '';
+  return '<div style="margin:8px 0;">'+fleetTgLink('g',trip.id,null,null,'📍 شارك موقعك المباشر عبر تلجرام',
+    'font-size:12px;padding:10px;background:#2e5ca8;')+'</div>';
+}
+function fleetDistM(a,b){
+  var R=6371000, r=Math.PI/180, dLat=(b.lat-a.lat)*r, dLng=(b.lng-a.lng)*r;
+  var x=Math.pow(Math.sin(dLat/2),2)+Math.cos(a.lat*r)*Math.cos(b.lat*r)*Math.pow(Math.sin(dLng/2),2);
+  return 2*R*Math.asin(Math.sqrt(x));
+}
+/* pts مرتّبة زمنياً {lat,lng,at} — الوقفة: نقاط متتالية ضمن ١٠ أمتار من مركزها.
+   تنتهي عند أول نقطة أبعد (أي حين رُئي في مكان آخر)، فإن كان بينهما انقطاع طويل
+   تُعلَّم «تقريبية». وإن كانت آخر نقاط الرحلة فهي «مستمرة حتى آخر تحديث». */
+function fleetStops(pts){
+  var out=[], i=0;
+  while(i<pts.length){
+    var c={lat:pts[i].lat,lng:pts[i].lng}, n=1, j=i+1;
+    while(j<pts.length && fleetDistM(c,pts[j])<=FLEET_STOP_M){
+      n++; c={lat:c.lat+(pts[j].lat-c.lat)/n, lng:c.lng+(pts[j].lng-c.lng)/n}; j++;
+    }
+    var from=new Date(pts[i].at).getTime();
+    var lastHere=new Date(pts[j-1].at).getTime();
+    var to=(j<pts.length)?new Date(pts[j].at).getTime():lastHere;
+    if(to-from>=FLEET_STOP_MS){
+      out.push({lat:c.lat,lng:c.lng,from:from,to:to,ms:to-from,
+        last:(j>=pts.length), approx:(j<pts.length && to-lastHere>FLEET_GAP_MS)});
+    }
+    i=j;
+  }
+  return out;
+}
+function fleetMapUrl(lat,lng){ return 'https://www.google.com/maps?q='+lat.toFixed(6)+','+lng.toFixed(6); }
+function fleetDur(ms){
+  var m=Math.round(ms/60000); if(m<60) return m+' د';
+  return Math.floor(m/60)+' س '+(m%60)+' د';
+}
+async function fleetLoadGps(tripId){
+  var all=[], from=0, PAGE=1000;
+  for(;;){
+    var r=await SB().from('fleet_gps').select('lat,lng,at').eq('trip_id',tripId).order('at').range(from,from+PAGE-1);
+    if(r.error) throw r.error;
+    var d=r.data||[]; all=all.concat(d);
+    if(d.length<PAGE) break;
+    from+=PAGE;
+  }
+  return all.map(function(p){ return {lat:Number(p.lat),lng:Number(p.lng),at:p.at}; });
+}
+async function fleetRenderStops(t){
+  var box=document.getElementById('ftdStops'); if(!box) return;
+  var hm=function(ms){ try{ return new Date(ms).toLocaleTimeString('ar-IQ',{hour:'numeric',minute:'2-digit'}); }catch(e){ return ''; } };
+  var pts;
+  try{ pts=await fleetLoadGps(t.id); }
+  catch(e){ box.innerHTML='<span style="color:#e8a0a4;">تعذّر تحميل الموقع: '+esc(e.message||'')+'</span>'; return; }
+  var h='<div style="color:#8fb8d8;font-size:12px;font-weight:700;margin-bottom:6px;">📍 الوقفات (أكثر من ٣ دقائق)</div>';
+  if(!pts.length){
+    box.innerHTML=h+'<div style="color:#5d6d80;font-size:11px;">لا توجد بيانات موقع — السائق لم يشارك موقعه المباشر في هذه الرحلة.</div>';
+    return;
+  }
+  var stops=fleetStops(pts);
+  if(!stops.length) h+='<div style="color:#38d9b9;font-size:12px;">✓ لا وقفات تتجاوز ٣ دقائق</div>';
+  stops.forEach(function(s,k){
+    h+='<div style="padding:9px;margin-bottom:6px;border-radius:10px;background:rgba(255,179,122,0.08);'
+      +'display:flex;align-items:center;gap:8px;">'
+      +'<div style="flex:1;">'
+      +'<div style="color:#c8d4e2;font-size:12px;">⏸ وقفة '+(k+1)+' — <b style="color:#ffb37a;">'+fleetDur(s.ms)+'</b></div>'
+      +'<div style="color:#7487a0;font-size:11px;margin-top:2px;">'+hm(s.from)+' ← '
+      +(s.last?(t.in_at?hm(s.to):'مستمرة حتى آخر تحديث '+hm(s.to)):hm(s.to))
+      +(s.approx?' · <span style="color:#d3a04f;">تقريبية (انقطع الموقع)</span>':'')+'</div></div>'
+      +'<a href="'+fleetMapUrl(s.lat,s.lng)+'" target="_blank" rel="noopener" '
+      +'style="text-decoration:none;background:#2e5ca8;color:#fff;border-radius:9px;padding:8px 10px;font-size:12px;white-space:nowrap;">📍 الموقع</a>'
+      +'</div>';
+  });
+  var lp=pts[pts.length-1];
+  h+='<div style="margin-top:6px;font-size:11px;color:#7487a0;">'+pts.length+' نقطة موقع · آخرها '+hm(new Date(lp.at).getTime())
+    +' — <a href="'+fleetMapUrl(lp.lat,lp.lng)+'" target="_blank" rel="noopener" style="color:#8fb8d8;">'
+    +(t.in_at?'آخر موقع':'موقعه الآن')+'</a></div>';
+  box.innerHTML=h;
+}
+
 window.fleetTripDetail=async function(tripId){
   try{
     var tr=await SB().from('fleet_trips').select('*').eq('id',tripId).maybeSingle();
@@ -17640,9 +17727,12 @@ window.fleetTripDetail=async function(tripId){
     h+=block('مهام التسليم','#8fb8d8',tk.filter(function(x){return x.phase==='in';}),ic);
     if(t.note) h+='<div style="color:#ffb37a;font-size:12px;margin-top:12px;">📝 '+esc(t.note)+'</div>';
     if(t.reject_note) h+='<div style="color:#e8a0a4;font-size:12px;margin-top:6px;">⚠️ '+esc(t.reject_note)+'</div>';
+    var canGps=['fleet','sales','dev'].indexOf((window.__fleetProfile||{}).role)>-1;
+    if(canGps) h+='<div id="ftdStops" style="margin-top:14px;color:#7487a0;font-size:12px;">📍 جاري تحميل الوقفات...</div>';
     h+='</div>';
     o.innerHTML=h;
     document.body.appendChild(o);
+    if(canGps) fleetRenderStops(t);
   }catch(e){ toast('تعذّر فتح التفاصيل'); }
 };
 

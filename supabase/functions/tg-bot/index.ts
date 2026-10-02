@@ -223,6 +223,71 @@ async function sendTrip(chat: number, who: any, tripId: number) {
   });
 }
 
+/* ══ تتبّع الموقع المباشر للسائق ══
+   السائق يفتح البوت من زرّ «📍 شارك موقعك المباشر» في رحلته، ثم يشارك «موقعي المباشر»
+   في المحادثة. تلجرام يرسل التحديثات (edited_message) حتى والشاشة مطفأة، والبوت يخزّن
+   نقطة لكل تحرّك يتجاوز ١٠ أمتار، ونقطةً كل دقيقة إن بقي في مكانه — فتُحسب الوقفات
+   في التطبيق من هذه النقاط. */
+const GPS_MOVE_M = 10;
+const GPS_STILL_MS = 60000;
+function distM(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
+  const R = 6371000, rad = Math.PI / 180;
+  const dLat = (b.lat - a.lat) * rad, dLng = (b.lng - a.lng) * rad;
+  const x = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(x));
+}
+
+async function openTripOf(driverId: string, prefer?: number | null) {
+  if (prefer) {
+    const t = await one(`fleet_trips?id=eq.${prefer}&select=id,driver_id,in_at`);
+    if (t && !t.in_at && String(t.driver_id) === String(driverId)) return t;
+  }
+  return await one(`fleet_trips?driver_id=eq.${encodeURIComponent(driverId)}&in_at=is.null&select=id,driver_id,in_at&order=out_at.desc&limit=1`);
+}
+
+async function startGps(chat: number, who: any, tk: any) {
+  const trip = await openTripOf(String(who.id), tk.trip_id);
+  if (!trip) return say(chat, "لا توجد رحلة مفتوحة باسمك — استلم المركبة في التطبيق أولاً.");
+  const st = await getState(chat);
+  await setState(chat, { ...st, who, gps_trip: trip.id });
+  return say(chat,
+    `📍 تتبّع الرحلة\n\nشارك موقعك المباشر الآن:\n` +
+    `١) اضغط 📎 (المرفقات) أسفل المحادثة\n٢) اختر «الموقع» (Location)\n` +
+    `٣) اضغط «مشاركة موقعي المباشر» (Share My Live Location)\n٤) اختر أطول مدة (٨ ساعات)\n\n` +
+    `يمكنك بعدها إطفاء الشاشة أو فتح تطبيقات أخرى — التتبع يستمر حتى تسلّم المركبة.`);
+}
+
+async function gotLocation(chat: number, st: any, m: any, edited: boolean) {
+  const who = st.who;
+  if (!who) {
+    if (!edited) await say(chat, "افتح البوت من زرّ «📍 شارك موقعك المباشر» في رحلتك بالتطبيق أولاً.");
+    return;
+  }
+  const trip = await openTripOf(String(who.id), st.gps_trip);
+  if (!trip) {
+    if (!edited) await say(chat, "لا توجد رحلة مفتوحة باسمك — الموقع لم يُسجَّل.");
+    return;
+  }
+  const loc = m.location;
+  const pt = { lat: Number(loc.latitude), lng: Number(loc.longitude) };
+  const at = new Date(((edited && m.edit_date) || m.date) * 1000);
+  /* لا نخزّن كل اهتزازة: نقطة عند تحرّك فعلي، وإلا واحدة كل دقيقة */
+  const last = await one(`fleet_gps?trip_id=eq.${trip.id}&select=lat,lng,at&order=at.desc&limit=1`);
+  const keep = !last || distM(last, pt) > GPS_MOVE_M || at.getTime() - new Date(last.at).getTime() >= GPS_STILL_MS;
+  if (keep) {
+    await db("fleet_gps", {
+      method: "POST",
+      body: JSON.stringify({
+        trip_id: trip.id, driver_id: String(who.id), lat: pt.lat, lng: pt.lng,
+        acc: loc.horizontal_accuracy ?? null, at: at.toISOString(),
+      }),
+    }, "return=minimal");
+  }
+  if (edited) return;
+  if (loc.live_period) return say(chat, "✓ بدأ تتبّع رحلتك. يستمر حتى والشاشة مطفأة — لا توقف المشاركة حتى تسلّم المركبة.");
+  return say(chat, "سُجّل هذا الموقع مرة واحدة فقط.\nللتتبع المستمر شارك «موقعي المباشر» (Live Location) لا الموقع الحالي.");
+}
+
 /* ══ الرسائل ══ */
 async function onMessage(m: any) {
   const chat = m.chat?.id;
@@ -250,10 +315,12 @@ async function onMessage(m: any) {
       await setState(chat, { who });
       return sendTrip(chat, who, tk.trip_id);
     }
+    if (tk.action === "g") return startGps(chat, who, tk);
     return startPhotos(chat, who, tk);
   }
 
   const st = await getState(chat);
+  if (m.location) return gotLocation(chat, st, m, false);
   const album = m.media_group_id ? String(m.media_group_id) : undefined;
   if (m.photo && m.photo.length) return gotPhoto(chat, st, "tg:" + m.photo[m.photo.length - 1].file_id, album);
   if (m.video) return gotPhoto(chat, st, "tgv:" + m.video.file_id, album);
@@ -310,7 +377,7 @@ Deno.serve(async (req) => {
     if (url.searchParams.get("setup") === "1") {
       if (!TOKEN) return Response.json({ ok: false, error: "BOT_TOKEN غير مضبوط في Secrets" });
       const hook = await tg("setWebhook", {
-        url: FN_URL, secret_token: SECRET, allowed_updates: ["message", "callback_query"],
+        url: FN_URL, secret_token: SECRET, allowed_updates: ["message", "edited_message", "callback_query"],
         drop_pending_updates: true,
         /* رسالة واحدة في كل مرة: عناصر الألبوم تصل متتابعة فلا تتسابق على حالة السائق */
         max_connections: 1,
@@ -332,6 +399,11 @@ Deno.serve(async (req) => {
   try {
     const u = await req.json();
     if (u.message) await onMessage(u.message);
+    else if (u.edited_message?.location && u.edited_message.chat?.type === "private") {
+      /* تحديثات الموقع المباشر — تُخزَّن بصمت */
+      const em = u.edited_message;
+      await gotLocation(em.chat.id, await getState(em.chat.id), em, true);
+    }
     else if (u.callback_query) await onCallback(u.callback_query);
   } catch (e) {
     console.error(e);
