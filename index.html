@@ -17255,6 +17255,14 @@ window.renderDriverView = async function(profile){
         };
         /* رحلة متكررة؟ نفس اليوم والمركبة والحساب بعد رحلة أولى مكتملة —
            لا مهام، تسليم مباشر */
+        /* الموقع المباشر شرطٌ قبل أي شيء: لا مهام ولا إرجاع حتى يصل أول موقع */
+        if(trip && (await fleetTripHasGps(trip.id))===false){
+          h+='<div class="card" style="border:1px solid rgba(122,167,255,0.45);">'
+            +'<h2>'+kindLabel(v.kind)+' '+esc(v.plate)+' <span style="color:#38d9b9;font-size:12px;">بحوزتك</span></h2>'
+            +'<div style="color:#7487a0;font-size:11px;margin:6px 0;">منذ '+fmt(v.taken_at)+'</div>'
+            +fleetGpsGate(trip)+'</div>';
+          continue;
+        }
         var rep = trip ? await fleetRepeatAnchor(v.id, uid) : null;
         if(rep){
           h+='<div class="card" style="border:1px solid rgba(56,217,185,0.45);">'
@@ -17262,7 +17270,7 @@ window.renderDriverView = async function(profile){
             +' <span style="color:#38d9b9;font-size:12px;">بحوزتك</span></h2>'
             +(v.label?'<div style="color:#8fa3b8;font-size:12px;">'+esc(v.label)+'</div>':'')
             +'<div style="color:#7487a0;font-size:11px;margin:6px 0;">منذ '+fmt(v.taken_at)+'</div>'
-            +fleetGpsLink(trip)
+            +FLEET_GPS_ON
             +'<div style="background:rgba(56,217,185,0.10);border:1px solid rgba(56,217,185,0.28);'
             +'border-radius:11px;padding:12px;margin-top:10px;">'
             +'<div style="color:#38d9b9;font-size:13px;font-weight:800;">🔁 رحلة متكررة رقم '+rep.seq+'</div>'
@@ -17280,7 +17288,7 @@ window.renderDriverView = async function(profile){
           +'<h2>'+kindLabel(v.kind)+' '+esc(v.plate)+' <span style="color:#38d9b9;font-size:12px;">بحوزتك</span></h2>'
           +(v.label?'<div style="color:#8fa3b8;font-size:12px;">'+esc(v.label)+'</div>':'')
           +'<div style="color:#7487a0;font-size:11px;margin:6px 0;">منذ '+fmt(v.taken_at)+'</div>'
-          +fleetGpsLink(trip);
+          +FLEET_GPS_ON;
         if(outT.length){
           h+='<div style="color:#ffb37a;font-size:12px;font-weight:700;margin:10px 0 5px;">مهام الاستلام</div>'
             +fleetTgLink('d',trip.id,null,'out','📷🎥 صوّر كل مهام الاستلام في تلجرام','font-size:12px;padding:10px;margin-bottom:8px;');
@@ -17602,10 +17610,26 @@ window.fleetPurgeVehicle=async function(vid){
    البوت يخزّن نقاط الرحلة في fleet_gps، وهنا تُستخرج منها الوقفات:
    التحرّك ضمن ١٠ أمتار لا يُعدّ مشياً، والبقاء ضمنها أكثر من ٣ دقائق وقفة. */
 var FLEET_STOP_M = 10, FLEET_STOP_MS = 3 * 60000, FLEET_GAP_MS = 10 * 60000;
-function fleetGpsLink(trip){
-  if(!trip) return '';
-  return '<div style="margin:8px 0;">'+fleetTgLink('g',trip.id,null,null,'📍 شارك موقعك المباشر عبر تلجرام',
-    'font-size:12px;padding:10px;background:#2e5ca8;')+'</div>';
+var FLEET_GPS_ON='<div style="color:#38d9b9;font-size:11px;margin:4px 0;">📍 موقعك المباشر مُفعّل — يتوقف تسجيله عند الإرجاع</div>';
+/* هل وصل أي موقع لهذه الرحلة؟ البوت لا يخزّن إلا الموقع المباشر، فوجود نقطة = التتبع شغّال.
+   null عند تعذّر القراءة — فلا نحبس السائق بسبب خلل شبكة */
+async function fleetTripHasGps(tripId){
+  try{
+    var r=await SB().from('fleet_gps').select('id').eq('trip_id',tripId).limit(1);
+    if(r.error) return null;
+    return (r.data||[]).length>0;
+  }catch(e){ return null; }
+}
+function fleetGpsGate(trip){
+  return '<div style="background:rgba(46,92,168,0.15);border:1px solid rgba(122,167,255,0.45);'
+    +'border-radius:11px;padding:12px;margin-top:10px;">'
+    +'<div style="color:#8fd0f0;font-size:14px;font-weight:800;">📍 أولاً: شارك موقعك المباشر</div>'
+    +'<div style="color:#a9b8c9;font-size:12px;line-height:1.9;margin:6px 0 10px;">'
+    +'لن تظهر مهام الاستلام حتى يصل موقعك.<br>'
+    +'افتح البوت ← اضغط 📎 ← «الموقع» ← «مشاركة موقعي المباشر» ← ٨ ساعات، ثم ارجع هنا.</div>'
+    +fleetTgLink('g',trip.id,null,null,'📍 فتح البوت ومشاركة الموقع','font-size:13px;padding:12px;background:#2e5ca8;')
+    +'<button class="secondary" style="width:100%;margin-top:8px;font-size:12px;padding:10px;" '
+    +'onclick="window.renderDriverView&&renderDriverView(window.__fleetProfile)">↻ شاركت موقعي — تحقّق</button></div>';
 }
 function fleetDistM(a,b){
   var R=6371000, r=Math.PI/180, dLat=(b.lat-a.lat)*r, dLng=(b.lng-a.lng)*r;

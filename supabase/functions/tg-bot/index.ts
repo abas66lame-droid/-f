@@ -254,7 +254,7 @@ async function startGps(chat: number, who: any, tk: any) {
     `📍 تتبّع الرحلة\n\nشارك موقعك المباشر الآن:\n` +
     `١) اضغط 📎 (المرفقات) أسفل المحادثة\n٢) اختر «الموقع» (Location)\n` +
     `٣) اضغط «مشاركة موقعي المباشر» (Share My Live Location)\n٤) اختر أطول مدة (٨ ساعات)\n\n` +
-    `يمكنك بعدها إطفاء الشاشة أو فتح تطبيقات أخرى — التتبع يستمر حتى تسلّم المركبة.`);
+    `بعدها ارجع للتطبيق — ستظهر مهام الاستلام. التتبع يستمر حتى والشاشة مطفأة، وينتهي عند إرجاع المركبة.`);
 }
 
 async function gotLocation(chat: number, st: any, m: any, edited: boolean) {
@@ -263,12 +263,24 @@ async function gotLocation(chat: number, st: any, m: any, edited: boolean) {
     if (!edited) await say(chat, "افتح البوت من زرّ «📍 شارك موقعك المباشر» في رحلتك بالتطبيق أولاً.");
     return;
   }
+  const loc = m.location;
+  /* الموقع الثابت (مرة واحدة) لا يُعدّ تتبّعاً — التطبيق يفتح المهام عند أول نقطة مخزّنة */
+  if (!edited && !loc.live_period) {
+    return say(chat, "هذا موقعك الحالي فقط — المطلوب «الموقع المباشر».\n" +
+      "اضغط 📎 ← «الموقع» ← «مشاركة موقعي المباشر» (Share My Live Location) ← ٨ ساعات.");
+  }
   const trip = await openTripOf(String(who.id), st.gps_trip);
   if (!trip) {
+    /* انتهت الرحلة (سُلّمت المركبة): يتوقف التسجيل، ونطلب من السائق إيقاف المشاركة مرة واحدة */
+    if (st.gps_trip) {
+      await setState(chat, { ...st, gps_trip: null });
+      return say(chat, "✓ انتهت رحلتك وتوقّف تسجيل موقعك.\n" +
+        "أوقف مشاركة الموقع الآن: اضغط على رسالة «الموقع المباشر» في المحادثة ← «إيقاف المشاركة» (Stop Sharing).");
+    }
     if (!edited) await say(chat, "لا توجد رحلة مفتوحة باسمك — الموقع لم يُسجَّل.");
     return;
   }
-  const loc = m.location;
+  if (String(st.gps_trip) !== String(trip.id)) await setState(chat, { ...st, gps_trip: trip.id });
   const pt = { lat: Number(loc.latitude), lng: Number(loc.longitude) };
   const at = new Date(((edited && m.edit_date) || m.date) * 1000);
   /* لا نخزّن كل اهتزازة: نقطة عند تحرّك فعلي، وإلا واحدة كل دقيقة */
@@ -284,8 +296,8 @@ async function gotLocation(chat: number, st: any, m: any, edited: boolean) {
     }, "return=minimal");
   }
   if (edited) return;
-  if (loc.live_period) return say(chat, "✓ بدأ تتبّع رحلتك. يستمر حتى والشاشة مطفأة — لا توقف المشاركة حتى تسلّم المركبة.");
-  return say(chat, "سُجّل هذا الموقع مرة واحدة فقط.\nللتتبع المستمر شارك «موقعي المباشر» (Live Location) لا الموقع الحالي.");
+  return say(chat, "✓ بدأ تتبّع رحلتك — ارجع للتطبيق، ستظهر مهام الاستلام.\n" +
+    "يستمر حتى والشاشة مطفأة، وينتهي تلقائياً عند إرجاع المركبة.");
 }
 
 /* ══ الرسائل ══ */
