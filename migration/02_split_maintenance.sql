@@ -10,29 +10,103 @@
 -- كله في عملية واحدة: إن فشلت خطوة لم يتغيّر شيء أبداً.
 -- ══════════════════════════════════════════════════════════════════════
 
-/* يولّد معرّفاً جديداً لصف في جدول، بنفس طريقة الجدول نفسه */
-create or replace function pg_temp.neo_newid(tbl text) returns text language plpgsql as $f$
-declare e text;
+/* معرّف جديد لصف: بطريقة الجدول نفسه، وإلا على نمط المعرّف القديم (dept10 ← dept11) */
+create or replace function pg_temp.neo_newid(tbl text, old text) returns text language plpgsql as $f$
+declare e text; typ text; pre text; nxt bigint;
 begin
   select pg_get_expr(d.adbin, d.adrelid) into e
     from pg_attribute a join pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum
    where a.attrelid = ('public.' || tbl)::regclass and a.attname = 'id';
-  if e is null then
-    select case when a.attidentity <> '' then format('nextval(%L)', pg_get_serial_sequence('public.' || tbl, 'id'))
-                when format_type(a.atttypid, null) = 'uuid' then 'gen_random_uuid()' end
-      into e from pg_attribute a where a.attrelid = ('public.' || tbl)::regclass and a.attname = 'id';
+  select format_type(a.atttypid, null),
+         case when a.attidentity <> '' then pg_get_serial_sequence('public.' || tbl, 'id') end
+    into typ, pre from pg_attribute a where a.attrelid = ('public.' || tbl)::regclass and a.attname = 'id';
+  if e is null and pre is not null then e := format('nextval(%L)', pre); end if;
+  if e is null and typ = 'uuid' then e := 'gen_random_uuid()'; end if;
+  if e is not null then
+    execute 'select (' || e || ')::text' into e;
+    return e;
   end if;
-  if e is null then raise exception 'لا أعرف كيف أولّد معرّفاً لجدول %', tbl; end if;
-  execute 'select (' || e || ')::text' into e;
-  return e;
+  /* نصّ بلا قيمة افتراضية: نفس البادئة ورقم أكبر من كل ما هو موجود */
+  pre := coalesce(substring(old from '^(.*?)\d+$'), old || '_');
+  execute format('select coalesce(max(substring(id::text from %L)::bigint), 0) + 1 from public.%I where id::text ~ %L',
+                 '^' || pre || '(\d+)$', tbl, '^' || pre || '\d+$') into nxt;
+  select greatest(nxt, coalesce(max(substring(new from '^' || pre || '(\d+)$')::bigint), 0) + 1)
+    into nxt from neo_map where neo_map.tbl = neo_newid.tbl and new ~ ('^' || pre || '\d+$');
+  return pre || nxt;
 end $f$;
 
-/* يبدّل كل معرّف قديم بمعرّفه الجديد داخل الصف كله (الأعمدة والإعدادات المخزّنة نصّاً) */
-create or replace function pg_temp.neo_remap(t text) returns text language plpgsql as $f$
-declare m record;
+/* أي جدول يشير إليه هذا العمود (department_id ← الأقسام ...) — المعرّفات الرقمية تتكرر بين الجداول */
+create or replace function pg_temp.neo_fk(k text, own text) returns text language sql immutable as $f$
+  select case k
+    when 'id' then own when 'order_json' then own
+    when 'department_id' then 'departments' when 'dept_id' then 'departments' when 'department_ids' then 'departments'
+    when 'section_id' then 'custom_sections' when 'group_id' then 'section_groups'
+    when 'location_id' then 'locations' when 'staff_id' then 'staff' when 'task_id' then 'daily_tasks'
+    when 'criterion_id' then 'staff_criteria' when 'ipad_id' then 'ipads' when 'reader_id' then 'serial_readers'
+    when 'laptop_id' then 'laptops' when 'device_id' then 'ipad_reader_devices' when 'pos_device_id' then 'pos_devices'
+    when 'row_id' then 'custom_section_rows' when 'column_id' then 'custom_section_columns' end
+$f$;
+
+/* المعرّف الجديد: من جدوله إن عُرف، وإلا فقط إن كان المعرّف القديم لا يتكرر بين الجداول */
+create or replace function pg_temp.neo_look(tb text, o text) returns text language plpgsql as $f$
+declare nv text;
 begin
-  for m in select old, new from neo_map loop t := replace(t, m.old, m.new); end loop;
-  return t;
+  if tb is not null then
+    select new into nv from neo_map where tbl = tb and old = o;
+  else
+    select max(new) into nv from neo_map where old = o having count(*) = 1;
+  end if;
+  return nv;
+end $f$;
+
+/* تبديل المعرّفات داخل نصّ (علامات الإعدادات مثل ⟦off⟧<معرّف>) — جولة واحدة لا تتسلسل */
+create or replace function pg_temp.neo_tok(s text) returns text language plpgsql as $f$
+declare out text := ''; p record; nv text; prev text; sep text;
+begin
+  for p in select m[1] as piece from regexp_matches(s, '([A-Za-z0-9-]+|[^A-Za-z0-9-]+)', 'g') as m loop
+    if p.piece ~ '^[A-Za-z0-9-]+$' then
+      /* «locations:12» — اسم الجدول قبل النقطتين يحدّد صاحب المعرّف */
+      nv := case when sep = ':' and prev in (select distinct tbl from neo_map) then pg_temp.neo_look(prev, p.piece)
+                 when sep = '_' and prev = 'extra' then pg_temp.neo_look('staff_criteria', p.piece)
+                 else pg_temp.neo_look(null, p.piece) end;
+      prev := p.piece;
+    else
+      nv := null; sep := p.piece;
+    end if;
+    out := out || coalesce(nv, p.piece);
+  end loop;
+  return out;
+end $f$;
+
+/* تبديل المعرّفات داخل صف كامل (JSON) — own: جدول الصف نفسه */
+create or replace function pg_temp.neo_rj(v jsonb, k text, own text, numeric_ids boolean) returns jsonb language plpgsql as $f$
+declare t text := jsonb_typeof(v); res jsonb; e record; s text; nv text; tb text := pg_temp.neo_fk(k, own);
+begin
+  if t = 'object' then
+    res := '{}'::jsonb;
+    for e in select * from jsonb_each(v) loop
+      s := e.key;
+      if not numeric_ids or s ~ '^[A-Za-z0-9_:|=,.⟦⟧-]*$' then s := pg_temp.neo_tok(s); end if;
+      res := res || jsonb_build_object(s, pg_temp.neo_rj(e.value, e.key, own, numeric_ids));
+    end loop;
+    return res;
+  elsif t = 'array' then
+    select coalesce(jsonb_agg(pg_temp.neo_rj(x, k, own, numeric_ids) order by o), '[]'::jsonb)
+      into res from jsonb_array_elements(v) with ordinality a(x, o);
+    return res;
+  elsif t = 'string' then
+    s := v #>> '{}';
+    nv := pg_temp.neo_look(tb, s);
+    if nv is not null then return to_jsonb(nv); end if;
+    if tb is not null then return v; end if;
+    /* معرّفات رقمية: لا نلمس نصوص البشر (مثل «مولدة 5») — فقط العلامات والمفاتيح */
+    if not numeric_ids or s like '⟦%' or s ~ '^[A-Za-z0-9_:|=,.-]*$' then return to_jsonb(pg_temp.neo_tok(s)); end if;
+    return v;
+  elsif t = 'number' and tb is not null then
+    nv := pg_temp.neo_look(tb, v #>> '{}');
+    if nv is not null then return to_jsonb(nv::numeric); end if;
+  end if;
+  return v;
 end $f$;
 
 do $$
@@ -45,9 +119,8 @@ declare
   tbls text[] := array['locations','staff_criteria','point_criteria','staff','daily_tasks','ipads',
     'serial_readers','laptops','ipad_reader_devices','pos_devices','section_groups','custom_sections',
     'custom_section_columns','custom_section_rows','custom_fields'];
-  uuid_re text := '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';
-  src text; dst text; n int; tbl text; cond text; r record; j text; ctype text; pass int;
-  e_dept text;   -- قسم مسائي موجود مسبقاً (فارغ) يُنسخ إليه بدل إنشاء قسم جديد
+  src text; dst text; n int; tbl text; cond text; r record; j jsonb; ctype text; pass int;
+  e_dept text; num boolean;
 begin
   if not exists (select 1 from public.profiles where id::text = m_mgr) then
     raise exception 'لم يُعثر على مسؤول الصباحي بالمعرّف %', m_mgr; end if;
@@ -85,63 +158,74 @@ begin
   end if;
   if src is null then
     raise exception 'لم أحدّد قسم الصيانة: يوجد % قسم في اسمه «صيان»، ومسؤول الصباحي غير مربوط بأحدها', n; end if;
-  if src !~ uuid_re then
-    raise exception 'معرّفات الأقسام ليست UUID (%) — أخبر Claude', src; end if;
 
-  create temp table neo_map (old text primary key, new text) on commit drop;
+  create temp table neo_map (tbl text, old text, new text, primary key (tbl, old)) on commit drop;
 
-  /* القسم المسائي: الموجود الفارغ، أو نسخة جديدة من صف القسم نفسه */
+  /* الجولة ١: معرّف جديد للقسم ولكل صف */
+  if e_dept is not null then dst := e_dept; else dst := pg_temp.neo_newid('departments', src); end if;
+  insert into neo_map values ('departments', src, dst);
+  foreach tbl in array tbls loop
+    continue when to_regclass('public.' || tbl) is null;
+    cond := case
+      when tbl in ('custom_section_columns','custom_section_rows') then
+        format('section_id::text in (select id::text from public.custom_sections where department_id::text = %L)', src)
+      when tbl = 'custom_fields' then
+        /* الإجازات و«ليس في الشفت» سجلات يومية — لا تُنسخ */
+        format('department_id::text = %L and name not like %L and name not like %L', src, '⟦leave⟧%', '⟦ns:%')
+      else format('department_id::text = %L', src) end;
+    for r in execute format('select id::text as id from public.%I where %s order by 1', tbl, cond) loop
+      insert into neo_map values (tbl, r.id, pg_temp.neo_newid(tbl, r.id));
+    end loop;
+  end loop;
+  num := exists (select 1 from neo_map where old ~ '^\d+$');
+  /* مفاتيح الأعمدة المختصرة x_<أول ١٢ حرفاً من المعرّف بلا شرطات> */
+  insert into neo_map
+    select m.tbl || ':short', left(replace(m.old, '-', ''), 12), left(replace(m.new, '-', ''), 12)
+      from neo_map m where m.old ~ '^[0-9a-f]{8}-[0-9a-f]{4}-' and m.new ~ '^[0-9a-f]{8}-[0-9a-f]{4}-'
+    on conflict do nothing;
+
+  /* القسم المسائي: الموجود الفارغ، أو نسخة من صف القسم نفسه */
   if e_dept is not null then
-    dst := e_dept;
-    insert into neo_map values (src, dst);
     update public.departments set name = e_name where id::text = dst;
   else
-    dst := pg_temp.neo_newid('departments');
-    insert into neo_map values (src, dst);
-    select to_jsonb(d)::text into j from public.departments d where id::text = src;
-    j := (pg_temp.neo_remap(j)::jsonb || jsonb_build_object('name', e_name))::text;
+    select pg_temp.neo_rj(to_jsonb(d), '', 'departments', num) || jsonb_build_object('name', e_name) into j
+      from public.departments d where id::text = src;
     execute 'insert into public.departments overriding system value
-             select * from jsonb_populate_record(null::public.departments, $1::jsonb)' using j;
+             select * from jsonb_populate_record(null::public.departments, $1)' using j;
   end if;
   update public.departments set name = m_name where id::text = src;
 
-  /* الجولة ١: معرّف جديد لكل صف · الجولة ٢: النسخ مع تبديل كل المعرّفات */
-  for pass in 1..2 loop
-    foreach tbl in array tbls loop
-      continue when to_regclass('public.' || tbl) is null;
-      cond := case
-        when tbl in ('custom_section_columns','custom_section_rows') then
-          format('section_id::text in (select id::text from public.custom_sections where department_id::text = %L)', src)
-        when tbl = 'custom_fields' then
-          /* الإجازات و«ليس في الشفت» سجلات يومية — لا تُنسخ */
-          format('department_id::text = %L and name not like %L and name not like %L', src, '⟦leave⟧%', '⟦ns:%')
-        else format('department_id::text = %L', src) end;
-      if pass = 1 then
-        for r in execute format('select id::text as id from public.%I where %s', tbl, cond) loop
-          if r.id !~ uuid_re then raise exception 'معرّفات جدول % ليست UUID — أخبر Claude', tbl; end if;
-          insert into neo_map values (r.id, pg_temp.neo_newid(tbl));
-        end loop;
-      else
-        for r in execute format('select to_jsonb(t)::text as j from public.%I t where %s', tbl, cond) loop
-          execute format('insert into public.%I overriding system value
-                          select * from jsonb_populate_record(null::public.%I, $1::jsonb)', tbl, tbl)
-            using pg_temp.neo_remap(r.j);
-        end loop;
-      end if;
+  /* الجولة ٢: النسخ مع تبديل كل المعرّفات */
+  foreach tbl in array tbls loop
+    continue when to_regclass('public.' || tbl) is null;
+    cond := case
+      when tbl in ('custom_section_columns','custom_section_rows') then
+        format('section_id::text in (select id::text from public.custom_sections where department_id::text = %L)', src)
+      when tbl = 'custom_fields' then
+        format('department_id::text = %L and name not like %L and name not like %L', src, '⟦leave⟧%', '⟦ns:%')
+      else format('department_id::text = %L', src) end;
+    for r in execute format('select to_jsonb(t) as j from public.%I t where %s', tbl, cond) loop
+      execute format('insert into public.%I overriding system value
+                      select * from jsonb_populate_record(null::public.%I, $1)', tbl, tbl)
+        using pg_temp.neo_rj(r.j, '', tbl, num);
     end loop;
   end loop;
 
   /* ترتيب العرض لكل مستخدم — ومسؤول المسائي يرث ترتيب مسؤول الصباحي */
   if to_regclass('public.user_prefs') is not null then
     for r in select to_jsonb(u) as j from public.user_prefs u where dept_id::text = src loop
-      j := pg_temp.neo_remap(r.j::text);
-      if r.j ? 'id' then j := (j::jsonb || jsonb_build_object('id', pg_temp.neo_newid('user_prefs')))::text; end if;
-      execute 'insert into public.user_prefs select * from jsonb_populate_record(null::public.user_prefs, $1::jsonb)
+      /* ترتيب كل نوع يشير إلى جدوله */
+      j := pg_temp.neo_rj(r.j, '', case r.j->>'scope'
+             when 'loc' then 'locations' when 'staff' then 'staff' when 'tasks' then 'daily_tasks'
+             when 'ipad' then 'ipads' when 'reader' then 'serial_readers' when 'ipadreader' then 'ipad_reader_devices'
+             when 'laptop' then 'laptops' when 'pos' then 'pos_devices' end, num);
+      if r.j ? 'id' then j := j || jsonb_build_object('id', pg_temp.neo_newid('user_prefs', r.j->>'id')); end if;
+      execute 'insert into public.user_prefs select * from jsonb_populate_record(null::public.user_prefs, $1)
                on conflict do nothing' using j;
       if r.j->>'user_id' = m_mgr and e_mgr is not null then
-        j := (j::jsonb || jsonb_build_object('user_id', e_mgr)
-              || case when r.j ? 'id' then jsonb_build_object('id', pg_temp.neo_newid('user_prefs')) else '{}'::jsonb end)::text;
-        execute 'insert into public.user_prefs select * from jsonb_populate_record(null::public.user_prefs, $1::jsonb)
+        j := j || jsonb_build_object('user_id', e_mgr);
+        if r.j ? 'id' then j := j || jsonb_build_object('id', pg_temp.neo_newid('user_prefs', r.j->>'id')); end if;
+        execute 'insert into public.user_prefs select * from jsonb_populate_record(null::public.user_prefs, $1)
                  on conflict do nothing' using j;
       end if;
     end loop;
@@ -159,9 +243,9 @@ begin
 end $$;
 
 /* النتيجة: القسمان، مسؤولاهما، وعدد ما في كل منهما */
-select d.name as "القسم",
+select d.name as "القسم", d.id::text as "المعرّف",
        (select string_agg(p.name, '، ') from public.profiles p where d.id::text = any (p.department_ids::text[])) as "المسؤول",
-       (select count(*) from public.staff s where s.department_id = d.id) as "الموظفون",
-       (select count(*) from public.locations l where l.department_id = d.id) as "المواقع",
-       (select count(*) from public.daily_tasks t where t.department_id = d.id) as "المهام"
+       (select count(*) from public.staff s where s.department_id::text = d.id::text) as "الموظفون",
+       (select count(*) from public.locations l where l.department_id::text = d.id::text) as "المواقع",
+       (select count(*) from public.daily_tasks t where t.department_id::text = d.id::text) as "المهام"
   from public.departments d where d.name like '%صيان%' order by d.name;
