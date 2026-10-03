@@ -10932,6 +10932,26 @@ function exportTableToExcel(wrapId, filename, btnEl){
 window.doLogin = doLogin;
 window.doLogout = doLogout;
 
+/* Enter في الحاسوب: ينتقل للحقل التالي في البطاقة نفسها، وفي آخر حقل يضغط زرّها الرئيسي
+   (تسجيل الدخول وغيره). الحقول التي لها معالج Enter خاص بها تُترك له، والنصوص
+   الطويلة (textarea) يبقى فيها Enter سطراً جديداً، ولا يُضغط زرّ حذف أو قفل أبداً */
+document.addEventListener('keydown', function(e){
+  if(e.key!=='Enter' || e.shiftKey || e.isComposing || e.defaultPrevented) return;
+  var el=e.target;
+  if(!el || el.tagName!=='INPUT' || el.onkeydown || el.hasAttribute('onkeydown')) return;
+  if(/^(button|submit|checkbox|radio|file|range|color)$/i.test(el.type||'')) return;
+  var box=el.closest('.card') || (el.parentElement&&el.parentElement.parentElement) || document.body;
+  var vis=function(x){ return !x.disabled && x.offsetParent!==null; };
+  var all=[].slice.call(box.querySelectorAll('input,select,textarea,button')).filter(vis);
+  var i=all.indexOf(el); if(i<0) return;
+  var next=all.slice(i+1).filter(function(x){ return x.tagName!=='BUTTON' && !/^(checkbox|radio|file)$/i.test(x.type||''); })[0];
+  /* الأزرار المساعدة (secondary) بين الحقول — مثل @gmail.com — لا تُضغط */
+  var btns=all.slice(i+1).filter(function(x){ return x.tagName==='BUTTON'; });
+  var btn=btns.filter(function(x){ return !x.classList.contains('secondary'); })[0]||btns[0];
+  if(next){ e.preventDefault(); next.focus(); return; }
+  if(btn && !/حذف|قفل|أرشف|رفض|إلغاء|تسجيل الخروج/.test(btn.textContent||'')){ e.preventDefault(); btn.click(); }
+});
+
 window.toggleField = toggleField;
 
 window.updateNotes = updateNotes;
