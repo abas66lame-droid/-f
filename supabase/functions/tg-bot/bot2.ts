@@ -257,7 +257,7 @@ async function startGps(chat: number, who: any, tk: any) {
   return say(chat,
     `📍 تتبّع الرحلة\n\nشارك موقعك المباشر الآن:\n` +
     `١) اضغط 📎 (المرفقات) أسفل المحادثة\n٢) اختر «الموقع» (Location)\n` +
-    `٣) اضغط «مشاركة موقعي المباشر» (Share My Live Location)\n٤) اختر «حتى أوقفها» إن وُجدت، وإلا أطول مدة (٨ ساعات)\n\n` +
+    `٣) اضغط «مشاركة موقعي المباشر» (Share My Live Location)\n٤) اختر أطول مدة (٨ ساعات)\n\n` +
     `بعدها ارجع للتطبيق — ستظهر مهام الاستلام. التتبع يستمر حتى والشاشة مطفأة، وينتهي عند إرجاع المركبة.`);
 }
 
@@ -284,19 +284,7 @@ async function gotLocation(chat: number, st: any, m: any, edited: boolean) {
     if (!edited) await say(chat, "لا توجد رحلة مفتوحة باسمك — الموقع لم يُسجَّل.");
     return;
   }
-  /* تعديل بلا live_period = أوقف السائق المشاركة والرحلة ما زالت مفتوحة */
-  if (edited && !loc.live_period) {
-    await setState(chat, { ...st, gps_trip: trip.id, gps_alert: true });
-    await openAlert(trip.id, who, "stop", new Date().toISOString());
-    return gpsWarn(chat, "stop", Date.now(), 1);
-  }
-  if (String(st.gps_trip) !== String(trip.id) || st.gps_alert) {
-    if (st.gps_alert) {
-      await closeAlerts(trip.id);
-      await say(chat, "✓ عاد تتبّع موقعك — شكراً. أكمل رحلتك.");
-    }
-    await setState(chat, { ...st, gps_trip: trip.id, gps_alert: false });
-  }
+  if (String(st.gps_trip) !== String(trip.id)) await setState(chat, { ...st, gps_trip: trip.id });
   const pt = { lat: Number(loc.latitude), lng: Number(loc.longitude) };
   const at = new Date(((edited && m.edit_date) || m.date) * 1000);
   /* لا نخزّن كل اهتزازة: نقطة عند تحرّك فعلي، وإلا واحدة كل دقيقة */
@@ -315,84 +303,6 @@ async function gotLocation(chat: number, st: any, m: any, edited: boolean) {
   if (edited) return;
   return say(chat, "✓ بدأ تتبّع رحلتك — ارجع للتطبيق، ستظهر مهام الاستلام.\n" +
     "يستمر حتى والشاشة مطفأة، وينتهي تلقائياً عند إرجاع المركبة.");
-}
-
-/* ══ انقطاع الموقع — تنبيه إجباري للسائق ويُسجَّل لمسؤول التدقيق ══
-   سببان: السائق أوقف المشاركة (تلجرام يرسل تعديلاً بلا live_period)، أو توقّفت التحديثات
-   أكثر من ١٠ دقائق (انتهت المدة، أُغلق التطبيق، لا إنترنت…). الثاني لا يصل عنه شيء من
-   تلجرام، فيفحصه مؤقّت في قاعدة البيانات (pg_cron) يستدعي <رابط الدالة>?cron=gps كل دقيقتين.
-   التنبيه يتكرّر كل ٥ دقائق حتى يعود الموقع أو تُغلق الرحلة. */
-const GPS_LOST_MS = 10 * 60000;
-const GPS_REWARN_MS = 5 * 60000;
-
-async function openAlert(tripId: number, who: any, kind: string, fromAt: string) {
-  const open = await one(`fleet_gps_alerts?trip_id=eq.${tripId}&resumed_at=is.null&select=id&limit=1`);
-  if (open) return;
-  await db("fleet_gps_alerts", {
-    method: "POST",
-    body: JSON.stringify({
-      trip_id: tripId, driver_id: String(who.id), driver_name: who.name || "", kind, from_at: fromAt,
-      warns: 1, last_warn_at: new Date().toISOString(),
-    }),
-  }, "return=minimal");
-}
-async function closeAlerts(tripId: number) {
-  await db(`fleet_gps_alerts?trip_id=eq.${tripId}&resumed_at=is.null`, {
-    method: "PATCH", body: JSON.stringify({ resumed_at: new Date().toISOString() }),
-  }, "return=minimal");
-}
-function gpsWarn(chat: number, kind: string, fromMs: number, n: number) {
-  const head = kind === "stop"
-    ? "⛔ أوقفت مشاركة موقعك ورحلتك ما زالت مفتوحة!"
-    : kind === "none"
-    ? "⛔ لم تشارك موقعك المباشر في رحلتك!"
-    : `⛔ توقّف وصول موقعك منذ ${hmB(fromMs)}!`;
-  return say(chat,
-    (n > 1 ? `🔁 تنبيه رقم ${n}\n` : "") + head + "\n\n" +
-    "أعد مشاركة الموقع المباشر الآن:\n📎 ← «الموقع» ← «مشاركة موقعي المباشر» ← أطول مدة\n\n" +
-    "⚠️ يتكرّر هذا التنبيه كل ٥ دقائق حتى يعود موقعك، والانقطاع يُسجَّل لدى مسؤول التدقيق.");
-}
-async function chatOf(driverId: string) {
-  const r = await one(`tg_state?data->who->>id=eq.${encodeURIComponent(driverId)}&select=chat_id,data&order=updated_at.desc&limit=1`);
-  return r ? { chat: Number(r.chat_id), st: r.data || {} } : null;
-}
-/* يُستدعى من المؤقّت — آمن إن تكرّر: لا تنبيه قبل مرور ٥ دقائق على سابقه */
-async function gpsWatch() {
-  const trips: any[] = (await db(`fleet_trips?in_at=is.null&select=id,driver_id,driver_name,out_at`)) ?? [];
-  const now = Date.now();
-  let warned = 0;
-  for (const t of trips) {
-    try {
-      const last = await one(`fleet_gps?trip_id=eq.${t.id}&select=at&order=at.desc&limit=1`);
-      const lastMs = last ? new Date(last.at).getTime() : 0;
-      const open = await one(`fleet_gps_alerts?trip_id=eq.${t.id}&resumed_at=is.null&select=*&order=id.desc&limit=1`);
-      /* وصل موقع بعد بداية الانقطاع: انتهى */
-      if (open && lastMs && lastMs > new Date(open.from_at).getTime()) {
-        await closeAlerts(t.id);
-        const c = await chatOf(String(t.driver_id));
-        if (c && c.st.gps_alert) await setState(c.chat, { ...c.st, gps_alert: false });
-        continue;
-      }
-      const stale = now - (lastMs || new Date(t.out_at).getTime()) > GPS_LOST_MS;
-      if (!open && !stale) continue;
-      if (open && now - new Date(open.last_warn_at || 0).getTime() < GPS_REWARN_MS) continue;
-      const kind = open ? open.kind : (lastMs ? "lost" : "none");
-      const fromAt = open ? open.from_at : (last ? last.at : t.out_at);
-      const n = open ? (open.warns || 0) + 1 : 1;
-      if (open) {
-        await db(`fleet_gps_alerts?id=eq.${open.id}`, {
-          method: "PATCH", body: JSON.stringify({ warns: n, last_warn_at: new Date().toISOString() }),
-        }, "return=minimal");
-      } else await openAlert(t.id, { id: t.driver_id, name: t.driver_name }, kind, fromAt);
-      const c = await chatOf(String(t.driver_id));
-      if (c) {
-        if (!c.st.gps_alert) await setState(c.chat, { ...c.st, gps_alert: true });
-        await gpsWarn(c.chat, kind, new Date(fromAt).getTime(), n);
-      }
-      warned++;
-    } catch (e) { console.error("gpsWatch", t.id, e); }
-  }
-  return { trips: trips.length, warned };
 }
 
 /* ══ سبب الوقفة — يُسأل السائق في وقتها ══
@@ -567,10 +477,6 @@ Deno.serve(async (req) => {
   const url = new URL(req.url);
   console.log("طلب", req.method, url.search);
   if (!SECRET) SECRET = await hookSecret();
-  if (url.searchParams.get("cron") === "gps") {
-    try { return Response.json({ ok: true, ...(await gpsWatch()) }); }
-    catch (e) { console.error(e); return Response.json({ ok: false, error: String(e).slice(0, 200) }); }
-  }
   if (req.method === "GET") {
     if (url.searchParams.get("setup") === "1") {
       if (!TOKEN) return Response.json({ ok: false, error: "BOT_TOKEN غير مضبوط في Secrets" });
