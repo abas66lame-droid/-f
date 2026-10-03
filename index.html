@@ -8509,7 +8509,8 @@ window.neoCopyWeekly = function(){
 function salesTabBarHtml(active){
   const tabs = [
     { id: 'overview', icon: '📊', label: 'الأقسام' },
-    { id: 'chat', icon: '🤖', label: 'المحادثة' },
+    /* المحادثة مع الذكاء الاصطناعي مخفية مؤقتاً — لإرجاعها احذف علامتي التعليق من السطر التالي ومن سطر switchSalesTab */
+    /* { id: 'chat', icon: '🤖', label: 'المحادثة' }, */
     { id: 'leaderboard', icon: '🏆', label: 'المتصدرين' },
     { id: 'report', icon: '📊', label: 'التقرير' },
     { id: 'trend', icon: '📈', label: 'الاتجاه' },
@@ -8536,7 +8537,7 @@ function mountSalesShell(activeTab, innerHtml){
 async function switchSalesTab(tabId){
   try{ neoPlay('tab'); neoProgBar(null); }catch(e){}
   if (tabId === 'overview') await renderSalesView();
-  else if (tabId === 'chat') await renderSalesChatTab();
+  else if (tabId === 'chat') await renderSalesView(); /* مؤقتاً: كانت renderSalesChatTab() */
   else if (tabId === 'leaderboard') await renderSalesLeaderboardTab();
   else if (tabId === 'report') await renderSalesWeeklyReport();
   else if (tabId === 'trend') await renderSalesTrend();
