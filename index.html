@@ -18402,7 +18402,7 @@ async function fsRenderSheet(keepLocal){
   h+='<div class="card" style="display:flex;gap:6px;flex-wrap:wrap;">'
     +(locked?'':'<button style="flex:1;min-width:110px;font-size:13px;padding:12px;" onclick="fleetSheetSave(false)">💾 حفظ</button>'
       +'<button style="flex:1;min-width:110px;font-size:13px;padding:12px;background:#7a2f2f;" onclick="fleetSheetSave(true)">🔒 قفل نهائي</button>')
-    +'<button class="secondary" style="flex:1;min-width:110px;font-size:13px;padding:12px;" onclick="fleetSheetPrint()">🖨 طباعة</button></div>';
+    +'<button class="secondary" style="flex:1;min-width:110px;font-size:13px;padding:12px;" onclick="fleetSheetPrint()">🖨 طباعة / PDF</button></div>';
   body.innerHTML=h;
   if(!locked) body.querySelectorAll('input[data-k="fp_in"],input[data-k="fp_out"],input[data-k="br_out"],input[data-k="br_in"],input[data-k="speed_limit"],input[data-k="invoices"]')
     .forEach(function(el){ el.addEventListener('change', function(){ fsCollect(); fsRenderSheet(true); }); });
@@ -18445,6 +18445,15 @@ window.fleetSheetSave=async function(lock){
 };
 /* الطباعة من الصفحة نفسها لا من نافذة جديدة — سفاري الآيفون يحجب النوافذ
    المنبثقة وطباعتها؛ نضع نسخة الطباعة في عنصر مخفي ونُظهره وحده عند الطباعة */
+/* أزواج [عنوان، قيمة] في صفوف من زوجين — الملخص بنصف الطول فيتسع الجدول في صفحة */
+function fsPairs(list){
+  var h='';
+  for(var i=0;i<list.length;i+=2){
+    var a=list[i], b=list[i+1];
+    h+='<tr><th>'+a[0]+'</th><td>'+a[1]+'</td>'+(b?'<th>'+b[0]+'</th><td>'+b[1]+'</td>':'<th></th><td></td>')+'</tr>';
+  }
+  return h;
+}
 function fsPrintHtml(c,d){
   var T=d.trips||{};
   var e=function(x){ return esc(x==null||x===''?'—':String(x)); };
@@ -18462,45 +18471,114 @@ function fsPrintHtml(c,d){
     +'<th>مدة الرحلة (د)</th><th>البقاء بعدها (د)</th><th>ملاحظات بعد الانطلاق</th><th>اسم المجهز</th></tr>'+(rows||'<tr><td colspan="9">لا رحلات</td></tr>')+'</table>'
     +'<h3>الوقفات (أكثر من ٣ دقائق)</h3><table><tr><th>رحلة</th><th>من</th><th>إلى</th><th>المدة (د)</th><th>السبب</th></tr>'
     +(stops||'<tr><td colspan="5">لا وقفات</td></tr>')+'</table>'
-    +'<h3>البصمات وملخص الأداء</h3><table class="two">'
-    +tr('بصمة الدخول',e(d.fp_in))+tr('الفرق بين بصمة الدخول وأول طلب (د)',e(c.gapFirst)+(d.gap_first_reason?' — '+esc(d.gap_first_reason):''))
-    +tr('الاستراحة',e(d.br_out)+' ← '+e(d.br_in)+' ('+e(c.breakMin)+' د)'+(d.break_reason?' — '+esc(d.break_reason):''))
-    +tr('وقت الرجوع الأخير',c.lastIn?fsHM(c.lastIn):'—')+tr('بصمة الخروج',e(d.fp_out))
-    +tr('الفرق بين الرجوع الأخير وبصمة الخروج (د)',e(c.gapLast)+(d.gap_last_reason?' — '+esc(d.gap_last_reason):''))
-    +tr('عدد الزيارات',c.visits)+tr('عدد الفواتير',e(d.invoices))+tr('إجمالي الوقت (د)',c.total)+tr('متوسط وقت الطلب (د)',e(c.avg))
-    +tr('أطول زيارة (د)',e(c.longest))+tr('أقصر زيارة (د)',e(c.shortest))
-    +tr('تجاوز السرعة',(Number(d.speed_limit)?(c.spCount?c.spCount+' مرة':'لا يوجد')+' (الحد '+esc(d.speed_limit)+' كم/س، الأعلى '+c.spMax+')':'—'))
-    +tr('توقفات بدون سبب',c.stopsNoReason||'لا يوجد')+tr('تقييم المسار',e(d.route_rating))
-    +tr('الوقت والتوقيع على الفواتير',e(d.inv_sign))+tr('تأييد الاستلام والفحص على الفواتير',e(d.inv_check))
-    +tr('ملاحظات عامة',e(d.general_note))+'</table>'
+    +'<h3>البصمات وملخص الأداء</h3><table class="four">'+fsPairs([
+      ['بصمة الدخول',e(d.fp_in)],
+      ['الفرق بين بصمة الدخول وأول طلب (د)',e(c.gapFirst)+(d.gap_first_reason?' — '+esc(d.gap_first_reason):'')],
+      ['الاستراحة',e(d.br_out)+' ← '+e(d.br_in)+' ('+e(c.breakMin)+' د)'+(d.break_reason?' — '+esc(d.break_reason):'')],
+      ['وقت الرجوع الأخير',c.lastIn?fsHM(c.lastIn):'—'],
+      ['بصمة الخروج',e(d.fp_out)],
+      ['الفرق بين الرجوع الأخير وبصمة الخروج (د)',e(c.gapLast)+(d.gap_last_reason?' — '+esc(d.gap_last_reason):'')],
+      ['عدد الزيارات',c.visits],
+      ['عدد الفواتير',e(d.invoices)],
+      ['إجمالي الوقت (د)',c.total],
+      ['متوسط وقت الطلب (د)',e(c.avg)],
+      ['أطول زيارة (د)',e(c.longest)],
+      ['أقصر زيارة (د)',e(c.shortest)],
+      ['تجاوز السرعة',(Number(d.speed_limit)?(c.spCount?c.spCount+' مرة':'لا يوجد')+' (الحد '+esc(d.speed_limit)+' كم/س، الأعلى '+c.spMax+')':'—')],
+      ['توقفات بدون سبب',c.stopsNoReason||'لا يوجد'],
+      ['تقييم المسار',e(d.route_rating)],
+      ['الوقت والتوقيع على الفواتير',e(d.inv_sign)],
+      ['تأييد الاستلام والفحص على الفواتير',e(d.inv_check)],
+      ['ملاحظات عامة',e(d.general_note)]
+    ])+'</table>'
     +'<div class="st">'+(__fs.row.locked_at?'🔒 مقفل نهائياً بواسطة '+esc(__fs.row.locked_by_name||''):'مسودة — غير مقفلة')+'</div>'
     +'<div class="sig"><span>توقيع المدقّق: ____________</span><span>توقيع المندوب: ____________</span></div>';
 }
-window.fleetSheetPrint=function(){
+/* الطباعة: البرنامج مثبّت على الشاشة الرئيسية، وفي هذا الوضع يتجاهل الآيفون
+   window.print() تماماً. فنصنع PDF هنا (رسم الصفحة ثم تقسيمها على A4)، ونسلّمه
+   لقائمة المشاركة في الهاتف — وفيها «طباعة» و«حفظ في الملفات» — أو للتنزيل.
+   المكتبتان لا تُحمَّلان إلا عند الضغط، فلا تُثقلان البرنامج. */
+var FS_PDF_LIBS=['https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js',
+                 'https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js'];
+var FS_PRINT_CSS='.fsp{direction:rtl;color:#000;background:#fff;font-family:Tahoma,Arial,sans-serif;font-size:12px;line-height:1.5}'
+  +'.fsp h2{font-size:18px;margin:0 0 10px}.fsp h3{font-size:14px;margin:14px 0 5px}'
+  +'.fsp table{border-collapse:collapse;width:100%;margin-bottom:6px}'
+  +'.fsp th,.fsp td{border:1px solid #444;padding:5px;text-align:right;color:#000;background:#fff;vertical-align:top}'
+  +'.fsp th{background:#e3ebf6}.fsp table.two th{width:45%}.fsp table.four th{width:27%}.fsp table.four td{width:23%}'
+  +'.fsp .st{margin-top:8px}.fsp .sig{display:flex;justify-content:space-between;margin-top:34px}';
+function fsLoadScript(src){
+  return new Promise(function(res,rej){
+    if(document.querySelector('script[src="'+src+'"][data-ok]')) return res();
+    var el=document.createElement('script'); el.src=src;
+    el.onload=function(){ el.setAttribute('data-ok','1'); res(); };
+    el.onerror=function(){ rej(new Error('تعذّر تحميل أداة PDF — تحقّق من الإنترنت')); };
+    document.head.appendChild(el);
+  });
+}
+async function fsMakePdf(c,d){
+  for(var i=0;i<FS_PDF_LIBS.length;i++) await fsLoadScript(FS_PDF_LIBS[i]);
+  /* نسخة بعرض A4 خارج الشاشة، بخلفية بيضاء */
+  var host=document.createElement('div');
+  host.style.cssText='position:fixed;left:-10000px;top:0;width:794px;padding:30px;box-sizing:border-box;background:#fff;';
+  host.innerHTML='<style>'+FS_PRINT_CSS+'</style><div class="fsp">'+fsPrintHtml(c,d)+'</div>';
+  document.body.appendChild(host);
+  /* حدود الصفوف (بنقاط الرسم) — نقطع الصفحات عندها فقط */
+  var hostTop=host.getBoundingClientRect().top, cuts=[];
+  host.querySelectorAll('tr,h3,.st,.sig').forEach(function(el){ cuts.push((el.getBoundingClientRect().bottom-hostTop)*2); });
+  cuts.sort(function(a,b){ return a-b; });
+  var canvas;
+  try{ canvas=await html2canvas(host,{scale:2,backgroundColor:'#ffffff',useCORS:true,logging:false}); }
+  finally{ host.remove(); }
+  var pdf=new window.jspdf.jsPDF({unit:'pt',format:'a4'});
+  var pw=pdf.internal.pageSize.getWidth(), ph=pdf.internal.pageSize.getHeight();
+  var slice=Math.floor(canvas.width*ph/pw);
+  for(var y=0, page=0; y<canvas.height; page++){
+    var h=Math.min(slice, canvas.height-y);
+    if(y+h<canvas.height){
+      var fit=cuts.filter(function(cy){ return cy>y+40 && cy<=y+slice; });
+      if(fit.length) h=Math.ceil(fit[fit.length-1])-y;
+    }
+    var pc=document.createElement('canvas'); pc.width=canvas.width; pc.height=h;
+    var g=pc.getContext('2d'); g.fillStyle='#fff'; g.fillRect(0,0,pc.width,h);
+    g.drawImage(canvas,0,y,canvas.width,h,0,0,canvas.width,h);
+    if(page) pdf.addPage();
+    pdf.addImage(pc.toDataURL('image/jpeg',0.92),'JPEG',0,0,pw,h*pw/canvas.width);
+    y+=h;
+  }
+  return pdf.output('blob');
+}
+window.fleetSheetPrint=async function(){
   fsCollect();
   var c=__fs.calc, d=(__fs.row&&__fs.row.data)||{};
   if(!c){ toast('افتح جدولاً أولاً'); return; }
-  if(!document.getElementById('fsPrintCss')){
-    var css=document.createElement('style'); css.id='fsPrintCss';
-    css.textContent='#fsPrintArea{display:none}'
-      +'@media print{body>*:not(#fsPrintArea){display:none!important}'
-      +'html,body{background:#fff!important}'
-      +'#fsPrintArea{display:block!important;direction:rtl;color:#000;font-family:Tahoma,Arial,sans-serif;font-size:11px;'
-      +'-webkit-print-color-adjust:exact;print-color-adjust:exact}'
-      +'#fsPrintArea h2{font-size:16px;margin:0 0 8px}#fsPrintArea h3{font-size:13px;margin:10px 0 4px}'
-      +'#fsPrintArea table{border-collapse:collapse;width:100%;margin-bottom:6px;page-break-inside:auto}'
-      +'#fsPrintArea tr{page-break-inside:avoid}'
-      +'#fsPrintArea th,#fsPrintArea td{border:1px solid #444;padding:4px;text-align:right;color:#000;background:#fff}'
-      +'#fsPrintArea th{background:#e3ebf6!important}#fsPrintArea table.two th{width:45%}'
-      +'#fsPrintArea .st{margin-top:6px}#fsPrintArea .sig{display:flex;justify-content:space-between;margin-top:28px}'
-      +'@page{size:A4;margin:10mm}}';
-    document.head.appendChild(css);
+  var ov=document.getElementById('fsPdfOv'); if(ov) ov.remove();
+  ov=document.createElement('div'); ov.id='fsPdfOv';
+  ov.style.cssText='position:fixed;inset:0;z-index:1000020;background:rgba(4,7,12,.92);display:flex;align-items:center;justify-content:center;padding:18px;';
+  ov.innerHTML='<div class="card" style="max-width:360px;width:100%;text-align:center;"><div class="status neoLoad">جاري تجهيز ملف PDF…</div></div>';
+  document.body.appendChild(ov);
+  try{
+    var blob=await fsMakePdf(c,d);
+    var name='تدقيق-'+__fs.day+'-'+String(c.name||'').replace(/[\\\/:*?"<>|]/g,'')+'.pdf';
+    var file=new File([blob],name,{type:'application/pdf'});
+    var url=URL.createObjectURL(blob);
+    var canShare=!!(navigator.canShare && navigator.canShare({files:[file]}));
+    window.__fsPdfFile=file;
+    ov.innerHTML='<div class="card" style="max-width:360px;width:100%;text-align:center;">'
+      +'<h3 style="margin-top:0;">✓ ملف PDF جاهز</h3>'
+      +(canShare?'<button style="width:100%;font-size:14px;padding:13px;margin-bottom:8px;" onclick="fsSharePdf()">📤 مشاركة / طباعة / حفظ</button>'
+        +'<div style="color:#7487a0;font-size:11px;margin:-2px 0 10px;">من القائمة اختر «طباعة» أو «حفظ في الملفات»</div>':'')
+      +'<a href="'+url+'" download="'+esc(name)+'" target="_blank" style="display:block;text-decoration:none;background:#2e5ca8;color:#fff;'
+      +'border-radius:10px;padding:12px;font-size:13px;margin-bottom:8px;">⬇️ فتح / تنزيل الملف</a>'
+      +'<button class="secondary" style="width:100%;font-size:12px;padding:10px;" onclick="document.getElementById(\'fsPdfOv\').remove()">إغلاق</button></div>';
+  }catch(e){
+    ov.innerHTML='<div class="card" style="max-width:360px;width:100%;text-align:center;color:#ff8a8a;">تعذّر تجهيز PDF: '+esc(e&&e.message||'')
+      +'<button class="secondary" style="width:100%;margin-top:10px;" onclick="document.getElementById(\'fsPdfOv\').remove()">إغلاق</button></div>';
   }
-  var area=document.getElementById('fsPrintArea');
-  if(!area){ area=document.createElement('div'); area.id='fsPrintArea'; document.body.appendChild(area); }
-  area.innerHTML=fsPrintHtml(c,d);
-  /* window.print مباشرة داخل الضغطة — بلا انتظار — حتى لا يعدّها المتصفح طباعة غير مطلوبة */
-  try{ window.print(); }catch(e){ toast('تعذّرت الطباعة — جرّب من زر المشاركة ← طباعة'); }
+};
+/* المشاركة يجب أن تبدأ من ضغطة مباشرة — لذلك زرّ منفصل بعد تجهيز الملف */
+window.fsSharePdf=function(){
+  var f=window.__fsPdfFile; if(!f) return;
+  navigator.share({files:[f], title:f.name}).catch(function(e){ if(e&&e.name!=='AbortError') toast('تعذّرت المشاركة — استعمل «فتح / تنزيل»'); });
 };
 
 window.fleetSupTab=function(k){
