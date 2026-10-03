@@ -18521,18 +18521,28 @@ function fsLoadScript(src){
 }
 async function fsMakePdf(c,d){
   for(var i=0;i<FS_PDF_LIBS.length;i++) await fsLoadScript(FS_PDF_LIBS[i]);
-  /* نسخة بعرض A4 خارج الشاشة، بخلفية بيضاء */
-  var host=document.createElement('div');
-  host.style.cssText='position:fixed;left:-10000px;top:0;width:794px;padding:30px;box-sizing:border-box;background:#fff;';
-  host.innerHTML='<style>'+FS_PRINT_CSS+'</style><div class="fsp">'+fsPrintHtml(c,d)+'</div>';
-  document.body.appendChild(host);
-  /* حدود الصفوف (بنقاط الرسم) — نقطع الصفحات عندها فقط */
-  var hostTop=host.getBoundingClientRect().top, cuts=[];
-  host.querySelectorAll('tr,h3,.st,.sig').forEach(function(el){ cuts.push((el.getBoundingClientRect().bottom-hostTop)*2); });
-  cuts.sort(function(a,b){ return a-b; });
-  var canvas;
-  try{ canvas=await html2canvas(host,{scale:2,backgroundColor:'#ffffff',useCORS:true,logging:false}); }
-  finally{ host.remove(); }
+  /* صفحة معزولة (iframe) بعرض A4: لا ترث شيئاً من تنسيق البرنامج — خصوصاً
+     letter-spacing الذي يجعل أداة الرسم ترسم كل حرف وحده فتتقطّع العربية */
+  var fr=document.createElement('iframe');
+  fr.setAttribute('aria-hidden','true');
+  fr.style.cssText='position:fixed;left:-10000px;top:0;width:794px;height:1123px;border:0;visibility:hidden;';
+  document.body.appendChild(fr);
+  var canvas, cuts=[];
+  try{
+    var doc=fr.contentDocument;
+    doc.open();
+    doc.write('<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><style>'
+      +'html,body{margin:0;background:#fff}*{letter-spacing:0!important;word-spacing:normal!important;font-feature-settings:normal!important}'
+      +'body{padding:30px;width:794px;box-sizing:border-box}'+FS_PRINT_CSS
+      +'</style></head><body><div class="fsp">'+fsPrintHtml(c,d)+'</div></body></html>');
+    doc.close();
+    await new Promise(function(r){ setTimeout(r,60); });
+    var root=doc.body;
+    /* حدود الصفوف (بنقاط الرسم) — نقطع الصفحات عندها فقط */
+    root.querySelectorAll('tr,h3,.st,.sig').forEach(function(el){ cuts.push(el.getBoundingClientRect().bottom*2); });
+    cuts.sort(function(a,b){ return a-b; });
+    canvas=await html2canvas(root,{scale:2,backgroundColor:'#ffffff',logging:false,windowWidth:794,width:794,height:root.scrollHeight});
+  }finally{ fr.remove(); }
   var pdf=new window.jspdf.jsPDF({unit:'pt',format:'a4'});
   var pw=pdf.internal.pageSize.getWidth(), ph=pdf.internal.pageSize.getHeight();
   var slice=Math.floor(canvas.width*ph/pw);
