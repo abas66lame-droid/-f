@@ -1,5 +1,6 @@
 -- ══════════════════════════════════════════════════════════════════════
--- جدول تدقيق اليوم — يراه ويكتبه مسؤول التوصيل وحده
+-- جدول تدقيق اليوم — يراه ويكتبه مسؤول تدقيق التوصيل وحده
+-- (دوره fleet مثل مسؤول التوصيل وآلياته، ويتميّز بكلمة «تدقيق» في مسمّاه الوظيفي)
 -- بعد «القفل النهائي» ترفض القاعدة نفسها أي تعديل (لا الشاشة فقط)
 -- يُشغَّل مرة واحدة — آمن إن شُغّل أكثر من مرة
 -- ══════════════════════════════════════════════════════════════════════
@@ -20,12 +21,15 @@ drop policy if exists fda_read on public.fleet_day_audit;
 drop policy if exists fda_ins on public.fleet_day_audit;
 drop policy if exists fda_upd on public.fleet_day_audit;
 create policy fda_read on public.fleet_day_audit for select to authenticated
-  using (exists (select 1 from public.profiles p where p.id::text = auth.uid()::text and p.role = 'fleet'));
+  using (exists (select 1 from public.profiles p where p.id::text = auth.uid()::text and p.role = 'fleet' and p.job_title like '%تدقيق%'));
 create policy fda_ins on public.fleet_day_audit for insert to authenticated
-  with check (exists (select 1 from public.profiles p where p.id::text = auth.uid()::text and p.role = 'fleet'));
+  with check (exists (select 1 from public.profiles p where p.id::text = auth.uid()::text and p.role = 'fleet' and p.job_title like '%تدقيق%'));
 create policy fda_upd on public.fleet_day_audit for update to authenticated
   using (locked_at is null
-         and exists (select 1 from public.profiles p where p.id::text = auth.uid()::text and p.role = 'fleet'))
-  with check (exists (select 1 from public.profiles p where p.id::text = auth.uid()::text and p.role = 'fleet'));
+         and exists (select 1 from public.profiles p where p.id::text = auth.uid()::text and p.role = 'fleet' and p.job_title like '%تدقيق%'))
+  with check (exists (select 1 from public.profiles p where p.id::text = auth.uid()::text and p.role = 'fleet' and p.job_title like '%تدقيق%'));
 
-select 'تم ✓ — جدول تدقيق اليوم جاهز' as "النتيجة";
+/* من يرى الجدول؟ — يجب أن يظهر هنا مسؤول تدقيق التوصيل وحده */
+select name as "الاسم", job_title as "المسمّى",
+       case when job_title like '%تدقيق%' then '✓ يرى الجدول' else '✗ لا يراه' end as "جدول اليوم"
+  from public.profiles where role = 'fleet' order by 3, 1;

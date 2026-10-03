@@ -17904,7 +17904,7 @@ window.renderFleetSupView=async function(profile){
       +'<div style="display:flex;gap:6px;">'
       +'<button id="fsTabV" style="flex:1;font-size:12px;padding:9px;" onclick="fleetSupTab(\'v\')">🚗 سيارات</button>'
       +'<button id="fsTabT" class="secondary" style="flex:1;font-size:12px;padding:9px;" onclick="fleetSupTab(\'t\')">🧾 رحلات</button>'
-      +'<button id="fsTabS" class="secondary" style="flex:1;font-size:12px;padding:9px;" onclick="fleetSupTab(\'s\')">📋 جدول اليوم</button>'
+      +(fsIsAuditor(profile)?'<button id="fsTabS" class="secondary" style="flex:1;font-size:12px;padding:9px;" onclick="fleetSupTab(\'s\')">📋 جدول اليوم</button>':'')
       +'</div></div>';
 
     h+='<div id="fsVehWrap">';
@@ -17992,7 +17992,7 @@ window.renderFleetSupView=async function(profile){
     h+='<div class="card"><button class="secondary" style="width:100%;font-size:12px;padding:10px;" '
       +'onclick="renderFleetSupView(window.__fleetProfile)">↻ تحديث</button></div>';
     h+='</div>';   /* /fsTripWrap */
-    h+='<div id="fsSheetWrap" class="hidden"></div>';
+    if(fsIsAuditor(profile)) h+='<div id="fsSheetWrap" class="hidden"></div>';
     el.innerHTML=h;
     /* نحتفظ بما حُمِّل: البحث بالتاريخ والطيّ يعيدان البناء بلا أي طلب جديد */
     window.__fsCache={ vmap:vmap, trips:trips };
@@ -18135,6 +18135,9 @@ window.fleetSupTrips=async function(day){
    اليوم يوم الشفت لا يوم التقويم: المسائي يمتد حتى ٢ص ويُحسب على يومه. */
 var FS_GAP_MAX=25, FS_BREAK_MAX=35, FS_TZ_MS=3*3600000, FS_DAY_CUT_H=2;
 var __fs={ day:'', driver:'', trips:[], row:null, calc:null };
+/* الجدول لمسؤول تدقيق التوصيل وحده: دوره fleet كمسؤول التوصيل وآلياته،
+   ويتميّز بمسمّاه الوظيفي — فالمفتاح كلمة «تدقيق» في المسمّى */
+function fsIsAuditor(p){ return !!p && p.role==='fleet' && /تدقيق/.test(String(p.job_title||'')); }
 function fsDayOf(iso){ return new Date(Date.parse(iso)+FS_TZ_MS-FS_DAY_CUT_H*3600000).toISOString().slice(0,10); }
 function fsHM(ms){ if(!ms&&ms!==0) return '—'; return new Date(ms+FS_TZ_MS).toISOString().slice(11,16); }
 function fsMin(ms){ return Math.round(ms/60000); }
@@ -18169,8 +18172,17 @@ async function fsLoadDay(day){
 
 window.fleetSheetOpen=async function(day,driver){
   var box=document.getElementById('fsSheetWrap'); if(!box) return;
-  __fs.day=day||__fs.day||fsDayOf(new Date().toISOString());
+  if(!fsIsAuditor(window.__fleetProfile)){ box.innerHTML=''; return; }
+  if(day!==undefined) __fs.day=day||'';
   if(driver!==undefined) __fs.driver=driver;
+  /* التاريخ أولاً: لا شيء يُحمَّل ولا يُحسب قبل اختياره */
+  if(!__fs.day){
+    box.innerHTML='<div class="card"><h2>📋 جدول تدقيق اليوم</h2>'
+      +'<div style="color:#ffb37a;font-size:13px;margin:8px 0;">اختر تاريخ اليوم الذي تدقّقه أولاً</div>'
+      +'<input type="date" onchange="fleetSheetOpen(this.value,\'\')" style="width:100%;font-size:14px;padding:10px;">'
+      +'<div style="color:#5d6d80;font-size:10px;margin-top:6px;">اليوم يوم الشفت: المسائي حتى ٢ص يُحسب على يومه</div></div>';
+    return;
+  }
   box.innerHTML='<div class="status neoLoad">جاري التحميل…</div>';
   try{
     var all=await fsLoadDay(__fs.day);
@@ -18183,7 +18195,7 @@ window.fleetSheetOpen=async function(day,driver){
       .order('day',{ascending:false}).limit(60); saved=sv.data||[]; }catch(e){}
     var h='<div class="card"><h2>📋 جدول تدقيق اليوم</h2>'
       +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">'
-      +'<input type="date" value="'+__fs.day+'" onchange="fleetSheetOpen(this.value,\'\')" style="flex:1;min-width:140px;font-size:13px;">'
+      +'<input type="date" value="'+__fs.day+'" onchange="fleetSheetOpen(this.value||\'\',\'\')" style="flex:1;min-width:140px;font-size:13px;">'
       +'<select onchange="fleetSheetOpen(undefined,this.value)" style="flex:2;min-width:160px;font-size:13px;">'
       +'<option value="">— اختر المندوب ('+ids.length+') —</option>'
       +ids.map(function(id){ return '<option value="'+esc(id)+'"'+(id===__fs.driver?' selected':'')+'>'+esc(drivers[id])+'</option>'; }).join('')
