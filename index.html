@@ -18464,151 +18464,195 @@ async function fsRenderSheet(keepLocal){
   var c=await fsCompute(); __fs.calc=c;
   var locked=!!__fs.row.locked_at, dis=locked?' disabled':'';
   var RED='#ff8a8a', GRN='#38d9b9', MUT='#7487a0';
+  /* ورقة واحدة كبيرة بشكل الإكسل: خلايا بحدود، تعبئة حمراء للتجاوز وخضراء للسليم، وتُكبَّر وتُصغَّر */
+  var CI='width:100%;min-width:0;box-sizing:border-box;border:0;background:transparent;color:#000;font:inherit;padding:2px 3px;text-align:center;';
   var inp=function(k,type,ph){ return '<input data-k="'+k+'" type="'+(type||'text')+'" value="'+esc(d[k]==null?'':String(d[k]))+'"'
-    +(ph?' placeholder="'+esc(ph)+'"':'')+' style="width:100%;font-size:13px;padding:8px;box-sizing:border-box;"'+dis+'>'; };
-  var sel=function(k,opts){ return '<select data-k="'+k+'" style="width:100%;font-size:13px;padding:8px;"'+dis+'><option value="">— اختر —</option>'
+    +(ph?' placeholder="'+esc(ph)+'"':'')+' style="'+CI+'"'+dis+'>'; };
+  var sel=function(k,opts){ return '<select data-k="'+k+'" style="'+CI+'"'+dis+'><option value="">— اختر —</option>'
     +opts.map(function(o){ return '<option'+(d[k]===o?' selected':'')+'>'+o+'</option>'; }).join('')+'</select>'; };
   var tv=function(id,k){ var t=(d.trips||{})[id]||{}; return esc(t[k]==null?'':String(t[k])); };
-  var tinp=function(id,k,ph){ return '<input data-t="'+id+'" data-tk="'+k+'" value="'+tv(id,k)+'" placeholder="'+(ph||'')
-    +'" style="width:100%;font-size:12px;padding:7px;box-sizing:border-box;"'+dis+'>'; };
-  var over=function(v,max){ return v!=null && v>max; };
+  var tinp=function(id,k,ph){ return '<input data-t="'+id+'" data-tk="'+k+'" value="'+tv(id,k)+'" placeholder="'+esc(ph||'')+'" style="'+CI+'"'+dis+'>'; };
   /* حقل رحلة قيمته الافتراضية ما سجّله السائق */
   var tinpV=function(id,k,def){ var t=(d.trips||{})[id]||{}; var v=(t[k]==null||t[k]==='')?(def==null?'':def):t[k];
-    return '<input data-t="'+id+'" data-tk="'+k+'" value="'+esc(String(v))+'" style="width:100%;font-size:12px;padding:7px;box-sizing:border-box;"'+dis+'>'; };
-  /* بطاقة قسم مرقّمة */
-  var sec=function(n,title,inner){ return '<div class="card"><div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">'
-    +'<span style="background:#2e5ca8;color:#fff;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;">'+n+'</span>'
-    +'<b style="color:#cfe0f5;font-size:15px;">'+title+'</b></div>'+inner+'</div>'; };
-  /* سطر: عنوان + قيمة/حقل */
-  var line=function(label,val,color){ return '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid rgba(122,167,255,0.10);">'
-    +'<span style="flex:1;color:#a9b8c9;font-size:12px;">'+label+'</span>'
-    +'<span style="flex:1.2;text-align:left;color:'+(color||'#e3ecf7')+';font-size:13px;font-weight:700;">'+val+'</span></div>'; };
-  var field=function(label,html){ return '<div style="margin-bottom:9px;"><div style="color:#a9b8c9;font-size:11px;margin-bottom:4px;">'+label+'</div>'+html+'</div>'; };
-  /* مربّع رقم في الملخص */
-  var tile=function(label,val,color){ return '<div style="background:rgba(122,167,255,0.07);border-radius:10px;padding:10px;text-align:center;">'
-    +'<div style="color:'+(color||'#e3ecf7')+';font-size:18px;font-weight:800;">'+val+'</div>'
-    +'<div style="color:'+MUT+';font-size:10px;margin-top:2px;">'+label+'</div></div>'; };
-  /* بين البصمة وأول خروج / آخر رجوع والبصمة: سماح 0:35، وما زاد يتلوّن أحمر ويُطلب سببه */
-  var tileBad=function(label,val,bad){ return '<div style="background:'+(bad?'rgba(225,91,100,0.30)':'rgba(56,217,185,0.10)')+';border-radius:10px;padding:10px;text-align:center;'
-    +(bad?'border:1px solid #e15b64;':'')+'"><div style="color:'+(bad?'#ff8a8a':'#38d9b9')+';font-size:18px;font-weight:800;">'+val+'</div>'
-    +'<div style="color:'+MUT+';font-size:10px;margin-top:2px;">'+label+'</div></div>'; };
-  var gapLine=function(label,v,rk){ var bad=over(v,FS_EDGE_MAX);
-    return '<div style="margin:6px 0;padding:2px 8px;border-radius:9px;background:'+(bad?'rgba(225,91,100,0.18)':'transparent')+';">'
-    +line(label,fsH(v),bad?RED:(v==null?MUT:GRN))+'</div>'
-    +(bad?'<div style="margin:4px 0 6px;">'+inp(rk,'text','⚠️ السبب (تجاوز 0:35)')+'</div>':''); };
+    return '<input data-t="'+id+'" data-tk="'+k+'" value="'+esc(String(v))+'" style="'+CI+'"'+dis+'>'; };
+  var over=function(v,max){ return v!=null && v>max; };
+  /* خلايا: th عنوان، td قيمة؛ cls: bad أحمر، ok أخضر، warn أصفر */
+  var th=function(t,span,w){ return '<th'+(span?' colspan="'+span+'"':'')+(w?' style="min-width:'+w+'px"':'')+'>'+t+'</th>'; };
+  var td=function(v,cls,span){ return '<td'+(cls?' class="'+cls+'"':'')+(span?' colspan="'+span+'"':'')+'>'+v+'</td>'; };
+  var bad=function(b){ return b?'bad':''; };
 
   var h='';
   if(locked) h+='<div class="card" style="border:1px solid rgba(56,217,185,0.5);color:'+GRN+';font-size:12px;">🔒 مقفل نهائياً بواسطة '
     +esc(__fs.row.locked_by_name||'')+' — '+String(__fs.row.locked_at).slice(0,10)+' '+fsHM(Date.parse(__fs.row.locked_at))+'</div>';
 
-  /* ١ معلومات اليوم */
-  h+=sec('١','معلومات اليوم',
-     line('اسم المندوب',esc(c.name))+line('التاريخ',__fs.day)+line('المركبة',esc(c.plates||'—'))+line('الشفت',c.shift)
-    +line('تأييد استلام وتسليم المركبة',c.allOk?'✓ تم الاستلام والتسليم':'✗ غير مكتمل',c.allOk?GRN:RED)
-    +line('تأييد غسل المركبة',c.washed?'✓ تم الغسل':'✗ لم يتم',c.washed?GRN:RED));
+  /* شريط التكبير — خارج الورقة فلا يتكبّر معها */
+  h+='<div id="fsZoomBar" style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">'
+    +'<button class="secondary" style="font-size:16px;padding:6px 14px;" onclick="fsZoomBy(-0.1)">−</button>'
+    +'<span id="fsZoomPct" style="min-width:48px;text-align:center;color:#cfe0f5;font-size:12px;"></span>'
+    +'<button class="secondary" style="font-size:16px;padding:6px 14px;" onclick="fsZoomBy(0.1)">+</button>'
+    +'<button class="secondary" style="font-size:12px;padding:8px 10px;" onclick="fsZoomFit()">↔ ملاءمة</button>'
+    +'<button class="secondary" style="font-size:12px;padding:8px 10px;margin-inline-start:auto;" onclick="fsZoomFull()">⛶ ملء الشاشة</button></div>';
 
-  /* ٢ البصمات والاستراحة */
-  h+=sec('٢','البصمات والاستراحة',
-     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">'
-    +field('بصمة الدخول',inp('fp_in','time'))+field('بصمة الخروج',inp('fp_out','time'))
-    +field('بداية الاستراحة',inp('br_out','time'))+field('نهاية الاستراحة',inp('br_in','time'))+'</div>'
-    +gapLine('الفرق بين بصمة الدخول وأول خروج',c.gapFirst,'gap_first_reason')
-    +line('مدة الاستراحة',fsH(c.breakMin),over(c.breakMin,FS_BREAK_MAX)?RED:(c.breakMin==null?MUT:GRN))
-    +(over(c.breakMin,FS_BREAK_MAX)?'<div style="margin:4px 0 6px;">'+inp('break_reason','text','⚠️ السبب (تجاوز 0:35)')+'</div>':'')
-    +line('وقت الرجوع الأخير',c.lastIn?fsHM(c.lastIn):'—')
-    +gapLine('الفرق بين الرجوع الأخير وبصمة الخروج',c.gapLast,'gap_last_reason'));
+  /* ١ معلومات اليوم والبصمات */
+  var info='<table>'
+    +'<tr>'+th('اسم المندوب',0,110)+th('التاريخ',0,90)+th('المركبة',0,90)+th('الشفت',0,60)
+      +th('تأييد استلام وتسليم المركبة',0,120)+th('تأييد غسل المركبة',0,90)
+      +th('بصمة الدخول',0,90)+th('بداية الاستراحة',0,90)+th('نهاية الاستراحة',0,90)+th('مدة الاستراحة',0,70)
+      +th('بصمة الخروج',0,90)+th('حد السرعة (كم/س)',0,80)+'</tr>'
+    +'<tr>'+td('<b>'+esc(c.name)+'</b>')+td(__fs.day)+td(esc(c.plates||'—'))+td(c.shift)
+      +td(c.allOk?'✓ تم':'✗ غير مكتمل',c.allOk?'ok':'bad')+td(c.washed?'✓ تم':'✗ لم يتم',c.washed?'ok':'bad')
+      +td(inp('fp_in','time'),'in')+td(inp('br_out','time'),'in')+td(inp('br_in','time'),'in')
+      +td(fsH(c.breakMin),bad(over(c.breakMin,FS_BREAK_MAX)))
+      +td(inp('fp_out','time'),'in')+td(inp('speed_limit','number','80'),'in')+'</tr>'
+    +(over(c.breakMin,FS_BREAK_MAX)?'<tr>'+td('سبب طول الاستراحة (تجاوز 0:35)','bad',9)+td(inp('break_reason','text','السبب'),'in',3)+'</tr>':'')
+    +'</table>';
 
-  /* ٣ الرحلات — جدول واحد، ولكل رحلة زرّ يفتح وقفاتها وحقولها */
-  var TH='padding:7px 5px;color:#9fb6cf;font-size:11px;font-weight:700;border-bottom:1px solid rgba(122,167,255,0.25);white-space:nowrap;';
-  var TD='padding:8px 5px;font-size:12px;color:#e3ecf7;border-bottom:1px solid rgba(122,167,255,0.10);white-space:nowrap;text-align:center;';
-  var redTd=function(bad,val,extra){ return '<td style="'+TD+(bad?'background:rgba(225,91,100,0.30);color:#ff8a8a;font-weight:800;':'')+(extra||'')+'">'+val+'</td>'; };
-  var tr='';
-  if(!c.rows.length) tr='<div style="color:'+MUT+';font-size:12px;">لا رحلات لهذا المندوب في هذا اليوم</div>';
-  else{
-    tr='<div style="overflow-x:auto;margin:0 -4px;"><table style="width:100%;border-collapse:collapse;">'
-      +'<tr><th style="'+TH+'">#</th><th style="'+TH+'">الخروج</th><th style="'+TH+'">الرجوع</th><th style="'+TH+'">المدة</th>'
-      +'<th style="'+TH+'">الفواتير</th><th style="'+TH+'">متوسط الفاتورة</th><th style="'+TH+'">الوقفات</th><th style="'+TH+'">البقاء بعدها</th></tr>';
-    c.rows.forEach(function(rw){
-      var id=rw.trip.id, invBad=rw.invAvg!=null&&rw.invAvg>FS_INV_MAX[rw.kind];
-      var stayTxt=rw.stayMin==null?'—':fsH(rw.stayMin)+(rw.stayBreak?' <span style="font-size:10px;color:#8fd0f0;">☕ استراحة</span>':'');
-      tr+='<tr>'
-        +'<td style="'+TD+'font-weight:800;">'+rw.n+'</td>'
-        +'<td style="'+TD+'">'+fsHM(rw.outMs)+(rw.outGeo?' <span style="font-size:9px;">📍</span>':'')+'</td>'
-        +redTd(!rw.inMs,rw.inMs?fsHM(rw.inMs)+(rw.inGeo?' <span style="font-size:9px;">📍</span>':''):'لم يرجع')
-        +'<td style="'+TD+'">'+fsH(rw.durMin)+'</td>'
-        +redTd(rw.inv==null,rw.inv==null?'—':rw.inv)
-        +redTd(invBad,fsH(rw.invAvg))
-        +'<td style="'+TD+'"><button onclick="fsToggleTrip('+id+')" style="font-size:11px;padding:5px 9px;border-radius:8px;'
-          +'background:'+(rw.stopsNoWhy?'#8a2f36':(rw.stops?'#2e5ca8':'#26384f'))+';">⏸ '+rw.stops+(rw.stopsNoWhy?' ⚠️':'')+'</button></td>'
-        +redTd(rw.stayBad,stayTxt)
-        +'</tr>'
-        +'<tr id="fsDet'+id+'" style="display:none;"><td colspan="8" style="padding:8px 4px 12px;border-bottom:2px solid rgba(122,167,255,0.25);">'
-        +fsTripDetail(rw)+'</td></tr>';
-    });
-    tr+='</table></div>'
-      +'<div style="color:'+MUT+';font-size:10px;margin-top:6px;line-height:1.7;">📍 من موقع السائق · حد متوسط الفاتورة 0:30 للسيارة و0:20 للدراجة · '
-      +'البقاء بعد الرحلة سماحه 0:35، وإن وافق بصمة الاستراحة يُحسب استراحة (سماح 0:10) · اضغط زرّ الوقفات لتفاصيل الرحلة</div>';
-  }
-  /* تفاصيل رحلة: وقفاتها ثم حقول المدقّق */
-  function fsTripDetail(rw){
-    var id=rw.trip.id, x='';
-    var ss=c.stops.filter(function(s){ return s.n===rw.n; });
-    x+='<div style="color:#8fb8d8;font-size:12px;font-weight:700;margin-bottom:6px;">⏸ وقفات الرحلة '+rw.n+' (أكثر من ٣ دقائق)</div>';
-    if(!ss.length) x+='<div style="color:'+GRN+';font-size:12px;margin-bottom:8px;">✓ لا وقفات</div>';
-    ss.forEach(function(s){
-      x+='<div style="display:flex;align-items:center;gap:8px;padding:8px;border-radius:9px;margin-bottom:6px;'
-        +'background:'+(s.why?'rgba(56,217,185,0.07)':'rgba(225,91,100,0.12)')+';">'
-        +'<div style="flex:1;"><div style="color:#e3ecf7;font-size:12px;">'+fsHM(s.from)+' ← '+(s.live?'مستمرة':fsHM(s.to))
-        +' · <b style="color:#ffb37a;">'+fsH(s.min)+'</b>'+(s.approx?' <span style="color:#d3a04f;font-size:10px;">(تقريبية)</span>':'')+'</div>'
-        +'<div style="font-size:12px;margin-top:2px;color:'+(s.why?GRN:RED)+';">'+(s.why?'📝 '+esc(s.why):'⚠️ بلا سبب')+'</div></div>'
-        +'<a href="'+fleetMapUrl(s.lat,s.lng)+'" target="_blank" rel="noopener" style="text-decoration:none;background:#2e5ca8;color:#fff;'
-        +'border-radius:9px;padding:7px 10px;font-size:12px;white-space:nowrap;">📍 الموقع</a></div>';
-    });
-    x+='<div style="color:#7487a0;font-size:10px;margin:6px 0 8px;">'+esc(rw.plate)+' · '+rw.gps+' نقطة موقع · التطبيق: استلام '+fsHM(rw.appOut)
-      +(rw.appIn?' · إرجاع '+fsHM(rw.appIn):'')+(rw.exits>1?' · <span style="color:#ffb37a;">خرج من الشركة '+rw.exits+' مرات</span>':'')
-      +(rw.trip.prep_at?' · التجهيز '+esc(rw.trip.prep_at):'')+'</div>';
-    if(rw.trip.note) x+='<div style="color:#8fa3b8;font-size:11px;margin-bottom:6px;">📝 ملاحظة السائق: '+esc(rw.trip.note)+'</div>';
-    x+=field('وقت تسليم الطلبات',tinp(id,'deliv',rw.deliv.join('، ')||'يُملأ من وقفات «تسليم طلب»'))
-      +'<div style="display:grid;grid-template-columns:2fr 1fr;gap:8px;">'
-      +field('اسم المجهز',tinpV(id,'preparer',rw.trip.preparer))+field('عدد الفواتير (تعديل)',tinpV(id,'inv',rw.trip.invoices))+'</div>'
-      +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">'
-      +field('ملاحظات قبل الانطلاق',tinp(id,'note_before'))+field('ملاحظات بعد الانطلاق',tinp(id,'note_after'))+'</div>'
-      +(rw.stayBad?field('⚠️ سبب البقاء في الشركة بعد الرحلة',tinp(id,'stay_reason','السبب')):'');
-    return x;
-  }
-  h+=sec('٣','الرحلات ('+c.rows.length+')',tr);
+  /* ٢ الرحلات — صفّ لكل رحلة، يسبقها فرق بصمة الدخول ويليها فرق بصمة الخروج */
+  var COLS=14;
+  var rows='<tr>'+th('#',0,28)+th('الخروج من الشركة',0,80)+th('الرجوع للشركة',0,80)+th('مدة الرحلة',0,62)+th('عدد الفواتير',0,58)
+    +th('متوسط الفاتورة',0,62)+th('وقت التجهيز',0,70)+th('اسم المجهز',0,110)+th('وقت تسليم الطلبات',0,140)+th('الوقفات',0,64)
+    +th('البقاء في الشركة بعدها',0,90)+th('سبب البقاء',0,130)+th('ملاحظات قبل الانطلاق',0,140)+th('ملاحظات بعد الانطلاق',0,140)+'</tr>';
+  var edgeRow=function(label,v,rk){ var b=over(v,FS_EDGE_MAX);
+    return '<tr class="edge">'+td(label,'lbl',3)+td(fsH(v),v==null?'':(b?'bad':'ok'))
+      +td(b?'تجاوز السماح 0:35':'السماح 0:35','',6)+td(b?inp(rk,'text','⚠️ السبب'):'',b?'in':'',4)+'</tr>'; };
+  rows+=edgeRow('بصمة الدخول ← أول خروج',c.gapFirst,'gap_first_reason');
+  if(!c.rows.length) rows+='<tr>'+td('لا رحلات لهذا المندوب في هذا اليوم','',COLS)+'</tr>';
+  c.rows.forEach(function(rw){
+    var id=rw.trip.id, invBad=rw.invAvg!=null&&rw.invAvg>FS_INV_MAX[rw.kind];
+    rows+='<tr>'+td('<b>'+rw.n+'</b>')
+      +td(fsHM(rw.outMs)+(rw.outGeo?' 📍':''))
+      +td(rw.inMs?fsHM(rw.inMs)+(rw.inGeo?' 📍':''):'لم يرجع',rw.inMs?'':'bad')
+      +td(fsH(rw.durMin))
+      +td(tinpV(id,'inv',rw.trip.invoices),rw.inv==null?'bad in':'in')
+      +td(fsH(rw.invAvg),rw.invAvg==null?'':(invBad?'bad':'ok'))
+      +td(esc(rw.trip.prep_at||'—'))
+      +td(tinpV(id,'preparer',rw.trip.preparer),'in')
+      +td(tinp(id,'deliv',rw.deliv.join('، ')||''),'in')
+      +td('<button onclick="fsToggleTrip('+id+')" class="stb'+(rw.stopsNoWhy?' nw':'')+'">⏸ '+rw.stops+(rw.stopsNoWhy?' ⚠':'')+'</button>')
+      +td(rw.stayMin==null?'—':fsH(rw.stayMin)+(rw.stayBreak?' ☕ استراحة':''),rw.stayMin==null?'':(rw.stayBad?'bad':'ok'))
+      +td(rw.stayBad?tinp(id,'stay_reason','⚠️ السبب'):'',rw.stayBad?'in':'')
+      +td(tinp(id,'note_before'),'in')+td(tinp(id,'note_after'),'in')+'</tr>';
+    /* تفاصيل الرحلة: وقفاتها — تُفتح بزرّ الوقفات */
+    var ss=c.stops.filter(function(x){ return x.n===rw.n; });
+    var det='<div class="det"><b>وقفات الرحلة '+rw.n+' (أكثر من ٣ دقائق)</b> — '+esc(rw.plate)+' · '+rw.gps+' نقطة موقع · التطبيق: استلام '+fsHM(rw.appOut)
+      +(rw.appIn?' · إرجاع '+fsHM(rw.appIn):'')+(rw.exits>1?' · <span style="color:#9c0006;">خرج من الشركة '+rw.exits+' مرات</span>':'')
+      +(rw.trip.note?' · ملاحظة السائق: '+esc(rw.trip.note):'')+'</div>';
+    det+=ss.length?'<table class="sub"><tr>'+th('من')+th('إلى')+th('المدة')+th('السبب')+th('الموقع')+'</tr>'
+      +ss.map(function(x){ return '<tr>'+td(fsHM(x.from))+td(x.live?'مستمرة':fsHM(x.to))+td(fsH(x.min)+(x.approx?' (تقريبية)':''))
+        +td(x.why?esc(x.why):'⚠ بلا سبب',x.why?'ok':'bad')
+        +td('<a href="'+fleetMapUrl(x.lat,x.lng)+'" target="_blank" rel="noopener">📍 الخارطة</a>')+'</tr>'; }).join('')+'</table>'
+      :'<div class="det" style="color:#006100;">✓ لا وقفات</div>';
+    rows+='<tr id="fsDet'+id+'" style="display:none;"><td colspan="'+COLS+'" class="detc">'+det+'</td></tr>';
+  });
+  rows+=edgeRow('آخر رجوع ← بصمة الخروج',c.gapLast,'gap_last_reason');
+  rows+='<tr class="tot">'+td('المجموع','',3)+td(fsH(c.total))+td(c.invoices||'—',c.invMissing?'bad':'')
+    +td(fsH(c.avg),c.avg==null?'':(c.avg>c.invMax?'bad':'ok'))+td('','',3)
+    +td(c.stops.length+(c.stopsNoReason?' ('+c.stopsNoReason+' بلا سبب)':''),c.stopsNoReason?'bad':'')
+    +td(fsH(c.inCompany)+' داخل الشركة','',2)+td('','',2)+'</tr>';
+  var trips='<table>'+rows+'</table>';
 
-  /* ٤ الفواتير والتقييم */
-  h+=sec('٤','الفواتير والتقييم',
-     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">'
-    +field('عدد الفواتير (من السائق)','<div style="padding:8px;font-size:14px;font-weight:800;color:'+(c.invMissing?'#ffb37a':'#e3ecf7')+';">'
-      +c.invoices+(c.invMissing?' <span style="font-size:11px;">— '+c.invMissing+' رحلة بلا عدد</span>':'')+'</div>')
-    +field('حد السرعة (كم/س)',inp('speed_limit','number','مثلاً 80'))+'</div>'
-    +field('الوقت والتوقيع على الفواتير',sel('inv_sign',['تم لجميع الفواتير','تم لبعض الفواتير','لم يتم']))
-    +field('تأييد الاستلام والفحص على الفواتير',sel('inv_check',['تم لجميع الفواتير','تم لبعض الفواتير','بدون تأييد لجميع الفواتير']))
-    +field('تقييم المسار',sel('route_rating',['جيد','متوسط','سيء']))
-    +field('ملاحظات عامة',inp('general_note')));
-
-  /* ٥ ملخص الأداء — كله محسوب */
+  /* ٣ ملخص الأداء والتقييم */
   var spTxt=Number(d.speed_limit)?(c.spCount?c.spCount+' مرة':'لا يوجد'):'حدّد الحد';
-  h+=sec('٥','ملخص الأداء',
-     '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;">'
-    +tile('عدد الرحلات',c.visits)+tile('مجموع الفواتير',c.invoices||'—')+tile('مجموع وقت الرحلات',fsH(c.total))
-    +tile('مجموع الوقت داخل الشركة',fsH(c.inCompany))
-    +tileBad('متوسط وقت الفاتورة',fsH(c.avg),c.avg!=null&&c.avg>c.invMax)+tile('أطول رحلة',fsH(c.longest))
-    +tile('أقصر رحلة',fsH(c.shortest))
-    +tile('تجاوز السرعة',spTxt,c.spCount?RED:GRN)+tile('أعلى سرعة',c.spMax+' كم/س')
-    +tile('توقفات بلا سبب',c.stopsNoReason||'0',c.stopsNoReason?RED:GRN)+'</div>');
+  var sum='<table><tr>'+th('عدد الرحلات',0,60)+th('مجموع الفواتير',0,60)+th('مجموع وقت الرحلات',0,75)+th('مجموع الوقت داخل الشركة',0,85)
+      +th('متوسط وقت الفاتورة',0,70)+th('أطول رحلة',0,60)+th('أقصر رحلة',0,60)+th('تجاوز السرعة',0,70)+th('أعلى سرعة',0,65)
+      +th('توقفات بلا سبب',0,65)+th('تقييم المسار',0,90)+th('الوقت والتوقيع على الفواتير',0,130)+th('تأييد الاستلام والفحص على الفواتير',0,150)+th('ملاحظات عامة',0,180)+'</tr>'
+    +'<tr>'+td(c.visits)+td(c.invoices||'—')+td(fsH(c.total))+td(fsH(c.inCompany))
+      +td(fsH(c.avg)+'<div class="sm">الحد '+fsH(c.invMax)+'</div>',c.avg==null?'':(c.avg>c.invMax?'bad':'ok'))
+      +td(fsH(c.longest))+td(fsH(c.shortest))+td(spTxt,c.spCount?'bad':(Number(d.speed_limit)?'ok':''))+td(c.spMax+' كم/س')
+      +td(c.stopsNoReason||'0',c.stopsNoReason?'bad':'ok')
+      +td(sel('route_rating',['جيد','متوسط','سيء']),'in')+td(sel('inv_sign',['تم لجميع الفواتير','تم لبعض الفواتير','لم يتم']),'in')
+      +td(sel('inv_check',['تم لجميع الفواتير','تم لبعض الفواتير','بدون تأييد لجميع الفواتير']),'in')+td(inp('general_note'),'in')+'</tr></table>';
+
+  h+='<div id="fsZoomBox"><div id="fsZoomIn"><div class="xls">'
+    +'<div class="ttl">جدول تدقيق التوصيل اليومي — '+esc(c.name)+' — '+__fs.day+'</div>'
+    +'<div class="cap">معلومات اليوم والبصمات</div>'+info
+    +'<div class="cap">الرحلات ('+c.rows.length+')</div>'+trips
+    +'<div class="note">📍 من موقع السائق (نطاق الشركة) · متوسط الفاتورة = مدة الرحلة ÷ الفواتير، حده 0:30 للسيارة و0:20 للدراجة · '
+      +'البقاء بعد الرحلة وبين البصمة والرحلات سماحه 0:35، وإن وافق بصمة الاستراحة يُحسب استراحة (سماح 0:10) · اضغط ⏸ لعرض وقفات الرحلة</div>'
+    +'<div class="cap">ملخص الأداء والتقييم</div>'+sum
+    +'</div></div></div>';
 
   /* الأزرار */
-  h+='<div class="card" style="display:flex;gap:6px;flex-wrap:wrap;">'
+  h+='<div class="card" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">'
     +(locked?'':'<button style="flex:1;min-width:110px;font-size:13px;padding:12px;" onclick="fleetSheetSave(false)">💾 حفظ</button>'
       +'<button style="flex:1;min-width:110px;font-size:13px;padding:12px;background:#7a2f2f;" onclick="fleetSheetSave(true)">🔒 قفل نهائي</button>')
     +'<button class="secondary" style="flex:1;min-width:110px;font-size:13px;padding:12px;" onclick="fleetSheetExport(this)">📄 تصدير PDF</button></div>';
+  fsSheetCss();
   body.innerHTML=h;
+  fsZoomInit();
   fsPreloadPdf();
-  if(!locked) body.querySelectorAll('input[data-k="fp_in"],input[data-k="fp_out"],input[data-k="br_out"],input[data-k="br_in"],input[data-k="speed_limit"],input[data-k="invoices"]')
+  if(!locked) body.querySelectorAll('input[data-k="fp_in"],input[data-k="fp_out"],input[data-k="br_out"],input[data-k="br_in"],input[data-k="speed_limit"],input[data-t][data-tk="inv"]')
     .forEach(function(el){ el.addEventListener('change', function(){ fsCollect(); fsRenderSheet(true); }); });
+}
+/* تنسيق الورقة (مرة واحدة) — أبيض بحدود كالإكسل، والعربية بلا تباعد أحرف */
+function fsSheetCss(){
+  if(document.getElementById('fsXlsCss')) return;
+  var st=document.createElement('style'); st.id='fsXlsCss';
+  st.textContent='#fsZoomBox{overflow:auto;max-height:78vh;background:#fff;border-radius:10px;border:1px solid #9fb0c5;'
+    +'-webkit-overflow-scrolling:touch;touch-action:pan-x pan-y;overscroll-behavior:contain}'
+    +'#fsZoomBox.full{position:fixed;inset:0;max-height:none;border-radius:0;z-index:1000020;padding-top:52px}'
+    +'#fsZoomBar.full{position:fixed;top:0;left:0;right:0;z-index:1000021;background:#0b1220;padding:8px;margin:0}'
+    +'#fsZoomIn{width:max-content}'
+    +'.xls{direction:rtl;color:#000;background:#fff;padding:10px;font-family:Tahoma,Arial,sans-serif;font-size:12px;letter-spacing:0;word-spacing:normal}'
+    +'.xls *{letter-spacing:0!important}'
+    +'.xls .ttl{font-size:16px;font-weight:bold;margin:2px 0 8px}'
+    +'.xls .cap{font-size:13px;font-weight:bold;margin:12px 0 4px;color:#1f3864}'
+    +'.xls table{border-collapse:collapse;width:100%}'
+    +'.xls th,.xls td{border:1px solid #8d99a8;padding:4px 5px;text-align:center;vertical-align:middle;color:#000;background:#fff;white-space:nowrap}'
+    +'.xls th{background:#dde7f4;font-weight:bold;white-space:normal;font-size:11px}'
+    +'.xls td.in{background:#fffdf0;padding:0}'
+    +'.xls td.in input,.xls td.in select{height:26px}'
+    +'.xls td.bad{background:#ffc7ce!important;color:#9c0006!important;font-weight:bold}'
+    +'.xls td.ok{background:#c6efce;color:#006100}'
+    +'.xls td.lbl{background:#eef2f7;font-weight:bold}'
+    +'.xls tr.tot td{background:#f2f2f2;font-weight:bold;border-top:2px solid #555}'
+    +'.xls tr.tot td.bad{background:#ffc7ce!important}.xls tr.tot td.ok{background:#c6efce}'
+    +'.xls tr.edge td{background:#f7f9fc}'
+    +'.xls .stb{font-size:11px;padding:3px 8px;border-radius:6px;background:#2e5ca8;color:#fff;border:0}'
+    +'.xls .stb.nw{background:#c0392b}'
+    +'.xls td.detc{background:#f7f9fc;text-align:right;white-space:normal;padding:8px}'
+    +'.xls .det{margin-bottom:6px;font-size:11px;color:#333}'
+    +'.xls table.sub{width:auto;min-width:420px}.xls table.sub a{color:#1a56c4}'
+    +'.xls .note{font-size:10px;color:#555;margin-top:5px;white-space:normal;max-width:1100px}'
+    +'.xls .sm{font-size:10px;font-weight:normal}';
+  document.head.appendChild(st);
+}
+/* التكبير والتصغير: أزرار، وقرصة إصبعين على الهاتف، وCtrl+العجلة على الحاسوب.
+   zoom في CSS يعيد ترتيب الصفحة فعلاً (لا تكبير صورة) فيبقى النص واضحاً والتمرير صحيحاً */
+function fsZoomSet(z){
+  z=Math.max(0.3,Math.min(2.5,Math.round(z*100)/100)); __fs.zoom=z;
+  var el=document.getElementById('fsZoomIn'); if(el) el.style.zoom=z;
+  var p=document.getElementById('fsZoomPct'); if(p) p.textContent=Math.round(z*100)+'%';
+  try{ localStorage.setItem('fsZoom',String(z)); }catch(e){}
+}
+window.fsZoomBy=function(dz){ fsZoomSet((__fs.zoom||1)+dz); };
+window.fsZoomFit=function(){
+  var box=document.getElementById('fsZoomBox'), el=document.getElementById('fsZoomIn'); if(!box||!el) return;
+  /* القياس بلا تكبير — المتصفحات تختلف في إرجاع الحجم مع zoom */
+  el.style.zoom=1; var w=el.offsetWidth;
+  if(w) fsZoomSet((box.clientWidth-4)/w); else fsZoomSet(__fs.zoom||1);
+};
+window.fsZoomFull=function(){
+  var box=document.getElementById('fsZoomBox'), bar=document.getElementById('fsZoomBar'); if(!box||!bar) return;
+  var on=!box.classList.contains('full'); __fs.full=on;
+  box.classList.toggle('full',on); bar.classList.toggle('full',on);
+  var b=bar.lastElementChild; if(b) b.textContent=on?'✕ إغلاق':'⛶ ملء الشاشة';
+};
+function fsZoomInit(){
+  var box=document.getElementById('fsZoomBox'); if(!box) return;
+  var z=__fs.zoom; if(!z){ try{ z=Number(localStorage.getItem('fsZoom'))||0; }catch(e){} }
+  if(z) fsZoomSet(z); else { fsZoomSet(1); fsZoomFit(); }
+  if(__fs.full){ __fs.full=false; fsZoomFull(); }
+  var d0=0, z0=1;
+  var dist=function(t){ return Math.hypot(t[0].clientX-t[1].clientX, t[0].clientY-t[1].clientY); };
+  box.addEventListener('touchstart',function(e){ if(e.touches.length===2){ d0=dist(e.touches); z0=__fs.zoom||1; } },{passive:true});
+  box.addEventListener('touchmove',function(e){
+    if(e.touches.length===2 && d0){ e.preventDefault(); fsZoomSet(z0*dist(e.touches)/d0); }
+  },{passive:false});
+  box.addEventListener('touchend',function(e){ if(e.touches.length<2) d0=0; },{passive:true});
+  box.addEventListener('wheel',function(e){
+    if(e.ctrlKey||e.metaKey){ e.preventDefault(); fsZoomSet((__fs.zoom||1)*(e.deltaY<0?1.1:0.9)); }
+  },{passive:false});
 }
 window.fsToggleTrip=function(id){
   var r=document.getElementById('fsDet'+id); if(r) r.style.display=(r.style.display==='none')?'':'none';
