@@ -17657,8 +17657,8 @@ function fleetStops(pts){
 }
 function fleetMapUrl(lat,lng){ return 'https://www.google.com/maps?q='+lat.toFixed(6)+','+lng.toFixed(6); }
 function fleetDur(ms){
-  var m=Math.round(ms/60000); if(m<60) return m+' د';
-  return Math.floor(m/60)+' س '+(m%60)+' د';
+  var m=Math.round(ms/60000);
+  return Math.floor(m/60)+':'+String(m%60).padStart(2,'0');
 }
 async function fleetLoadGps(tripId){
   var all=[], from=0, PAGE=1000;
@@ -18141,6 +18141,12 @@ function fsIsAuditor(p){ return !!p && p.role==='fleet' && /تدقيق/.test(Str
 function fsDayOf(iso){ return new Date(Date.parse(iso)+FS_TZ_MS-FS_DAY_CUT_H*3600000).toISOString().slice(0,10); }
 function fsHM(ms){ if(!ms&&ms!==0) return '—'; return new Date(ms+FS_TZ_MS).toISOString().slice(11,16); }
 function fsMin(ms){ return Math.round(ms/60000); }
+/* كل مدة تُعرض ساعات:دقائق (1:30 لا 90 د) — بإشارتها إن كانت سالبة */
+function fsH(min){
+  if(min==null||min===''||isNaN(min)) return '—';
+  var m=Math.round(Math.abs(Number(min)));
+  return (Number(min)<0?'-':'')+Math.floor(m/60)+':'+String(m%60).padStart(2,'0');
+}
 /* وقت «HH:MM» في يوم الشفت ← لحظة مطلقة؛ ما قبل ٦ص يقع في اليوم التالي */
 function fsAt(day,hm){
   if(!hm||!/^\d{1,2}:\d{2}$/.test(hm)) return null;
@@ -18316,8 +18322,8 @@ async function fsRenderSheet(keepLocal){
   var tile=function(label,val,color){ return '<div style="background:rgba(122,167,255,0.07);border-radius:10px;padding:10px;text-align:center;">'
     +'<div style="color:'+(color||'#e3ecf7')+';font-size:18px;font-weight:800;">'+val+'</div>'
     +'<div style="color:'+MUT+';font-size:10px;margin-top:2px;">'+label+'</div></div>'; };
-  var gapLine=function(label,v,rk){ return line(label,(v==null?'—':v+' د'),over(v,FS_GAP_MAX)?RED:(v==null?MUT:GRN))
-    +(over(v,FS_GAP_MAX)?'<div style="margin:4px 0 6px;">'+inp(rk,'text','⚠️ السبب (تجاوز ٢٥ دقيقة)')+'</div>':''); };
+  var gapLine=function(label,v,rk){ return line(label,fsH(v),over(v,FS_GAP_MAX)?RED:(v==null?MUT:GRN))
+    +(over(v,FS_GAP_MAX)?'<div style="margin:4px 0 6px;">'+inp(rk,'text','⚠️ السبب (تجاوز 0:25)')+'</div>':''); };
 
   var h='';
   if(locked) h+='<div class="card" style="border:1px solid rgba(56,217,185,0.5);color:'+GRN+';font-size:12px;">🔒 مقفل نهائياً بواسطة '
@@ -18335,8 +18341,8 @@ async function fsRenderSheet(keepLocal){
     +field('بصمة الدخول',inp('fp_in','time'))+field('بصمة الخروج',inp('fp_out','time'))
     +field('بداية الاستراحة',inp('br_out','time'))+field('نهاية الاستراحة',inp('br_in','time'))+'</div>'
     +gapLine('الفرق بين بصمة الدخول وأول طلب',c.gapFirst,'gap_first_reason')
-    +line('مدة الاستراحة',c.breakMin==null?'—':c.breakMin+' د',over(c.breakMin,FS_BREAK_MAX)?RED:(c.breakMin==null?MUT:GRN))
-    +(over(c.breakMin,FS_BREAK_MAX)?'<div style="margin:4px 0 6px;">'+inp('break_reason','text','⚠️ السبب (تجاوز ٣٥ دقيقة)')+'</div>':'')
+    +line('مدة الاستراحة',fsH(c.breakMin),over(c.breakMin,FS_BREAK_MAX)?RED:(c.breakMin==null?MUT:GRN))
+    +(over(c.breakMin,FS_BREAK_MAX)?'<div style="margin:4px 0 6px;">'+inp('break_reason','text','⚠️ السبب (تجاوز 0:35)')+'</div>':'')
     +line('وقت الرجوع الأخير',c.lastIn?fsHM(c.lastIn):'—')
     +gapLine('الفرق بين الرجوع الأخير وبصمة الخروج',c.gapLast,'gap_last_reason'));
 
@@ -18352,14 +18358,14 @@ async function fsRenderSheet(keepLocal){
       +'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:8px;">'
       +tile('الدخول (أول طلب)',fsHM(rw.outMs))
       +tile('الخروج (الرجوع)',rw.inMs?fsHM(rw.inMs):'—',rw.inMs?null:'#ffb37a')
-      +tile('مدة الرحلة',rw.durMin==null?'—':rw.durMin+' د')+'</div>'
+      +tile('مدة الرحلة',fsH(rw.durMin))+'</div>'
       +field('وقت تسليم الطلبات',tinp(id,'deliv',rw.deliv.join('، ')||'يُملأ من وقفات «تسليم طلب»'))
       +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">'
       +field('ملاحظات قبل الانطلاق',tinp(id,'note_before'))+field('ملاحظات بعد الانطلاق',tinp(id,'note_after'))+'</div>'
       +field('اسم المجهز',tinp(id,'preparer'))
       +(rw.trip.note?'<div style="color:#8fa3b8;font-size:11px;margin-bottom:6px;">📝 ملاحظة السائق: '+esc(rw.trip.note)+'</div>':'')
-      +(rw.stayMin!=null?line('البقاء في الشركة بعدها',rw.stayMin+' د',stayBad?RED:GRN)
-        +(stayBad?'<div style="margin-top:4px;">'+tinp(id,'stay_reason','⚠️ السبب (تجاوز ٢٥ دقيقة)')+'</div>':''):'')
+      +(rw.stayMin!=null?line('البقاء في الشركة بعدها',fsH(rw.stayMin),stayBad?RED:GRN)
+        +(stayBad?'<div style="margin-top:4px;">'+tinp(id,'stay_reason','⚠️ السبب (تجاوز 0:25)')+'</div>':''):'')
       +'</div>';
   });
   h+=sec('٣','الرحلات ('+c.rows.length+')',tr);
@@ -18372,7 +18378,7 @@ async function fsRenderSheet(keepLocal){
       +'background:'+(s.why?'rgba(56,217,185,0.07)':'rgba(225,91,100,0.09)')+';">'
       +'<div style="flex:1;">'
       +'<div style="color:#e3ecf7;font-size:12px;">رحلة '+s.n+' · '+fsHM(s.from)+' ← '+(s.live?'مستمرة':fsHM(s.to))
-      +' · <b style="color:#ffb37a;">'+s.min+' د</b>'+(s.approx?' <span style="color:#d3a04f;font-size:10px;">(تقريبية)</span>':'')+'</div>'
+      +' · <b style="color:#ffb37a;">'+fsH(s.min)+'</b>'+(s.approx?' <span style="color:#d3a04f;font-size:10px;">(تقريبية)</span>':'')+'</div>'
       +'<div style="font-size:12px;margin-top:2px;color:'+(s.why?GRN:RED)+';">'+(s.why?'📝 '+esc(s.why):'⚠️ بلا سبب')+'</div></div>'
       +'<a href="'+fleetMapUrl(s.lat,s.lng)+'" target="_blank" rel="noopener" style="text-decoration:none;background:#2e5ca8;color:#fff;'
       +'border-radius:9px;padding:7px 10px;font-size:12px;white-space:nowrap;">📍 الموقع</a></div>';
@@ -18392,9 +18398,9 @@ async function fsRenderSheet(keepLocal){
   var spTxt=Number(d.speed_limit)?(c.spCount?c.spCount+' مرة':'لا يوجد'):'حدّد الحد';
   h+=sec('٦','ملخص الأداء',
      '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;">'
-    +tile('عدد الزيارات',c.visits)+tile('عدد الفواتير',d.invoices||'—')+tile('إجمالي الوقت',c.total+' د')
-    +tile('متوسط وقت الطلب',c.avg==null?'—':c.avg+' د')+tile('أطول زيارة',c.longest==null?'—':c.longest+' د')
-    +tile('أقصر زيارة',c.shortest==null?'—':c.shortest+' د')
+    +tile('عدد الزيارات',c.visits)+tile('عدد الفواتير',d.invoices||'—')+tile('إجمالي الوقت',fsH(c.total))
+    +tile('متوسط وقت الطلب',fsH(c.avg))+tile('أطول زيارة',fsH(c.longest))
+    +tile('أقصر زيارة',fsH(c.shortest))
     +tile('تجاوز السرعة',spTxt,c.spCount?RED:GRN)+tile('أعلى سرعة',c.spMax+' كم/س')
     +tile('توقفات بلا سبب',c.stopsNoReason||'0',c.stopsNoReason?RED:GRN)+'</div>');
 
@@ -18461,30 +18467,30 @@ function fsPrintHtml(c,d){
   var tr=function(a,b){ return '<tr><th>'+a+'</th><td>'+b+'</td></tr>'; };
   var rows=c.rows.map(function(rw){ var t=T[rw.trip.id]||{};
     return '<tr><td>'+rw.n+'</td><td>'+fsHM(rw.outMs)+'</td><td>'+e(t.deliv||rw.deliv.join('، '))+'</td><td>'+e(t.note_before)+'</td>'
-      +'<td>'+(rw.inMs?fsHM(rw.inMs):'—')+'</td><td>'+e(rw.durMin)+'</td><td>'+e(rw.stayMin)+(t.stay_reason?' ('+esc(t.stay_reason)+')':'')+'</td>'
+      +'<td>'+(rw.inMs?fsHM(rw.inMs):'—')+'</td><td>'+fsH(rw.durMin)+'</td><td>'+fsH(rw.stayMin)+(t.stay_reason?' ('+esc(t.stay_reason)+')':'')+'</td>'
       +'<td>'+e(t.note_after)+'</td><td>'+e(t.preparer)+'</td></tr>'; }).join('');
   var stops=c.stops.map(function(s){
-    return '<tr><td>'+s.n+'</td><td>'+fsHM(s.from)+'</td><td>'+(s.live?'مستمرة':fsHM(s.to))+'</td><td>'+s.min+'</td><td>'+(s.why?esc(s.why):'⚠️ بلا سبب')+'</td></tr>'; }).join('');
+    return '<tr><td>'+s.n+'</td><td>'+fsHM(s.from)+'</td><td>'+(s.live?'مستمرة':fsHM(s.to))+'</td><td>'+fsH(s.min)+'</td><td>'+(s.why?esc(s.why):'⚠️ بلا سبب')+'</td></tr>'; }).join('');
   return '<h2>جدول تدقيق التوصيل اليومي</h2>'
     +'<table class="two">'+tr('اسم المندوب',e(c.name))+tr('التاريخ',__fs.day)+tr('المركبة',e(c.plates))+tr('الشفت',c.shift)
     +tr('تأييد استلام وتسليم المركبة',c.allOk?'تم الاستلام والتسليم':'غير مكتمل')+tr('تأييد غسل المركبة',c.washed?'تم الغسل':'لم يتم')+'</table>'
     +'<h3>الرحلات</h3><table><tr><th>#</th><th>وقت الدخول</th><th>وقت تسليم الطلبات</th><th>ملاحظات قبل الانطلاق</th><th>وقت الخروج</th>'
-    +'<th>مدة الرحلة (د)</th><th>البقاء بعدها (د)</th><th>ملاحظات بعد الانطلاق</th><th>اسم المجهز</th></tr>'+(rows||'<tr><td colspan="9">لا رحلات</td></tr>')+'</table>'
-    +'<h3>الوقفات (أكثر من ٣ دقائق)</h3><table><tr><th>رحلة</th><th>من</th><th>إلى</th><th>المدة (د)</th><th>السبب</th></tr>'
+    +'<th>مدة الرحلة (س:د)</th><th>البقاء بعدها (س:د)</th><th>ملاحظات بعد الانطلاق</th><th>اسم المجهز</th></tr>'+(rows||'<tr><td colspan="9">لا رحلات</td></tr>')+'</table>'
+    +'<h3>الوقفات (أكثر من ٣ دقائق)</h3><table><tr><th>رحلة</th><th>من</th><th>إلى</th><th>المدة (س:د)</th><th>السبب</th></tr>'
     +(stops||'<tr><td colspan="5">لا وقفات</td></tr>')+'</table>'
     +'<h3>البصمات وملخص الأداء</h3><table class="four">'+fsPairs([
       ['بصمة الدخول',e(d.fp_in)],
-      ['الفرق بين بصمة الدخول وأول طلب (د)',e(c.gapFirst)+(d.gap_first_reason?' — '+esc(d.gap_first_reason):'')],
-      ['الاستراحة',e(d.br_out)+' ← '+e(d.br_in)+' ('+e(c.breakMin)+' د)'+(d.break_reason?' — '+esc(d.break_reason):'')],
+      ['الفرق بين بصمة الدخول وأول طلب (س:د)',fsH(c.gapFirst)+(d.gap_first_reason?' — '+esc(d.gap_first_reason):'')],
+      ['الاستراحة',e(d.br_out)+' ← '+e(d.br_in)+' ('+fsH(c.breakMin)+')'+(d.break_reason?' — '+esc(d.break_reason):'')],
       ['وقت الرجوع الأخير',c.lastIn?fsHM(c.lastIn):'—'],
       ['بصمة الخروج',e(d.fp_out)],
-      ['الفرق بين الرجوع الأخير وبصمة الخروج (د)',e(c.gapLast)+(d.gap_last_reason?' — '+esc(d.gap_last_reason):'')],
+      ['الفرق بين الرجوع الأخير وبصمة الخروج (س:د)',fsH(c.gapLast)+(d.gap_last_reason?' — '+esc(d.gap_last_reason):'')],
       ['عدد الزيارات',c.visits],
       ['عدد الفواتير',e(d.invoices)],
-      ['إجمالي الوقت (د)',c.total],
-      ['متوسط وقت الطلب (د)',e(c.avg)],
-      ['أطول زيارة (د)',e(c.longest)],
-      ['أقصر زيارة (د)',e(c.shortest)],
+      ['إجمالي الوقت (س:د)',fsH(c.total)],
+      ['متوسط وقت الطلب (س:د)',fsH(c.avg)],
+      ['أطول زيارة (س:د)',fsH(c.longest)],
+      ['أقصر زيارة (س:د)',fsH(c.shortest)],
       ['تجاوز السرعة',(Number(d.speed_limit)?(c.spCount?c.spCount+' مرة':'لا يوجد')+' (الحد '+esc(d.speed_limit)+' كم/س، الأعلى '+c.spMax+')':'—')],
       ['توقفات بدون سبب',c.stopsNoReason||'لا يوجد'],
       ['تقييم المسار',e(d.route_rating)],
