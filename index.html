@@ -17258,14 +17258,7 @@ window.renderDriverView = async function(profile){
           h+='<div class="card" style="border:1px solid rgba(122,167,255,0.45);">'
             +'<h2>'+kindLabel(v.kind)+' '+esc(v.plate)+' <span style="color:#38d9b9;font-size:12px;">بحوزتك</span></h2>'
             +'<div style="color:#7487a0;font-size:11px;margin:6px 0;">منذ '+fmt(v.taken_at)+'</div>'
-            +fleetGpsGate(trip)
-            /* مخرج طوارئ: لا تبقى المركبة عالقة بحوزته إن تعذّر الموقع — يُسجَّل للتدقيق */
-            +'<details style="margin-top:10px;"><summary style="color:#8fa3b8;font-size:12px;cursor:pointer;">'
-            +'تعذّر إرسال الموقع؟ إرجاع المركبة بدونه</summary>'
-            +'<textarea id="fnote'+v.id+'" placeholder="سبب عدم إرسال الموقع (مطلوب)" '
-            +'style="width:100%;margin-top:8px;min-height:52px;font-size:12px;"></textarea>'
-            +'<button style="width:100%;margin-top:8px;background:#8a4b1f;font-size:13px;padding:11px;" '
-            +'onclick="fleetReturnNoGps('+v.id+')">⚠️ إرجاع بدون موقع</button></details></div>';
+            +fleetGpsGate(trip)+'</div>';
           continue;
         }
         var rep = trip ? await fleetRepeatAnchor(v.id, uid) : null;
@@ -17874,16 +17867,6 @@ window.fleetReturn=async function(vid){
     try{ neoPlay('done'); }catch(e){}
   }catch(e){ toast('تعذّر الإرجاع'); }
   await window.renderDriverView(p);
-};
-
-/* إرجاع بلا موقع: السبب إلزامي ويُكتب في ملاحظة الرحلة ليراه مسؤول التدقيق */
-window.fleetReturnNoGps=async function(vid){
-  var ta=document.getElementById('fnote'+vid);
-  var why=ta?ta.value.trim():'';
-  if(!why){ toast('اكتب سبب عدم إرسال الموقع'); if(ta) ta.focus(); return; }
-  if(!confirm('إرجاع المركبة بدون موقع؟ ستُسجَّل الرحلة «بدون GPS» للتدقيق.')) return;
-  ta.value='⚠️ بدون موقع GPS — '+why;
-  await window.fleetReturn(vid);
 };
 
 /* ════════════ واجهة مسؤول قسم التوصيل ════════════ */
