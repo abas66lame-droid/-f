@@ -311,7 +311,8 @@ async function gotLocation(chat: number, st: any, m: any, edited: boolean) {
    والسائق واقف). كل وقفة تُسأل مرة واحدة: صفّها في fleet_stop_reasons هو علامة السؤال. */
 const STOP_MS = 3 * 60000;
 const STOP_REASONS: Record<string, string> = {
-  t: "🚦 إشارة مرور", j: "🚗 زحام", d: "📦 تسليم/استلام طلب", f: "⛽ وقود", r: "☕ استراحة", o: "✏️ أخرى",
+  t: "🚦 إشارة مرور", j: "🚗 زحام", d: "📦 تسليم/استلام طلب", f: "⛽ وقود",
+  z: "🛢 تبديل زيت", m: "🔧 تصليح", r: "☕ استراحة", o: "✏️ أخرى",
 };
 function stopClusters(pts: { lat: number; lng: number; at: number }[]) {
   const out: { lat: number; lng: number; from: number; last: number; end: number; closed: boolean }[] = [];
@@ -443,10 +444,13 @@ async function onCallback(q: any) {
     const reason = STOP_REASONS[code] || code;
     await saveStopReason(tripId, fromS, reason);
     await tg("answerCallbackQuery", { callback_query_id: q.id, text: "✓ سُجّل السبب" });
-    return tg("editMessageText", {
+    await tg("editMessageText", {
       chat_id: chat, message_id: q.message.message_id,
       text: (q.message.text || "") + `\n\n✓ السبب: ${reason}`,
     });
+    /* تسليم طلب: تذكير الزبون بالتوقيع وكتابة الوقت على الفاتورة */
+    if (code === "d") await say(chat, "✍️ تذكير: اطلب من الزبون التوقيع وكتابة الوقت على الفاتورة.");
+    return;
   }
 
   if (data.startsWith("au:")) {

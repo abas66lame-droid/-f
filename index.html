@@ -17207,11 +17207,11 @@ async function takeVehicle(v,uid,uname){
   return {ok:true,trip:(t.data&&t.data[0])||null};
 }
 
-async function returnVehicle(v,trip,note){
-  if(trip) await SB().from('fleet_trips').update({
+async function returnVehicle(v,trip,note,info){
+  if(trip) await SB().from('fleet_trips').update(Object.assign({
     in_at:nowISO(), note:note||null,
     verified_by:'auto', verified_name:'اعتماد تلقائي', verified_at:nowISO()
-  }).eq('id',trip.id);
+  },info||{})).eq('id',trip.id);
   await SB().from('fleet_vehicles')
     .update({holder_id:null,holder_name:null,taken_at:null}).eq('id',v.id);
   return true;
@@ -17296,6 +17296,7 @@ window.renderDriverView = async function(profile){
             +'أنجزت مهام هذه المركبة اليوم بالكامل في رحلتك الأولى '
             +'('+fmt(rep.anchor.out_at)+') — لا حاجة لإعادتها.'
             +'<br>اضغط <b style="color:#38d9b9;">تسليم</b> عند رجوعك فقط.</div></div>'
+            +fleetTripInfo(trip,v)
             +'<textarea id="fnote'+v.id+'" placeholder="ملاحظة عند التسليم (اختياري)" '
             +'style="width:100%;margin-top:10px;min-height:52px;font-size:12px;"></textarea>'
             +'<button style="width:100%;margin-top:8px;background:#14705f;font-size:13px;padding:11px;" '
@@ -17323,6 +17324,7 @@ window.renderDriverView = async function(profile){
             h+=taskRow(t,on,'in');
           }
         }
+        h+=fleetTripInfo(trip,v);
         h+='<textarea id="fnote'+v.id+'" placeholder="ملاحظة عند الإرجاع (اختياري)" '
           +'style="width:100%;margin-top:10px;min-height:52px;font-size:12px;"></textarea>'
           +'<button style="width:100%;margin-top:8px;background:#14705f;font-size:13px;padding:11px;" '
@@ -17873,6 +17875,38 @@ window.fleetCheck=async function(tripId,phase,taskId,el){
   }catch(e){ toast('تعذّر الحفظ'); }
 };
 
+/* بيانات الرحلة التي يسجّلها السائق: عدد الفواتير، المجهّز، وقت التجهيز — تُحفظ فور الكتابة */
+function fleetTripInfo(trip,v){
+  var st='width:100%;font-size:13px;padding:9px;box-sizing:border-box;';
+  return '<div style="background:rgba(122,167,255,0.07);border-radius:11px;padding:11px;margin-top:10px;">'
+    +'<div style="color:#cfe0f5;font-size:13px;font-weight:800;margin-bottom:8px;">🧾 بيانات الرحلة</div>'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">'
+    +'<div><div style="color:#a9b8c9;font-size:11px;margin-bottom:4px;">عدد الفواتير *</div>'
+    +'<input id="fiInv'+v.id+'" type="number" min="0" inputmode="numeric" value="'+(trip.invoices==null?'':trip.invoices)+'" '
+    +'onchange="fleetTripInfoSave('+trip.id+','+v.id+')" style="'+st+'"></div>'
+    +'<div><div style="color:#a9b8c9;font-size:11px;margin-bottom:4px;">وقت التجهيز</div>'
+    +'<input id="fiPat'+v.id+'" type="time" value="'+esc(trip.prep_at||'')+'" '
+    +'onchange="fleetTripInfoSave('+trip.id+','+v.id+')" style="'+st+'"></div></div>'
+    +'<div style="color:#a9b8c9;font-size:11px;margin:8px 0 4px;">اسم المجهّز</div>'
+    +'<input id="fiPrep'+v.id+'" value="'+esc(trip.preparer||'')+'" placeholder="من جهّز لك الطلبات" '
+    +'onchange="fleetTripInfoSave('+trip.id+','+v.id+')" style="'+st+'">'
+    +'<div style="background:rgba(255,179,122,0.12);border:1px solid rgba(255,179,122,0.45);border-radius:10px;'
+    +'padding:10px;margin-top:10px;color:#ffcf9f;font-size:12px;line-height:1.8;">'
+    +'✍️ <b>تذكير:</b> عند تسليم كل طلب اطلب من الزبون <b>التوقيع وكتابة الوقت</b> على الفاتورة.</div></div>';
+}
+function fleetTripInfoRead(vid){
+  var a=document.getElementById('fiInv'+vid); if(!a) return null;
+  var n=a.value.trim();
+  return { invoices: n===''?null:Math.max(0,Math.round(Number(n))||0),
+    preparer: (document.getElementById('fiPrep'+vid).value||'').trim()||null,
+    prep_at: document.getElementById('fiPat'+vid).value||null };
+}
+window.fleetTripInfoSave=async function(tripId,vid){
+  var info=fleetTripInfoRead(vid); if(!info) return;
+  var w=await SB().from('fleet_trips').update(info).eq('id',tripId);
+  if(w.error) toast('لم تُحفظ بيانات الرحلة: '+w.error.message); else toast('✓ حُفظت',true);
+};
+
 window.fleetReturn=async function(vid){
   var p=window.__fleetProfile; if(!p) return;
   try{
@@ -17882,7 +17916,14 @@ window.fleetReturn=async function(vid){
     if(String(v.holder_id||'')!==String(p.id)){ toast('هذه المركبة ليست بحوزتك'); return; }
     var ta=document.getElementById('fnote'+vid);
     var trip=await getOpenTrip(v.id);
-    await returnVehicle(v,trip,ta?ta.value.trim():'');
+    /* عدد فواتير الرحلة إلزامي قبل الإرجاع — عليه يُحسب متوسط وقت الفاتورة */
+    var info=fleetTripInfoRead(vid);
+    if(trip && info && info.invoices==null){
+      toast('اكتب عدد فواتير هذه الرحلة أولاً');
+      var fi=document.getElementById('fiInv'+vid); if(fi) fi.focus();
+      return;
+    }
+    await returnVehicle(v,trip,ta?ta.value.trim():'',info);
     toast('تم إرجاع '+v.plate,true);
     try{ neoPlay('done'); }catch(e){}
   }catch(e){ toast('تعذّر الإرجاع'); }
@@ -18159,6 +18200,9 @@ window.fleetSupTrips=async function(day){
    الوقفات، السرعة، تأييد الاستلام والغسل)، وما لا يعرفه يُدخله المدقّق (البصمات،
    الفواتير، المجهز، الملاحظات). «حفظ» مسودة تُعدَّل، و«قفل نهائي» لا يُعدَّل بعده.
    اليوم يوم الشفت لا يوم التقويم: المسائي يمتد حتى ٢ص ويُحسب على يومه. */
+/* FS_EDGE_MAX: سماح البقاء في الشركة بين بصمة الدخول وأول خروج، وبين آخر رجوع وبصمة الخروج.
+   FS_INV_MAX: أقصى متوسط لوقت الفاتورة الواحدة (دقيقة) حسب المركبة */
+var FS_EDGE_MAX=35, FS_INV_MAX={car:30, bike:20};
 var FS_GAP_MAX=25, FS_BREAK_MAX=35, FS_TZ_MS=3*3600000, FS_DAY_CUT_H=2;
 var __fs={ day:'', driver:'', trips:[], row:null, calc:null };
 /* الجدول لمسؤول تدقيق التوصيل وحده: دوره fleet كمسؤول التوصيل وآلياته،
@@ -18360,7 +18404,12 @@ async function fsCompute(){
     var g=fsGeoTrip(pts);
     var appOut=Date.parse(tr.out_at), appIn=tr.in_at?Date.parse(tr.in_at):null;
     var outMs=g.leave||appOut, inMs=(g.back&&appIn)?Math.min(g.back,appIn):appIn;
+    var ov=((d.trips||{})[tr.id]||{}).inv;
+    var invN=(ov!=null&&ov!=='')?Number(ov):(tr.invoices==null?null:Number(tr.invoices));
+    var kindV=(vmap[vk2]||{}).kind==='bike'?'bike':'car';
+    var durM=inMs?fsMin(inMs-outMs):null;
     rows.push({ trip:tr, n:k+1, plate:(vmap[vk2]||{}).plate||'', ok:ok, outMs:outMs, inMs:inMs,
+      inv:invN, kind:kindV, invAvg:(durM!=null&&invN)?Math.round(durM/invN):null,
       outGeo:!!g.leave, inGeo:!!(g.back&&appIn), appOut:appOut, appIn:appIn, exits:g.exits,
       durMin: inMs?fsMin(inMs-outMs):null, deliv:deliv, gps:pts.length });
   }
@@ -18376,14 +18425,18 @@ async function fsCompute(){
   var total=closed.reduce(function(s,r){ return s+r.durMin; },0);
   var fpIn=fsAt(__fs.day,d.fp_in), fpOut=fsAt(__fs.day,d.fp_out);
   var lastIn=rows.length?rows[rows.length-1].inMs:null;
-  var inv=Number(d.invoices)||0;
+  var inv=rows.reduce(function(s,r){ return s+(r.inv||0); },0) || Number(d.invoices)||0;
+  var invMissing=rows.filter(function(r){ return r.inv==null; }).length;
+  var stays=rows.reduce(function(s,r){ return s+(r.stayMin>0?r.stayMin:0); },0);
   return { rows:rows, stops:stopsAll, allOk:allOk, washed:washed, stopsNoReason:stopsNoReason, spMax:spMax, spCount:spCount,
-    total:total, visits:rows.length, avg: inv?Math.round(total/inv*10)/10:null,
+    total:total, visits:rows.length, avg: inv?Math.round(total/inv):null, invoices:inv, invMissing:invMissing,
+    invMax: FS_INV_MAX[(rows[0]||{}).kind||'car'],
     longest: closed.length?Math.max.apply(null,closed.map(function(r){return r.durMin;})):null,
     shortest: closed.length?Math.min.apply(null,closed.map(function(r){return r.durMin;})):null,
     gapFirst: (fpIn&&rows.length)?fsMin(rows[0].outMs-fpIn):null,
     gapLast: (fpOut&&lastIn)?fsMin(fpOut-lastIn):null,
     breakMin: (brOut&&brIn)?fsMin(brIn-brOut):null,
+    inCompany: stays+((fpIn&&rows.length)?Math.max(0,fsMin(rows[0].outMs-fpIn)):0)+((fpOut&&lastIn)?Math.max(0,fsMin(fpOut-lastIn)):0),
     lastIn:lastIn, shift: rows.length?fsShiftName(rows[0].outMs):'—',
     plates: rows.map(function(r){return r.plate;}).filter(function(v,i,a){return v&&a.indexOf(v)===i;}).join('، '),
     name: (__fs.trips[0]||{}).driver_name||'' };
@@ -18410,6 +18463,9 @@ async function fsRenderSheet(keepLocal){
   var tinp=function(id,k,ph){ return '<input data-t="'+id+'" data-tk="'+k+'" value="'+tv(id,k)+'" placeholder="'+(ph||'')
     +'" style="width:100%;font-size:12px;padding:7px;box-sizing:border-box;"'+dis+'>'; };
   var over=function(v,max){ return v!=null && v>max; };
+  /* حقل رحلة قيمته الافتراضية ما سجّله السائق */
+  var tinpV=function(id,k,def){ var t=(d.trips||{})[id]||{}; var v=(t[k]==null||t[k]==='')?(def==null?'':def):t[k];
+    return '<input data-t="'+id+'" data-tk="'+k+'" value="'+esc(String(v))+'" style="width:100%;font-size:12px;padding:7px;box-sizing:border-box;"'+dis+'>'; };
   /* بطاقة قسم مرقّمة */
   var sec=function(n,title,inner){ return '<div class="card"><div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">'
     +'<span style="background:#2e5ca8;color:#fff;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;">'+n+'</span>'
@@ -18423,8 +18479,14 @@ async function fsRenderSheet(keepLocal){
   var tile=function(label,val,color){ return '<div style="background:rgba(122,167,255,0.07);border-radius:10px;padding:10px;text-align:center;">'
     +'<div style="color:'+(color||'#e3ecf7')+';font-size:18px;font-weight:800;">'+val+'</div>'
     +'<div style="color:'+MUT+';font-size:10px;margin-top:2px;">'+label+'</div></div>'; };
-  var gapLine=function(label,v,rk){ return line(label,fsH(v),over(v,FS_GAP_MAX)?RED:(v==null?MUT:GRN))
-    +(over(v,FS_GAP_MAX)?'<div style="margin:4px 0 6px;">'+inp(rk,'text','⚠️ السبب (تجاوز 0:25)')+'</div>':''); };
+  /* بين البصمة وأول خروج / آخر رجوع والبصمة: سماح 0:35، وما زاد يتلوّن أحمر ويُطلب سببه */
+  var tileBad=function(label,val,bad){ return '<div style="background:'+(bad?'rgba(225,91,100,0.30)':'rgba(56,217,185,0.10)')+';border-radius:10px;padding:10px;text-align:center;'
+    +(bad?'border:1px solid #e15b64;':'')+'"><div style="color:'+(bad?'#ff8a8a':'#38d9b9')+';font-size:18px;font-weight:800;">'+val+'</div>'
+    +'<div style="color:'+MUT+';font-size:10px;margin-top:2px;">'+label+'</div></div>'; };
+  var gapLine=function(label,v,rk){ var bad=over(v,FS_EDGE_MAX);
+    return '<div style="margin:6px 0;padding:2px 8px;border-radius:9px;background:'+(bad?'rgba(225,91,100,0.18)':'transparent')+';">'
+    +line(label,fsH(v),bad?RED:(v==null?MUT:GRN))+'</div>'
+    +(bad?'<div style="margin:4px 0 6px;">'+inp(rk,'text','⚠️ السبب (تجاوز 0:35)')+'</div>':''); };
 
   var h='';
   if(locked) h+='<div class="card" style="border:1px solid rgba(56,217,185,0.5);color:'+GRN+';font-size:12px;">🔒 مقفل نهائياً بواسطة '
@@ -18441,7 +18503,7 @@ async function fsRenderSheet(keepLocal){
      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">'
     +field('بصمة الدخول',inp('fp_in','time'))+field('بصمة الخروج',inp('fp_out','time'))
     +field('بداية الاستراحة',inp('br_out','time'))+field('نهاية الاستراحة',inp('br_in','time'))+'</div>'
-    +gapLine('الفرق بين بصمة الدخول وأول طلب',c.gapFirst,'gap_first_reason')
+    +gapLine('الفرق بين بصمة الدخول وأول خروج',c.gapFirst,'gap_first_reason')
     +line('مدة الاستراحة',fsH(c.breakMin),over(c.breakMin,FS_BREAK_MAX)?RED:(c.breakMin==null?MUT:GRN))
     +(over(c.breakMin,FS_BREAK_MAX)?'<div style="margin:4px 0 6px;">'+inp('break_reason','text','⚠️ السبب (تجاوز 0:35)')+'</div>':'')
     +line('وقت الرجوع الأخير',c.lastIn?fsHM(c.lastIn):'—')
@@ -18459,14 +18521,19 @@ async function fsRenderSheet(keepLocal){
       +'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:8px;">'
       +tile((rw.outGeo?'📍 غادر الشركة':'الدخول (أول طلب)'),fsHM(rw.outMs))
       +tile((rw.inGeo?'📍 رجع للشركة':'الخروج (الرجوع)'),rw.inMs?fsHM(rw.inMs):'—',rw.inMs?null:'#ffb37a')
-      +tile('مدة الرحلة',fsH(rw.durMin))+'</div>'
+      +tile('مدة الرحلة',fsH(rw.durMin))
+      +tile('عدد الفواتير',rw.inv==null?'—':rw.inv,rw.inv==null?'#ffb37a':null)
+      +tileBad('متوسط الفاتورة',fsH(rw.invAvg),rw.invAvg!=null&&rw.invAvg>FS_INV_MAX[rw.kind])
+      +tile('التجهيز',esc(rw.trip.prep_at||'—'))+'</div>'
+      +'<div style="color:#7487a0;font-size:10px;margin:-4px 0 8px;">حد متوسط الفاتورة '+fsH(FS_INV_MAX[rw.kind])+' ('+(rw.kind==='bike'?'دراجة':'سيارة')+')</div>'
       +'<div style="color:#7487a0;font-size:10px;margin:-2px 0 8px;">'
         +(rw.outGeo||rw.inGeo?'📍 من موقع السائق · ':'')+'التطبيق: استلام '+fsHM(rw.appOut)+(rw.appIn?' · إرجاع '+fsHM(rw.appIn):'')
         +(rw.exits>1?' · <span style="color:#ffb37a;">خرج من الشركة '+rw.exits+' مرات</span>':'')+'</div>'
       +field('وقت تسليم الطلبات',tinp(id,'deliv',rw.deliv.join('، ')||'يُملأ من وقفات «تسليم طلب»'))
       +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">'
       +field('ملاحظات قبل الانطلاق',tinp(id,'note_before'))+field('ملاحظات بعد الانطلاق',tinp(id,'note_after'))+'</div>'
-      +field('اسم المجهز',tinp(id,'preparer'))
+      +'<div style="display:grid;grid-template-columns:2fr 1fr;gap:8px;">'
+      +field('اسم المجهز',tinpV(id,'preparer',rw.trip.preparer))+field('عدد الفواتير (تعديل)',tinpV(id,'inv',rw.trip.invoices))+'</div>'
       +(rw.trip.note?'<div style="color:#8fa3b8;font-size:11px;margin-bottom:6px;">📝 ملاحظة السائق: '+esc(rw.trip.note)+'</div>':'')
       +(rw.stayMin!=null?line('البقاء في الشركة بعدها',fsH(rw.stayMin),stayBad?RED:GRN)
         +(stayBad?'<div style="margin-top:4px;">'+tinp(id,'stay_reason','⚠️ السبب (تجاوز 0:25)')+'</div>':''):'')
@@ -18492,7 +18559,9 @@ async function fsRenderSheet(keepLocal){
   /* ٥ الفواتير والتقييم */
   h+=sec('٥','الفواتير والتقييم',
      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">'
-    +field('عدد الفواتير',inp('invoices','number'))+field('حد السرعة (كم/س)',inp('speed_limit','number','مثلاً 80'))+'</div>'
+    +field('عدد الفواتير (من السائق)','<div style="padding:8px;font-size:14px;font-weight:800;color:'+(c.invMissing?'#ffb37a':'#e3ecf7')+';">'
+      +c.invoices+(c.invMissing?' <span style="font-size:11px;">— '+c.invMissing+' رحلة بلا عدد</span>':'')+'</div>')
+    +field('حد السرعة (كم/س)',inp('speed_limit','number','مثلاً 80'))+'</div>'
     +field('الوقت والتوقيع على الفواتير',sel('inv_sign',['تم لجميع الفواتير','تم لبعض الفواتير','لم يتم']))
     +field('تأييد الاستلام والفحص على الفواتير',sel('inv_check',['تم لجميع الفواتير','تم لبعض الفواتير','بدون تأييد لجميع الفواتير']))
     +field('تقييم المسار',sel('route_rating',['جيد','متوسط','سيء']))
@@ -18502,9 +18571,10 @@ async function fsRenderSheet(keepLocal){
   var spTxt=Number(d.speed_limit)?(c.spCount?c.spCount+' مرة':'لا يوجد'):'حدّد الحد';
   h+=sec('٦','ملخص الأداء',
      '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;">'
-    +tile('عدد الزيارات',c.visits)+tile('عدد الفواتير',d.invoices||'—')+tile('إجمالي الوقت',fsH(c.total))
-    +tile('متوسط وقت الطلب',fsH(c.avg))+tile('أطول زيارة',fsH(c.longest))
-    +tile('أقصر زيارة',fsH(c.shortest))
+    +tile('عدد الرحلات',c.visits)+tile('مجموع الفواتير',c.invoices||'—')+tile('مجموع وقت الرحلات',fsH(c.total))
+    +tile('مجموع الوقت داخل الشركة',fsH(c.inCompany))
+    +tileBad('متوسط وقت الفاتورة',fsH(c.avg),c.avg!=null&&c.avg>c.invMax)+tile('أطول رحلة',fsH(c.longest))
+    +tile('أقصر رحلة',fsH(c.shortest))
     +tile('تجاوز السرعة',spTxt,c.spCount?RED:GRN)+tile('أعلى سرعة',c.spMax+' كم/س')
     +tile('توقفات بلا سبب',c.stopsNoReason||'0',c.stopsNoReason?RED:GRN)+'</div>');
 
@@ -18545,9 +18615,9 @@ window.fleetSheetSave=async function(lock){
   /* القفل لا رجعة فيه: نذكّر بالنواقص قبله */
   var warn=[];
   if(!d.fp_in) warn.push('بصمة الدخول'); if(!d.fp_out) warn.push('بصمة الخروج');
-  if(!d.invoices) warn.push('عدد الفواتير'); if(!d.route_rating) warn.push('تقييم المسار');
-  if(c.gapFirst>FS_GAP_MAX && !d.gap_first_reason) warn.push('سبب تأخر أول طلب');
-  if(c.gapLast>FS_GAP_MAX && !d.gap_last_reason) warn.push('سبب تأخر بصمة الخروج');
+  if(c.invMissing) warn.push('عدد الفواتير لـ'+c.invMissing+' رحلة'); if(!d.route_rating) warn.push('تقييم المسار');
+  if(c.gapFirst>FS_EDGE_MAX && !d.gap_first_reason) warn.push('سبب تأخر أول خروج');
+  if(c.gapLast>FS_EDGE_MAX && !d.gap_last_reason) warn.push('سبب تأخر بصمة الخروج');
   if(c.breakMin>FS_BREAK_MAX && !d.break_reason) warn.push('سبب طول الاستراحة');
   (c.rows||[]).forEach(function(rw){ if(rw.stayMin>FS_GAP_MAX && !((d.trips||{})[rw.trip.id]||{}).stay_reason) warn.push('سبب البقاء بعد الرحلة '+rw.n); });
   fleetConfirm('قفل نهائي',
@@ -18572,29 +18642,32 @@ function fsPrintHtml(c,d){
   var rows=c.rows.map(function(rw){ var t=T[rw.trip.id]||{};
     return '<tr><td>'+rw.n+'</td><td>'+fsHM(rw.outMs)+'</td><td>'+e(t.deliv||rw.deliv.join('، '))+'</td><td>'+e(t.note_before)+'</td>'
       +'<td>'+(rw.inMs?fsHM(rw.inMs):'—')+'</td><td>'+fsH(rw.durMin)+'</td><td>'+fsH(rw.stayMin)+(t.stay_reason?' ('+esc(t.stay_reason)+')':'')+'</td>'
-      +'<td>'+e(t.note_after)+'</td><td>'+e(t.preparer)+'</td></tr>'; }).join('');
+      +'<td>'+e(t.note_after)+'</td><td>'+e(t.preparer||rw.trip.preparer)+'</td><td>'+e(rw.trip.prep_at)+'</td><td>'+(rw.inv==null?'—':rw.inv)+'</td>'
+      +'<td'+(rw.invAvg!=null&&rw.invAvg>FS_INV_MAX[rw.kind]?' class="bad"':'')+'>'+fsH(rw.invAvg)+'</td></tr>'; }).join('');
   var stops=c.stops.map(function(s){
     return '<tr><td>'+s.n+'</td><td>'+fsHM(s.from)+'</td><td>'+(s.live?'مستمرة':fsHM(s.to))+'</td><td>'+fsH(s.min)+'</td><td>'+(s.why?esc(s.why):'⚠️ بلا سبب')+'</td></tr>'; }).join('');
   return '<h2>جدول تدقيق التوصيل اليومي</h2>'
     +'<table class="two">'+tr('اسم المندوب',e(c.name))+tr('التاريخ',__fs.day)+tr('المركبة',e(c.plates))+tr('الشفت',c.shift)
     +tr('تأييد استلام وتسليم المركبة',c.allOk?'تم الاستلام والتسليم':'غير مكتمل')+tr('تأييد غسل المركبة',c.washed?'تم الغسل':'لم يتم')+'</table>'
     +'<h3>الرحلات</h3><table><tr><th>#</th><th>وقت الدخول</th><th>وقت تسليم الطلبات</th><th>ملاحظات قبل الانطلاق</th><th>وقت الخروج</th>'
-    +'<th>مدة الرحلة (س:د)</th><th>البقاء بعدها (س:د)</th><th>ملاحظات بعد الانطلاق</th><th>اسم المجهز</th></tr>'+(rows||'<tr><td colspan="9">لا رحلات</td></tr>')+'</table>'
+    +'<th>مدة الرحلة (س:د)</th><th>البقاء بعدها (س:د)</th><th>ملاحظات بعد الانطلاق</th><th>اسم المجهز</th><th>وقت التجهيز</th><th>الفواتير</th><th>متوسط الفاتورة</th></tr>'
+    +(rows||'<tr><td colspan="12">لا رحلات</td></tr>')+'</table>'
     +'<h3>الوقفات (أكثر من ٣ دقائق)</h3><table><tr><th>رحلة</th><th>من</th><th>إلى</th><th>المدة (س:د)</th><th>السبب</th></tr>'
     +(stops||'<tr><td colspan="5">لا وقفات</td></tr>')+'</table>'
     +'<h3>البصمات وملخص الأداء</h3><table class="four">'+fsPairs([
       ['بصمة الدخول',e(d.fp_in)],
-      ['الفرق بين بصمة الدخول وأول طلب (س:د)',fsH(c.gapFirst)+(d.gap_first_reason?' — '+esc(d.gap_first_reason):'')],
+      ['الفرق بين بصمة الدخول وأول خروج (س:د)',(c.gapFirst>FS_EDGE_MAX?'<b class="bad">':'')+fsH(c.gapFirst)+(c.gapFirst>FS_EDGE_MAX?'</b>':'')+(d.gap_first_reason?' — '+esc(d.gap_first_reason):'')],
       ['الاستراحة',e(d.br_out)+' ← '+e(d.br_in)+' ('+fsH(c.breakMin)+')'+(d.break_reason?' — '+esc(d.break_reason):'')],
       ['وقت الرجوع الأخير',c.lastIn?fsHM(c.lastIn):'—'],
       ['بصمة الخروج',e(d.fp_out)],
-      ['الفرق بين الرجوع الأخير وبصمة الخروج (س:د)',fsH(c.gapLast)+(d.gap_last_reason?' — '+esc(d.gap_last_reason):'')],
-      ['عدد الزيارات',c.visits],
-      ['عدد الفواتير',e(d.invoices)],
-      ['إجمالي الوقت (س:د)',fsH(c.total)],
-      ['متوسط وقت الطلب (س:د)',fsH(c.avg)],
-      ['أطول زيارة (س:د)',fsH(c.longest)],
-      ['أقصر زيارة (س:د)',fsH(c.shortest)],
+      ['الفرق بين الرجوع الأخير وبصمة الخروج (س:د)',(c.gapLast>FS_EDGE_MAX?'<b class="bad">':'')+fsH(c.gapLast)+(c.gapLast>FS_EDGE_MAX?'</b>':'')+(d.gap_last_reason?' — '+esc(d.gap_last_reason):'')],
+      ['عدد الرحلات',c.visits],
+      ['مجموع الفواتير',c.invoices||'—'],
+      ['مجموع وقت الرحلات (س:د)',fsH(c.total)],
+      ['مجموع الوقت داخل الشركة (س:د)',fsH(c.inCompany)],
+      ['متوسط وقت الفاتورة (س:د)',(c.avg!=null&&c.avg>c.invMax?'<b class="bad">':'')+fsH(c.avg)+(c.avg!=null&&c.avg>c.invMax?'</b>':'')+' (الحد '+fsH(c.invMax)+')'],
+      ['أطول رحلة (س:د)',fsH(c.longest)],
+      ['أقصر رحلة (س:د)',fsH(c.shortest)],
       ['تجاوز السرعة',(Number(d.speed_limit)?(c.spCount?c.spCount+' مرة':'لا يوجد')+' (الحد '+esc(d.speed_limit)+' كم/س، الأعلى '+c.spMax+')':'—')],
       ['توقفات بدون سبب',c.stopsNoReason||'لا يوجد'],
       ['تقييم المسار',e(d.route_rating)],
@@ -18616,6 +18689,7 @@ var FS_PRINT_CSS='.fsp{direction:rtl;color:#000;background:#fff;font-family:Taho
   +'.fsp table{border-collapse:collapse;width:100%;margin-bottom:6px}'
   +'.fsp th,.fsp td{border:1px solid #444;padding:5px;text-align:right;color:#000;background:#fff;vertical-align:top}'
   +'.fsp th{background:#e3ebf6}.fsp table.two th{width:45%}.fsp table.four th{width:27%}.fsp table.four td{width:23%}'
+  +'.fsp .bad,.fsp td.bad{color:#b00000!important;background:#ffd9d9!important;font-weight:bold}'
   +'.fsp .st{margin-top:8px}.fsp .sig{display:flex;justify-content:space-between;margin-top:34px}';
 /* تحميل واحد لكل مكتبة مهما تكرّر الطلب (التحميل المسبق ثم الضغط) */
 var __fsLibs={};
