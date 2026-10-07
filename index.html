@@ -3965,7 +3965,9 @@ async function renderPointsSection(deptId){
   const el = document.getElementById('pointsSection');
   if (!el) return;
   const date = currentDate || todayStr();
-  const staffList = await getStaffList(deptId);
+  /* المعطَّل مؤقتاً لا يظهر في النقاط أيضاً — كما في تقييم الموظفين (يبقى في خانة التعديل وحدها) */
+  const staffList = (await getStaffList(deptId))
+    .filter(st => (typeof currentManageMode !== 'undefined' && currentManageMode) || !neoIsOff(st.id));
   const staffIds = staffList.map(s => s.id);
   const [pointsMap, criteria] = await Promise.all([
     getStaffPointsMap(staffIds, date),
