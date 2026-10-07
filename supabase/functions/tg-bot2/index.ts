@@ -230,9 +230,10 @@ async function sendTrip(chat: number, who: any, tripId: number) {
 /* ══ تتبّع الموقع المباشر للسائق ══
    السائق يفتح البوت من زرّ «📍 شارك موقعك المباشر» في رحلته، ثم يشارك «موقعي المباشر»
    في المحادثة. تلجرام يرسل التحديثات (edited_message) حتى والشاشة مطفأة، والبوت يخزّن
-   نقطة لكل تحرّك يتجاوز ١٠ أمتار، ونقطةً كل دقيقة إن بقي في مكانه — فتُحسب الوقفات
+   نقطة لكل تحرّك يتجاوز ٢٥ متراً، ونقطةً كل دقيقة إن بقي في مكانه — فتُحسب الوقفات
    في التطبيق من هذه النقاط. */
-const GPS_MOVE_M = 10;
+/* 25 م لا 10: أقل من نصف قطر الوقفة (30 م) فلا تضيع وقفة، ويقلّ التخزين وقت القيادة للنصف تقريباً */
+const GPS_MOVE_M = 25;
 const GPS_STILL_MS = 60000;
 function distM(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
   const R = 6371000, rad = Math.PI / 180;
@@ -273,32 +274,33 @@ async function gotLocation(chat: number, st: any, m: any, edited: boolean) {
     return say(chat, "هذا موقعك الحالي فقط — المطلوب «الموقع المباشر».\n" +
       "اضغط 📎 ← «الموقع» ← «مشاركة موقعي المباشر» (Share My Live Location) ← ٨ ساعات.");
   }
+  const pt = { lat: Number(loc.latitude), lng: Number(loc.longitude) };
+  const at = new Date(((edited && m.edit_date) || m.date) * 1000);
+  /* أغلب التحديثات تكرار لنفس المكان: نقارن بآخر نقطة محفوظة في حالة المحادثة
+     ونخرج فوراً بلا أي طلب آخر للقاعدة — هذا أكبر توفير في الاستهلاك */
+  const L = st.gps_last;
+  if (edited && L && st.gps_trip &&
+      distM(L, pt) <= GPS_MOVE_M && at.getTime() - Number(L.at) < GPS_STILL_MS) return;
   const trip = await openTripOf(String(who.id), st.gps_trip);
   if (!trip) {
     /* انتهت الرحلة (سُلّمت المركبة): يتوقف التسجيل، ونطلب من السائق إيقاف المشاركة مرة واحدة */
     if (st.gps_trip) {
-      await setState(chat, { ...st, gps_trip: null });
+      await setState(chat, { ...st, gps_trip: null, gps_last: null });
       return say(chat, "✓ انتهت رحلتك وتوقّف تسجيل موقعك.\n" +
         "أوقف مشاركة الموقع الآن: اضغط على رسالة «الموقع المباشر» في المحادثة ← «إيقاف المشاركة» (Stop Sharing).");
     }
     if (!edited) await say(chat, "لا توجد رحلة مفتوحة باسمك — الموقع لم يُسجَّل.");
     return;
   }
-  if (String(st.gps_trip) !== String(trip.id)) await setState(chat, { ...st, gps_trip: trip.id });
-  const pt = { lat: Number(loc.latitude), lng: Number(loc.longitude) };
-  const at = new Date(((edited && m.edit_date) || m.date) * 1000);
-  /* لا نخزّن كل اهتزازة: نقطة عند تحرّك فعلي، وإلا واحدة كل دقيقة */
-  const last = await one(`fleet_gps?trip_id=eq.${trip.id}&select=lat,lng,at&order=at.desc&limit=1`);
-  const keep = !last || distM(last, pt) > GPS_MOVE_M || at.getTime() - new Date(last.at).getTime() >= GPS_STILL_MS;
-  if (keep) {
-    await db("fleet_gps", {
-      method: "POST",
-      body: JSON.stringify({
-        trip_id: trip.id, driver_id: String(who.id), lat: pt.lat, lng: pt.lng,
-        acc: loc.horizontal_accuracy ?? null, at: at.toISOString(),
-      }),
-    }, "return=minimal");
-  }
+  /* نقطة عند تحرّك فعلي (أكثر من 25 م)، وإلا واحدة كل دقيقة — والمقارنة بما في الحالة لا بقراءة من القاعدة */
+  await db("fleet_gps", {
+    method: "POST",
+    body: JSON.stringify({
+      trip_id: trip.id, driver_id: String(who.id), lat: pt.lat, lng: pt.lng,
+      acc: loc.horizontal_accuracy ?? null, at: at.toISOString(),
+    }),
+  }, "return=minimal");
+  await setState(chat, { ...st, gps_trip: trip.id, gps_last: { lat: pt.lat, lng: pt.lng, at: at.getTime() } });
   try { await checkStop(chat, who, trip.id, { ...pt, at: at.getTime() }); } catch (e) { console.error("checkStop", e); }
   if (edited) return;
   return say(chat, "✓ بدأ تتبّع رحلتك — ارجع للتطبيق، ستظهر مهام الاستلام.\n" +
@@ -484,7 +486,6 @@ let SECRET = "";
 
 Deno.serve(async (req) => {
   const url = new URL(req.url);
-  console.log("طلب", req.method, url.search);
   if (!SECRET) SECRET = await hookSecret();
   if (req.method === "GET") {
     if (url.searchParams.get("setup") === "1") {
