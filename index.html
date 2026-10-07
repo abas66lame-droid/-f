@@ -1321,6 +1321,213 @@ const SUPABASE_URL = "https://lfkifdlvafoziznrlham.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_tFkzJl4E4B99-vhpYXc3UQ_-Klvw4g7";
 const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 try{ window.supabaseClient = supabaseClient; }catch(e){}
+/* ══ توأمة إعدادات «الصيانة صباحي» و«الصيانة مسائي» ══
+   الإدخالات اليومية لكل قسم منفصلة، لكن الإعدادات واحدة: أي إضافة أو تعديل أو حذف أو
+   ترتيب لإعداد في أحدهما (موقع، موظف، مهمة، معيار، بند نظافة، جهاز، عمود، جدول مخصص،
+   تعطيل/إخفاء…) يُعاد على الآخر تلقائياً. العنصر يُطابَق بين القسمين بالاسم أو الرمز،
+   فلكلٍّ معرّفاته وسجلاته. لا يُنسخ: الإجازات، «ليس في الشفت»، إخفاء القسم، والإدخالات. */
+(function(){
+  const KEY = { locations:'code', staff:'name', staff_criteria:'name', point_criteria:'name', daily_tasks:'name',
+    ipads:'code', serial_readers:'code', laptops:'code', ipad_reader_devices:'code', pos_devices:'code',
+    custom_fields:'name', custom_sections:'title', section_groups:'title',
+    custom_section_columns:'name', custom_section_rows:'name' };
+  const PARENT = { custom_section_columns:'section_id', custom_section_rows:'section_id' };
+  const REF = { section_id:'custom_sections', group_id:'section_groups', parent_id:'section_groups' };
+  const ID_TABLES = ['staff','locations','staff_criteria','point_criteria','daily_tasks','ipads','serial_readers',
+    'laptops','ipad_reader_devices','pos_devices','custom_sections','section_groups'];
+  const origFrom = supabaseClient.from.bind(supabaseClient);
+  let tw = null, twTs = 0;
+  async function twins(){
+    if (tw && Date.now() - twTs < 60000) return tw;
+    const r = await origFrom('departments').select('id,name');
+    const m = {}, a = (r.data||[]).filter(d => /^\s*الصيانة\s*صباحي\s*$/.test(d.name||'')),
+          b = (r.data||[]).filter(d => /^\s*الصيانة\s*مسائي\s*$/.test(d.name||''));
+    if (a.length === 1 && b.length === 1){ m[String(a[0].id)] = b[0].id; m[String(b[0].id)] = a[0].id; }
+    tw = m; twTs = Date.now(); return m;
+  }
+  window.neoTwinOf = async function(deptId){ const m = await twins(); return m[String(deptId)] || null; };
+  const idCache = {};
+  /* علامات تحمل معرّف عنصر: تُترجم لمعرّف توأمه. وعلامات لا تُنسخ أبداً */
+  const skipTag = n => [NEO_LEAVE_TAG, NEO_NS_TAG['ص'], NEO_NS_TAG['م'], NEO_DHIDE_TAG].some(t => String(n||'').startsWith(t));
+  async function twinAnyId(id){
+    if (id in idCache) return idCache[id];
+    for (const t of ID_TABLES){
+      try{
+        const r = await origFrom(t).select('id').eq('id', id).limit(1);
+        if (!r.error && r.data && r.data.length){ const x = await twinId(t, id); if (x) idCache[id] = x; return x; }
+      }catch(e){}
+    }
+    return null;
+  }
+  async function translateName(name){
+    name = String(name == null ? '' : name);
+    if (skipTag(name)) return { skip:true };
+    for (const tag of [NEO_OFF_TAG, NEO_NA_TAG, NEO_NAME_TAG]){
+      if (!name.startsWith(tag)) continue;
+      const rest = name.slice(tag.length), i = rest.indexOf('|');
+      const id = i < 0 ? rest : rest.slice(0, i);
+      const tid = id ? await twinAnyId(id) : null;
+      if (!tid) return { name, changed:false };
+      return { name: tag + tid + (i < 0 ? '' : rest.slice(i)), changed:true };
+    }
+    return { name, changed:false };
+  }
+  async function twinId(table, id){
+    const ck = table + ':' + id;
+    if (ck in idCache) return idCache[ck];
+    let res = null;
+    try{
+      const k = KEY[table], p = PARENT[table];
+      const r = await origFrom(table).select((p || 'department_id') + ',' + k).eq('id', id).maybeSingle();
+      const row = r.data;
+      if (row){
+        let key = row[k];
+        if (table === 'custom_fields'){ const t = await translateName(key); key = t.skip ? null : t.name; }
+        let q = null;
+        if (p){ const ps = await twinId(REF[p], row[p]); if (ps) q = origFrom(table).select('id').eq(p, ps); }
+        else { const m = await twins(); const td = m[String(row.department_id)]; if (td) q = origFrom(table).select('id').eq('department_id', td); }
+        if (q && key != null){ const f = await q.eq(k, key).limit(1); res = (f.data && f.data[0] && f.data[0].id) || null; }
+      }
+    }catch(e){ res = null; }
+    if (res) idCache[ck] = res;   /* «لا توأم» لا يُحفظ — قد يُضاف التوأم لاحقاً */
+    return res;
+  }
+  /* صف إدخال للتوأم: القسم ومراجع الجداول والأسماء ذات المعرّفات تُترجم */
+  async function twinRow(table, row){
+    const m = await twins(), out = {};
+    for (const c in row){ if (c !== 'id' && c !== 'created_at') out[c] = row[c]; }
+    let touched = false;
+    if ('department_id' in row){
+      if (row.department_id != null){ const td = m[String(row.department_id)]; if (!td) return null; out.department_id = td; touched = true; }
+    }
+    for (const c of Object.keys(REF)){
+      if (!(c in row) || row[c] == null) continue;
+      const x = await twinId(REF[c], row[c]);
+      if (!x){ if (PARENT[table] === c) return null; out[c] = null; } else { out[c] = x; touched = true; }
+    }
+    if (table === 'custom_fields' && 'name' in row){
+      const t = await translateName(row.name); if (t.skip) return null;
+      out.name = t.name; if (t.changed) touched = true;
+    }
+    return touched ? out : null;
+  }
+  async function exists(table, row){
+    const k = KEY[table], p = PARENT[table];
+    if (row[k] == null) return false;
+    let q = origFrom(table).select('id').eq(k, row[k]);
+    q = p ? q.eq(p, row[p]) : (row.department_id != null ? q.eq('department_id', row.department_id) : q.is('department_id', null));
+    const r = await q.limit(1); return !!(r.data && r.data.length);
+  }
+  async function mirrorInsert(table, payload){
+    const rows = Array.isArray(payload) ? payload : [payload], out = [];
+    for (const r of rows){ const t = await twinRow(table, r); if (t && !(await exists(table, t))) out.push(t); }
+    if (out.length) await origFrom(table).insert(out);
+  }
+  const FILT = { eq:1, like:1, in:1, is:1 };
+  async function planTwin(table, op, payload, filters){
+    if (op === 'update' && payload && 'department_id' in payload) return null;   /* نقل موظف بين أقسام */
+    const m = await twins(); if (!Object.keys(m).length) return null;
+    const out = []; let scoped = false;
+    for (const f of filters){
+      let [meth, col, val] = f;
+      if (!FILT[meth]) return null;
+      if (col === 'department_id'){ const td = m[String(val)]; if (!td) return null; out.push([meth, col, td]); scoped = true; continue; }
+      if (col === 'id' || REF[col]){
+        const tbl = col === 'id' ? table : REF[col];
+        if (meth === 'in'){ const xs = []; for (const v of val){ const x = await twinId(tbl, v); if (x) xs.push(x); } if (!xs.length) return null; out.push([meth, col, xs]); }
+        else if (meth === 'eq'){ const x = await twinId(tbl, val); if (!x) return null; out.push([meth, col, x]); }
+        else out.push([meth, col, val]);
+        scoped = true; continue;
+      }
+      if (col === 'name' && table === 'custom_fields' && typeof val === 'string'){
+        const t = await translateName(val.replace(/%$/, ''));
+        if (t.skip) return null;
+        out.push([meth, col, t.name + (val.endsWith('%') ? '%' : '')]); if (t.changed) scoped = true; continue;
+      }
+      out.push([meth, col, val]);
+    }
+    if (!scoped) return null;
+    let body = payload;
+    if (op === 'update' && payload){
+      body = {};
+      for (const c in payload){
+        if (REF[c] && payload[c] != null){ const x = await twinId(REF[c], payload[c]); body[c] = x || null; }
+        else if (c === 'name' && table === 'custom_fields'){ const t = await translateName(payload[c]); if (t.skip) return null; body[c] = t.name; }
+        else body[c] = payload[c];
+      }
+    }
+    return async () => {
+      let q = op === 'update' ? origFrom(table).update(body) : origFrom(table).delete();
+      for (const [meth, col, val] of out) q = q[meth](col, val);
+      await q;
+    };
+  }
+  /* غلاف شفّاف حول باني الاستعلام: يسجّل العملية وشروطها، وبعد نجاحها يعيدها على التوأم */
+  function wrap(table, b, ctx){
+    return new Proxy(b, { get(t, prop){
+      if (prop === 'then') return function(res, rej){
+        return (async () => {
+          const op = ctx.op;
+          if (!op || window.__neoTwinOff) return await new Promise((a, z) => t.then(a, z));
+          let plan = null;
+          if (op === 'update' || op === 'delete'){ try{ plan = await planTwin(table, op, ctx.payload, ctx.filters); }catch(e){ plan = null; } }
+          const result = await new Promise((a, z) => t.then(a, z));
+          if (result && !result.error){
+            try{
+              if (op === 'insert' || op === 'upsert') await mirrorInsert(table, ctx.payload);
+              else if (plan) await plan();
+            }catch(e){ console.warn('twin', e); }
+          }
+          return result;
+        })().then(res, rej);
+      };
+      const v = t[prop];
+      if (typeof v !== 'function') return v;
+      return function(...args){
+        if (['insert','update','delete','upsert'].includes(prop)){ ctx.op = prop; ctx.payload = args[0]; }
+        else if (FILT[prop] || prop === 'neq' || prop === 'ilike' || prop === 'match' || prop === 'or' || prop === 'not')
+          ctx.filters.push([prop, args[0], args[1]]);
+        const r = v.apply(t, args);
+        return (r && typeof r === 'object') ? wrap(table, r, ctx) : r;
+      };
+    }});
+  }
+  supabaseClient.from = function(table){
+    const b = origFrom(table);
+    return KEY[table] ? wrap(table, b, { op:null, payload:null, filters:[] }) : b;
+  };
+
+  /* توحيد ما اختلف سابقاً: كل إعداد موجود في قسم وغير موجود في توأمه يُضاف إليه (بلا حذف) */
+  window.neoTwinSyncAll = async function(){
+    const m = await twins(); const ids = Object.keys(m);
+    if (ids.length !== 2) throw new Error('لم يُعثر على قسمَي «الصيانة صباحي» و«الصيانة مسائي» بهذين الاسمين بالضبط');
+    let added = 0;
+    const order = ['locations','staff','staff_criteria','point_criteria','daily_tasks','ipads','serial_readers','laptops',
+      'ipad_reader_devices','pos_devices','section_groups','custom_sections','custom_section_columns','custom_section_rows','custom_fields'];
+    for (const t of order){
+      for (const d of ids){
+        let rows = [];
+        if (PARENT[t]){
+          const s = await origFrom('custom_sections').select('id').eq('department_id', d);
+          const sids = (s.data||[]).map(x => x.id); if (!sids.length) continue;
+          const r = await origFrom(t).select('*').in(PARENT[t], sids); rows = r.data || [];
+        } else {
+          const r = await origFrom(t).select('*').eq('department_id', d); if (r.error) continue; rows = r.data || [];
+        }
+        for (const row of rows){
+          const tr = await twinRow(t, row); if (!tr) continue;
+          if (await exists(t, tr)) continue;
+          const ins = await origFrom(t).insert(tr);
+          if (!ins.error) added++;
+          for (const k in idCache) delete idCache[k];
+        }
+      }
+    }
+    try{ if (typeof invalidateRefCache === 'function') invalidateRefCache(); }catch(e){}
+    try{ window.__extraColsCache = {}; }catch(e){}
+    return added;
+  };
+})();
 
 // ---------- تخزين مؤقت خفيف لبيانات الهيكل الثابتة (أقسام/مواقع/موظفين/مهام/أجهزة) ----------
 // هذي البيانات نادراً ما تتغير (تتغير فقط عبر أزرار الإضافة/الحذف)، فنجيبها مرة وحدة
@@ -11672,6 +11879,7 @@ async function renderNeoAdminTools(deptId){
       <div style="color:#9fb0c5;font-size:11px;line-height:1.7;margin-bottom:8px;">يغيّر الاسم في كل الواجهات والتقارير — لا يمسّ أي بيانات مسجّلة.</div>
       <button class="secondary" style="width:100%;font-size:12px;padding:9px;" onclick="neoRenameDept('${deptId}')">تغيير اسم القسم</button>
     </div>
+    <div id="neoTwinBox_${deptId}"></div>
     <div style="font-size:12px;color:#9fb0c5;margin-bottom:10px;">إجراءات محمية برمز التأكيد — للمدير فقط</div>
     <div style="font-size:12px;color:#f0b3b8;margin-bottom:6px;">🗑 حذف فئة كاملة من هذا القسم:</div>
     <div style="display:flex;flex-wrap:wrap;gap:6px;">
@@ -11680,7 +11888,26 @@ async function renderNeoAdminTools(deptId){
     <div style="height:1px;background:rgba(122,167,255,0.15);margin:14px 0;"></div>
     <button onclick="neoResetAll()" style="width:100%;border-color:rgba(225,91,100,0.6) !important;color:#f0b3b8 !important;background:linear-gradient(180deg,rgba(225,91,100,0.14),rgba(225,91,100,0.05)) !important;">🔄 تصفير كل العدادات والقيم المدخلة</button>
     <div style="font-size:10px;color:#7487a0;margin-top:6px;text-align:center;">يمسح إدخالات مسؤولي الشفت والصالة في كل الأقسام</div>`;
+  neoTwinBox(deptId);
 }
+/* زرّ التوحيد يظهر في أدوات قسمَي الصيانة فقط */
+async function neoTwinBox(deptId){
+  const box = document.getElementById('neoTwinBox_' + deptId); if (!box) return;
+  let tw = null; try{ tw = await window.neoTwinOf(deptId); }catch(e){}
+  if (!tw) return;
+  box.innerHTML = '<div style="background:rgba(56,217,185,0.07);border:1px solid rgba(56,217,185,0.3);border-radius:10px;padding:11px;margin-bottom:12px;">'
+    + '<div style="color:#38d9b9;font-size:12px;font-weight:700;margin-bottom:4px;">🔗 إعدادات موحّدة مع القسم التوأم</div>'
+    + '<div style="color:#9fb0c5;font-size:11px;line-height:1.7;margin-bottom:8px;">أي إضافة أو تعديل أو حذف أو ترتيب للإعدادات هنا يُطبَّق تلقائياً على الصيانة الأخرى. الإدخالات اليومية والإجازات تبقى منفصلة.</div>'
+    + '<button class="secondary" style="width:100%;font-size:12px;padding:9px;color:#38d9b9;" onclick="neoTwinSyncNow(this)">🔄 وحّد ما اختلف سابقاً الآن</button></div>';
+}
+window.neoTwinSyncNow = async function(btn){
+  if (btn){ btn.disabled = true; btn.textContent = '⏳ جاري التوحيد…'; }
+  try{
+    const n = await window.neoTwinSyncAll();
+    neoToast(n ? ('✓ أُضيف ' + n + ' إعداداً ناقصاً إلى القسمين') : '✓ القسمان متطابقان', true);
+  }catch(e){ alert('تعذّر التوحيد: ' + ((e && e.message) || e)); }
+  if (btn){ btn.disabled = false; btn.textContent = '🔄 وحّد ما اختلف سابقاً الآن'; }
+};
 window.neoRenameDept = async function(deptId){
   function say(msg){
     try{ neoToast(msg); }catch(e){}
