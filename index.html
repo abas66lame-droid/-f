@@ -17989,7 +17989,13 @@ window.fleetReturn=async function(vid){
 };
 
 /* ════════════ واجهة مسؤول قسم التوصيل ════════════ */
+/* مسؤولو التوصيل (التوصيل، الآليات، التدقيق) يرون شاشة مدير المبيعات نفسها —
+   تُرسم في fleetSupView بلا شريط المبيعات، ويزيد مسؤول التدقيق تبويب «جدول اليوم» */
 window.renderFleetSupView=async function(profile){
+  window.__fleetProfile=profile;
+  return window.renderFleetManagerTab();
+};
+window.__oldRenderFleetSupView=async function(profile){
   var el=document.getElementById('fleetSupView');
   if(!el) return;
   window.__fleetProfile=profile;
@@ -19064,9 +19070,12 @@ window.fleetPrompt=fleetPrompt;
 
 /* ════════════ تبويب المدير: مراقبة + إدارة ════════════ */
 window.renderFleetManagerTab=async function(){
-  var el=document.getElementById('salesView');
+  var fp=window.__fleetProfile;
+  var sup=!!(fp && fp.role==='fleet');            /* مسؤول توصيل/آليات/تدقيق — لا شريط مبيعات */
+  var el=document.getElementById(sup?'fleetSupView':'salesView');
   if(!el) return;
   var p=window.__fleetProfile||{id:'sales',name:'المدير'};
+  var auditor=sup && fsIsAuditor(p);
   window.__fleetProfile=p;
   el.innerHTML='<div class="status neoLoad">جاري التحميل…</div>';
   cleanOld();
@@ -19106,6 +19115,7 @@ window.renderFleetManagerTab=async function(){
       +'<div style="display:flex;gap:6px;">'
       +'<button id="fmTabV" style="flex:1;font-size:12px;padding:9px;" onclick="fleetMgrTab(\'v\')">🚗 المركبات</button>'
       +'<button id="fmTabT" class="secondary" style="flex:1;font-size:12px;padding:9px;" onclick="fleetMgrTab(\'t\')">🧾 الرحلات</button>'
+      +(auditor?'<button id="fmTabS" class="secondary" style="flex:1;font-size:12px;padding:9px;" onclick="fleetMgrTab(\'s\')">📋 جدول اليوم</button>':'')
       +'</div></div>';
 
     h+='<div id="fmVehWrap">';
@@ -19221,10 +19231,17 @@ window.renderFleetManagerTab=async function(){
     });
     h+='</div>';
     h+='</div>';   /* /fmTripWrap */
+    if(auditor) h+='<div id="fsSheetWrap" class="hidden"></div>';
 
-    el.innerHTML='<div style="padding-bottom:76px;">'+h+'</div>'
-      +(typeof salesTabBarHtml==='function'?salesTabBarHtml('fleet'):'');
-    try{ if(typeof currentSalesTab!=='undefined') window.currentSalesTab='fleet'; }catch(e){}
+    if(sup){
+      h+='<div class="card"><button class="secondary" style="width:100%;font-size:12px;padding:10px;" '
+        +'onclick="renderFleetManagerTab()">↻ تحديث</button></div>';
+      el.innerHTML=h;
+    } else {
+      el.innerHTML='<div style="padding-bottom:76px;">'+h+'</div>'
+        +(typeof salesTabBarHtml==='function'?salesTabBarHtml('fleet'):'');
+      try{ if(typeof currentSalesTab!=='undefined') window.currentSalesTab='fleet'; }catch(e){}
+    }
     window.fleetMgrTab(window.__fmActiveTab||'v');
   }catch(e){
     el.innerHTML='<div class="card" style="color:#ff7b7b;">تعذّر التحميل: '+esc(e&&e.message)+'</div>';
@@ -19237,14 +19254,18 @@ function fleetBack(from){
 }
 
 window.fleetMgrTab=function(k){
+  var sW=document.getElementById('fsSheetWrap');
+  if(k==='s' && !sW) k='v';                    /* جدول اليوم لمسؤول التدقيق وحده */
   window.__fmActiveTab=k;
   var vW=document.getElementById('fmVehWrap'), tW=document.getElementById('fmTripWrap');
-  var vB=document.getElementById('fmTabV'), tB=document.getElementById('fmTabT');
   if(!vW||!tW) return;
-  if(k==='v'){ vW.classList.remove('hidden'); tW.classList.add('hidden');
-    if(vB) vB.className=''; if(tB) tB.className='secondary'; }
-  else { tW.classList.remove('hidden'); vW.classList.add('hidden');
-    if(tB) tB.className=''; if(vB) vB.className='secondary'; }
+  var tabs={v:[vW,'fmTabV'], t:[tW,'fmTabT'], s:[sW,'fmTabS']};
+  Object.keys(tabs).forEach(function(x){
+    var w=tabs[x][0], b=document.getElementById(tabs[x][1]);
+    if(w) w.classList.toggle('hidden', x!==k);
+    if(b) b.className=(x===k)?'':'secondary';
+  });
+  if(k==='s' && sW && !sW.innerHTML) window.fleetSheetOpen();
 };
 
 window.fleetAddVehicle=function(kind,from){
