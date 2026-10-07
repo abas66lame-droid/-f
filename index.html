@@ -10172,15 +10172,28 @@ async function neoTogglePanel(key){
     body.dataset.loaded = '1';
     body.innerHTML = '<div class="status neoLoad">جاري التحميل...</div>';
     try{
-      body.innerHTML = '<div class="card" id="' + p.id + '"></div>';
-      await p.fn(p.deptId);
+      body.innerHTML = '<div class="card" id="' + p.id + '"><div class="status neoLoad">جاري التحميل...</div></div>';
+      /* حدّ زمني: إن لم تردّ القاعدة خلال ٢٠ ثانية لا تبقى الخانة فارغة بلا تفسير */
+      let to;
+      await Promise.race([
+        p.fn(p.deptId),
+        new Promise((_, rej) => { to = setTimeout(() => rej(new Error('انتهت مهلة التحميل (٢٠ ثانية) — الاتصال بقاعدة البيانات بطيء أو متوقف')), 20000); })
+      ]).finally(() => clearTimeout(to));
+      const sec = document.getElementById(p.id);
+      if (sec && !sec.textContent.trim() && !sec.querySelector('input,button,table')) throw new Error('لم يُرجع القسم أي محتوى');
     }catch(e){
-      body.innerHTML = '<div style="color:#e15b64;font-size:12px;padding:10px;">تعذر التحميل: ' + (e.message||e) + '</div>';
+      body.innerHTML = '<div style="color:#e15b64;font-size:12px;padding:10px;line-height:1.8;">تعذر التحميل: ' + esc(String((e && e.message) || e)) + '</div>'
+        + '<button class="secondary" style="width:100%;font-size:12px;padding:9px;" onclick="neoRetryPanel(\'' + key + '\')">↻ إعادة المحاولة</button>';
       body.dataset.loaded = '0';
     }
   }
 }
 window.neoTogglePanel = neoTogglePanel;
+window.neoRetryPanel = function(key){
+  const body = document.getElementById('nbody_' + key); if (!body) return;
+  body.dataset.open = '0'; body.dataset.loaded = '0';
+  neoTogglePanel(key);
+};
 
 async function renderSalesDeptManage(deptId){
   const el = document.getElementById('salesView');
