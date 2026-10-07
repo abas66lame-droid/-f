@@ -5530,6 +5530,9 @@ function progBuildRows(cfg){
   return html;
 }
 function progSetup(cfg){
+  /* المعطَّل مؤقتاً يختفي تماماً عن مسؤول الشفت — يبقى ظاهراً (باهتاً) في خانة التعديل وحدها */
+  if (!(typeof currentManageMode !== 'undefined' && currentManageMode) && typeof neoIsOff === 'function')
+    cfg.items = (cfg.items || []).filter(it => !neoIsOff(it.id));
   progSections[cfg.key] = cfg;
   return progBuildRows(cfg);
 }
@@ -5993,6 +5996,9 @@ function buildStatusTable(items, fieldDefs, rowLabelFn, logsById, hallView){
   /* hallView = هذه الشاشة تعرض تدقيق مشرف الصالة، فالمستثنى منه يُخفى */
   if (hallView && typeof neoHallOutItem === 'function')
     items = (items || []).filter(x => !neoHallOutItem(x && x.id));
+  /* والمعطَّل مؤقتاً لا يُدقَّق في الصالة */
+  if (hallView && typeof neoIsOff === 'function')
+    items = (items || []).filter(x => !neoIsOff(x && x.id));
   if (!items.length) return { html: '', missing: 0 };
   let missing = 0;
   const labelByKey = {}; fieldDefs.forEach(f => labelByKey[f.key] = f.label);
@@ -6238,7 +6244,9 @@ async function renderCustomSectionsShift(deptId){
   if (!el) return;
   const date = currentDate || todayStr();
   const shift = currentShiftChoice;
-  const secs = await getCustomSections(deptId);
+  try{ await neoLoadOff(); }catch(e){}
+  /* الجدول المعطَّل لا يظهر لمسؤول الشفت أصلاً */
+  const secs = (await getCustomSections(deptId)).filter(sc => !neoIsOff(sc.id));
   if (!secs.length){ el.style.display = 'none'; return; }
   el.style.display = '';
 
