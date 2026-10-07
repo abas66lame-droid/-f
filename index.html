@@ -17687,7 +17687,10 @@ window.fleetPurgeVehicle=async function(vid){
 /* ══ تتبّع الموقع (GPS) عبر الموقع المباشر في تلجرام ══
    البوت يخزّن نقاط الرحلة في fleet_gps، وهنا تُستخرج منها الوقفات:
    التحرّك ضمن ١٠ أمتار لا يُعدّ مشياً، والبقاء ضمنها أكثر من ٣ دقائق وقفة. */
-var FLEET_STOP_M = 10, FLEET_STOP_MS = 3 * 60000, FLEET_GAP_MS = 10 * 60000;
+/* نصف قطر الوقفة 30 م لا 10: موقع الهاتف وهو واقف يتذبذب 15–40 م (مبانٍ، داخل السيارة)،
+   فبـ10 م كان كل تذبذب يقطع الوقفة إلى قطع أقصر من 3 دقائق فلا تظهر أي وقفة.
+   والنقاط ضعيفة الدقة (أكثر من 100 م) لا تُعتمد في حساب الوقفات */
+var FLEET_STOP_M = 30, FLEET_STOP_MS = 3 * 60000, FLEET_GAP_MS = 10 * 60000, FLEET_BAD_ACC = 100;
 var FLEET_GPS_ON='<div style="color:#38d9b9;font-size:11px;margin:4px 0;">📍 موقعك المباشر مُفعّل — يتوقف تسجيله عند الإرجاع</div>';
 /* هل وصل أي موقع لهذه الرحلة؟ البوت لا يخزّن إلا الموقع المباشر، فوجود نقطة = التتبع شغّال.
    null عند تعذّر القراءة — فلا نحبس السائق بسبب خلل شبكة */
@@ -17718,6 +17721,7 @@ function fleetDistM(a,b){
    تنتهي عند أول نقطة أبعد (أي حين رُئي في مكان آخر)، فإن كان بينهما انقطاع طويل
    تُعلَّم «تقريبية». وإن كانت آخر نقاط الرحلة فهي «مستمرة حتى آخر تحديث». */
 function fleetStops(pts){
+  pts=pts.filter(function(p){ return !(p.acc>FLEET_BAD_ACC); });
   var out=[], i=0;
   while(i<pts.length){
     var c={lat:pts[i].lat,lng:pts[i].lng}, n=1, j=i+1;
@@ -17743,13 +17747,13 @@ function fleetDur(ms){
 async function fleetLoadGps(tripId){
   var all=[], from=0, PAGE=1000;
   for(;;){
-    var r=await SB().from('fleet_gps').select('lat,lng,at').eq('trip_id',tripId).order('at').range(from,from+PAGE-1);
+    var r=await SB().from('fleet_gps').select('lat,lng,at,acc').eq('trip_id',tripId).order('at').range(from,from+PAGE-1);
     if(r.error) throw r.error;
     var d=r.data||[]; all=all.concat(d);
     if(d.length<PAGE) break;
     from+=PAGE;
   }
-  return all.map(function(p){ return {lat:Number(p.lat),lng:Number(p.lng),at:p.at}; });
+  return all.map(function(p){ return {lat:Number(p.lat),lng:Number(p.lng),at:p.at,acc:(p.acc==null?null:Number(p.acc))}; });
 }
 async function fleetRenderStops(t){
   var box=document.getElementById('ftdStops'); if(!box) return;
@@ -18450,6 +18454,17 @@ window.fleetSheetOpen=async function(day,driver){
   }catch(e){ box.innerHTML='<div class="card" style="color:#ff7b7b;">تعذّر التحميل: '+esc(e&&e.message)+'</div>'; }
 };
 
+/* تغطية الموقع في رحلة: أول نقطة وآخرها وأطول انقطاع — رحلة بلا وقفات قد تكون
+   رحلة انقطع موقعها (أوقف المشاركة، انتهت مدتها، لا إنترنت) لا رحلة بلا توقف */
+function fsGpsCoverage(pts,outMs,inMs){
+  var end=inMs||Date.now();
+  if(!pts.length) return {none:true, gapMin:fsMin(end-outMs), bad:true};
+  var ts=pts.map(function(p){ return Date.parse(p.at); }), mx=0, mxAt=null;
+  for(var i=1;i<ts.length;i++) if(ts[i]-ts[i-1]>mx){ mx=ts[i]-ts[i-1]; mxAt=ts[i-1]; }
+  var tail=end-ts[ts.length-1];
+  if(tail>mx){ mx=tail; mxAt=ts[ts.length-1]; }
+  return {first:ts[0], last:ts[ts.length-1], gapMin:fsMin(mx), gapAt:mxAt, tailMin:fsMin(tail), bad:mx>FLEET_GAP_MS};
+}
 async function fsCompute(){
   var trips=__fs.trips, row=__fs.row||{}, d=row.data||{};
   await fsLoadGeo();
@@ -18497,7 +18512,7 @@ async function fsCompute(){
     rows.push({ trip:tr, n:k+1, plate:(vmap[vk2]||{}).plate||'', ok:ok, outMs:outMs, inMs:inMs,
       inv:invN, kind:kindV, invAvg:(durM!=null&&invN)?Math.round(durM/invN):null,
       outGeo:!!g.leave, inGeo:!!(g.back&&appIn), appOut:appOut, appIn:appIn, exits:g.exits,
-      durMin: inMs?fsMin(inMs-outMs):null, deliv:deliv, gps:pts.length });
+      durMin: inMs?fsMin(inMs-outMs):null, deliv:deliv, gps:pts.length, cov:fsGpsCoverage(pts,appOut,appIn) });
   }
   rows.forEach(function(r){ var ss=stopsAll.filter(function(x){ return x.n===r.n; });
     r.stops=ss.length; r.stopsNoWhy=ss.filter(function(x){ return !x.why; }).length; });
@@ -18611,13 +18626,18 @@ async function fsRenderSheet(keepLocal){
       +td(esc(rw.trip.prep_at||'—'))
       +td(tinpV(id,'preparer',rw.trip.preparer),'in')
       +td(tinp(id,'deliv',rw.deliv.join('، ')||''),'in')
-      +td('<button onclick="fsToggleTrip('+id+')" class="stb'+(rw.stopsNoWhy?' nw':'')+'">⏸ '+rw.stops+(rw.stopsNoWhy?' ⚠':'')+'</button>')
+      +td('<button onclick="fsToggleTrip('+id+')" class="stb'+(rw.stopsNoWhy?' nw':'')+'">⏸ '+rw.stops+(rw.stopsNoWhy?' ⚠':'')+'</button>'
+        +(rw.cov.bad?'<div class="sm" style="color:#9c0006;font-weight:bold;">📵 انقطع '+fsH(rw.cov.gapMin)+'</div>':''),rw.cov.bad?'bad':'')
       +td(rw.stayMin==null?'—':fsH(rw.stayMin)+(rw.stayBreak?' ☕ استراحة':''),rw.stayMin==null?'':(rw.stayBad?'bad':'ok'))
       +td(rw.stayBad?tinp(id,'stay_reason','⚠️ السبب'):'',rw.stayBad?'in':'')
       +td(tinp(id,'note_before'),'in')+td(tinp(id,'note_after'),'in')+'</tr>';
     /* تفاصيل الرحلة: وقفاتها — تُفتح بزرّ الوقفات */
     var ss=c.stops.filter(function(x){ return x.n===rw.n; });
-    var det='<div class="det"><b>وقفات الرحلة '+rw.n+' (أكثر من ٣ دقائق)</b> — '+esc(rw.plate)+' · '+rw.gps+' نقطة موقع · التطبيق: استلام '+fsHM(rw.appOut)
+    var det='<div class="det"><b>وقفات الرحلة '+rw.n+' (أكثر من ٣ دقائق)</b> — '+esc(rw.plate)+' · '+rw.gps+' نقطة موقع'
+      +(rw.cov.none?' · <span style="color:#9c0006;font-weight:bold;">لا يوجد موقع لهذه الرحلة</span>'
+        :' · الموقع من '+fsHM(rw.cov.first)+' إلى '+fsHM(rw.cov.last)
+          +(rw.cov.bad?' · <span style="color:#9c0006;font-weight:bold;">⚠ انقطع الموقع '+fsH(rw.cov.gapMin)+' من '+fsHM(rw.cov.gapAt)+' — الوقفات في هذه المدة لا تُعرف</span>':''))
+      +' · التطبيق: استلام '+fsHM(rw.appOut)
       +(rw.appIn?' · إرجاع '+fsHM(rw.appIn):'')+(rw.exits>1?' · <span style="color:#9c0006;">خرج من الشركة '+rw.exits+' مرات</span>':'')
       +(rw.trip.note?' · ملاحظة السائق: '+esc(rw.trip.note):'')+'</div>';
     det+=ss.length?'<table class="sub"><tr>'+th('من')+th('إلى')+th('المدة')+th('السبب')+th('الموقع')+'</tr>'

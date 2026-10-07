@@ -310,6 +310,10 @@ async function gotLocation(chat: number, st: any, m: any, edited: boolean) {
    تُسأل الوقفة الجارية حين تبلغ ٣ دقائق، والتي انتهت للتو إن لم تُسأل (حين لا يصل تحديث
    والسائق واقف). كل وقفة تُسأل مرة واحدة: صفّها في fleet_stop_reasons هو علامة السؤال. */
 const STOP_MS = 3 * 60000;
+/* نصف قطر الوقفة 30 م (مثل التطبيق): الموقع وهو واقف يتذبذب 15–40 م، وبـ10 م لا تُكتشف وقفة.
+   والنقاط ضعيفة الدقة (أكثر من 100 م) لا تُعتمد */
+const STOP_R_M = 30;
+const BAD_ACC_M = 100;
 const STOP_REASONS: Record<string, string> = {
   t: "🚦 إشارة مرور", j: "🚗 زحام", d: "📦 تسليم/استلام طلب", f: "⛽ وقود",
   z: "🛢 تبديل زيت", m: "🔧 تصليح", r: "☕ استراحة", o: "✏️ أخرى",
@@ -319,7 +323,7 @@ function stopClusters(pts: { lat: number; lng: number; at: number }[]) {
   let i = 0;
   while (i < pts.length) {
     let c = { lat: pts[i].lat, lng: pts[i].lng }, n = 1, j = i + 1;
-    while (j < pts.length && distM(c, pts[j]) <= GPS_MOVE_M) {
+    while (j < pts.length && distM(c, pts[j]) <= STOP_R_M) {
       n++; c = { lat: c.lat + (pts[j].lat - c.lat) / n, lng: c.lng + (pts[j].lng - c.lng) / n }; j++;
     }
     const closed = j < pts.length;
@@ -333,8 +337,9 @@ const hmB = (ms: number) => {
   catch { return ""; }
 };
 async function checkStop(chat: number, who: any, tripId: number, cur: { lat: number; lng: number; at: number }) {
-  const rows: any[] = (await db(`fleet_gps?trip_id=eq.${tripId}&select=lat,lng,at&order=at.desc&limit=200`)) ?? [];
-  const pts = rows.reverse().map((r) => ({ lat: Number(r.lat), lng: Number(r.lng), at: new Date(r.at).getTime() }));
+  const rows: any[] = (await db(`fleet_gps?trip_id=eq.${tripId}&select=lat,lng,at,acc&order=at.desc&limit=200`)) ?? [];
+  const pts = rows.reverse().filter((r) => !(Number(r.acc) > BAD_ACC_M))
+    .map((r) => ({ lat: Number(r.lat), lng: Number(r.lng), at: new Date(r.at).getTime() }));
   if (!pts.length || pts[pts.length - 1].at < cur.at) pts.push(cur);
   const cl = stopClusters(pts).slice(-2);
   const due = cl.filter((c) => c.end - c.from >= STOP_MS);
