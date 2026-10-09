@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>فحص صورة</title>
+<style>
+  body{ margin:0; background:#0b1220; color:#e3ecf7; font-family:Tahoma,Arial,sans-serif; padding:16px; max-width:520px; margin:0 auto; }
+  h1{ font-size:19px; } .sub{ color:#8fa3b8; font-size:12px; line-height:1.8; }
+  label{ display:block; color:#8fa3b8; font-size:12px; margin:12px 0 5px; }
+  input{ width:100%; box-sizing:border-box; padding:12px; border-radius:10px; border:1px solid rgba(122,167,255,.25);
+         background:#121c2e; color:#fff; font:16px Tahoma,Arial,sans-serif; direction:ltr; text-align:left; }
+  button{ width:100%; margin-top:16px; padding:14px; border:0; border-radius:12px; background:#38d9b9; color:#04241d;
+          font:bold 15px Tahoma,Arial,sans-serif; }
+  #res{ margin-top:16px; padding:14px; border-radius:12px; font-size:15px; line-height:1.9; display:none; }
+</style>
+</head>
+<body>
+<h1>🔍 فحص صورة من كاميرا الأماني</h1>
+<div class="sub">انقل ما هو مطبوع في الشريط السفلي للصورة كما هو. إن كان الرمز صحيحاً فالصورة من التطبيق ولم يُغيَّر تاريخها ولا وقتها ولا رقمها.</div>
+<label>التاريخ والوقت (مثل 2026-10-09 13:24:55)</label><input id="w" placeholder="2026-10-09 13:24:55">
+<label>رقم الصورة (بعد No.)</label><input id="n" placeholder="RUWRPY">
+<label>رمز الجهاز (بعد DEV)</label><input id="d" placeholder="K7QM">
+<label>رمز التحقق (بعد CODE)</label><input id="c" placeholder="ABCD-EFGH">
+<button onclick="check()">فحص</button>
+<div id="res"></div>
+<script>
+const KEY_HEX = '__AMANI_KEY__';
+const ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+async function sign(text){
+  const raw = new Uint8Array(KEY_HEX.match(/../g).map(h => parseInt(h, 16)));
+  const key = await crypto.subtle.importKey('raw', raw, { name:'HMAC', hash:'SHA-256' }, false, ['sign']);
+  const mac = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(text)));
+  let out = ''; for (let i = 0; i < 8; i++) out += ALPHA[mac[i] % 32];
+  return out.slice(0, 4) + '-' + out.slice(4);
+}
+/* ما يُكتب بالخطأ عادةً: حروف صغيرة، O بدل 0، I بدل 1، مسافات زائدة */
+const norm = s => String(s || '').trim().toUpperCase().replace(/\s+/g, '').replace(/O/g, '0').replace(/I/g, '1');
+async function check(){
+  const when = w.value.trim().replace(/\s+/g, ' ');
+  const id = norm(n.value), dev = norm(d.value), code = norm(c.value).replace(/^(.{4})-?(.{4})$/, '$1-$2');
+  const ok = (await sign([id, when, dev].join('|'))) === code;
+  res.style.display = 'block';
+  res.style.background = ok ? 'rgba(56,217,185,0.15)' : 'rgba(225,91,100,0.18)';
+  res.innerHTML = ok
+    ? '✅ <b>صورة أصلية</b><br>التُقطت ' + when + '<br>من الجهاز ' + dev
+    : '❌ <b>الرمز لا يطابق</b><br>إمّا أن الصورة ليست من التطبيق، أو أن أحد البيانات عُدِّل، أو نُقل خطأً — تأكّد من النقل حرفاً حرفاً.';
+}
+</script>
+</body>
+</html>
