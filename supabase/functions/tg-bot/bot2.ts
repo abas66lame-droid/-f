@@ -23,7 +23,12 @@
 //   ٣) افتح في المتصفح:  <رابط الدالة>?setup=1
 // ══════════════════════════════════════════════════════════════════
 
+import jpeg from "npm:jpeg-js@0.4.4";
+import jsQR from "npm:jsqr@1.4.0";
+
 const TOKEN  = Deno.env.get("BOT_TOKEN") ?? "";
+/* مفتاح كاميرا الأماني (نفس المفتاح داخل التطبيق) — يُضاف في Edge Functions ← Secrets باسم CAM_KEY */
+const CAM_KEY = Deno.env.get("CAM_KEY") ?? "";
 const SB_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SB_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? Deno.env.get("SB_SECRET") ?? "";
 const FN_NAME = "tg-bot";
@@ -308,10 +313,10 @@ async function gotLocation(chat: number, st: any, m: any, edited: boolean) {
 }
 
 /* ══ سبب الوقفة — يُسأل السائق في وقتها ══
-   نفس قاعدة التطبيق: نقاط متتالية ضمن ١٠ أمتار من مركزها = وقفة، وأكثر من ٣ دقائق تُسأل.
-   تُسأل الوقفة الجارية حين تبلغ ٣ دقائق، والتي انتهت للتو إن لم تُسأل (حين لا يصل تحديث
+   نفس قاعدة التطبيق: نقاط متتالية ضمن ٣٠ متراً من مركزها = وقفة، وأكثر من ٥ دقائق تُسأل.
+   تُسأل الوقفة الجارية حين تبلغ ٥ دقائق، والتي انتهت للتو إن لم تُسأل (حين لا يصل تحديث
    والسائق واقف). كل وقفة تُسأل مرة واحدة: صفّها في fleet_stop_reasons هو علامة السؤال. */
-const STOP_MS = 3 * 60000;
+const STOP_MS = 5 * 60000;
 /* نصف قطر الوقفة 30 م (مثل التطبيق): الموقع وهو واقف يتذبذب 15–40 م، وبـ10 م لا تُكتشف وقفة.
    والنقاط ضعيفة الدقة (أكثر من 100 م) لا تُعتمد */
 const STOP_R_M = 30;
@@ -365,7 +370,7 @@ async function checkStop(chat: number, who: any, tripId: number, cur: { lat: num
       kb.push(keys.slice(k, k + 2).map((x) => ({ text: STOP_REASONS[x], callback_data: `sr:${tripId}:${fromS}:${x}` })));
     }
     await say(chat,
-      (c.closed ? `⏸ توقفت ${mins} دقيقة عند ${hmB(c.from)}` : `⏸ أنت متوقف منذ ${hmB(c.from)} (أكثر من ٣ دقائق)`) +
+      (c.closed ? `⏸ توقفت ${mins} دقيقة عند ${hmB(c.from)}` : `⏸ أنت متوقف منذ ${hmB(c.from)} (أكثر من ٥ دقائق)`) +
       " — ما السبب؟", { reply_markup: { inline_keyboard: kb } });
   }
 }
@@ -373,6 +378,71 @@ async function saveStopReason(tripId: string, fromS: string, reason: string) {
   await db(`fleet_stop_reasons?trip_id=eq.${tripId}&from_s=eq.${fromS}`, {
     method: "PATCH", body: JSON.stringify({ reason, answered_at: new Date().toISOString() }),
   }, "return=minimal");
+}
+
+/* ══ التحقق من صور كاميرا الأماني ══
+   المسؤول (مدير المبيعات أو أحد مسؤولي التوصيل) يرسل الصورة للبوت، فيقرأ البوت رمز QR من
+   شريطها السفلي، ويعيد حساب رمز التحقق بالمفتاح السرّي، ويردّ بالنتيجة واسم المصوِّر. */
+const CAM_ALPHA = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+async function camSign(text: string) {
+  const raw = new Uint8Array((CAM_KEY.match(/../g) || []).map((h) => parseInt(h, 16)));
+  const key = await crypto.subtle.importKey("raw", raw, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(text)));
+  let o = ""; for (let i = 0; i < 8; i++) o += CAM_ALPHA[mac[i] % 32];
+  return o;
+}
+function camUser(id: string) {
+  let h = 2166136261; for (const ch of String(id)) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619) >>> 0; }
+  let o = ""; for (let i = 0; i < 4; i++) { o += CAM_ALPHA[h % 32]; h = Math.floor(h / 32); }
+  return o;
+}
+/* من يرسل؟ من حالة المحادثة، وإلا من آخر تذكرة فتح بها البوت من التطبيق */
+async function whoOf(st: any, fromId: number) {
+  if (st.who) return st.who;
+  const t = await one(`tg_tickets?tg_user=eq.${fromId}&select=profile_id&order=used_at.desc&limit=1`);
+  if (!t) return null;
+  const p = await one(`profiles?id=eq.${t.profile_id}&select=id,name,role,job_title`);
+  return p ? { id: p.id, name: p.name, role: p.role, job_title: p.job_title } : null;
+}
+async function verifyCamPhoto(chat: number, fileId: string) {
+  if (!CAM_KEY) return say(chat, "⚠️ مفتاح الكاميرا CAM_KEY غير مضبوط في أسرار الدالة — أضفه من Edge Functions ← Secrets.");
+  await tg("sendChatAction", { chat_id: chat, action: "typing" });
+  const f = await tg("getFile", { file_id: fileId });
+  if (!f.ok) return say(chat, "تعذّر تنزيل الصورة من تلجرام.");
+  const bin = new Uint8Array(await (await fetch(`https://api.telegram.org/file/bot${TOKEN}/${f.result.file_path}`)).arrayBuffer());
+  let img: any;
+  try { img = jpeg.decode(bin, { useTArray: true, maxMemoryUsageInMB: 256 }); }
+  catch { return say(chat, "❌ هذه ليست صورة JPG من كاميرا الأماني."); }
+  const rgba = new Uint8ClampedArray(img.data.buffer, img.data.byteOffset, img.data.byteLength);
+  /* الرمز في الربع السفلي: نبحث فيه أولاً (أسرع وأدق)، ثم في الصورة كلها */
+  let qr: any = null;
+  const top = Math.floor(img.height * 0.7);
+  const part = rgba.subarray(top * img.width * 4);
+  qr = jsQR(part, img.width, img.height - top) || jsQR(rgba, img.width, img.height);
+  if (!qr) {
+    return say(chat, "❌ لا يوجد رمز تحقق مقروء في هذه الصورة.\n\nإمّا أنها ليست من كاميرا الأماني، أو أن الشريط السفلي قُصّ أو غُطّي، أو أن الصورة صغيرة جداً — جرّب إرسالها «كملف» بدل صورة.");
+  }
+  const parts = String(qr.data).split("|");
+  if (parts.length !== 5 || parts[0] !== "AMANI1") return say(chat, "❌ الرمز في الصورة ليس رمز كاميرا الأماني.");
+  const [, id, when, uc, code] = parts;
+  const ok = (await camSign([id, when, uc].join("|"))) === code;
+  /* اسم المصوِّر: نبحث عن الحساب الذي يعطي هذا الرمز */
+  let name = "";
+  try {
+    const ps: any[] = (await db("profiles?select=id,name")) ?? [];
+    const m = ps.find((p) => camUser(p.id) === uc); if (m) name = m.name || "";
+  } catch { /* الاسم اختياري */ }
+  if (!ok) {
+    return say(chat, "❌ الصورة مزوّرة أو معدّلة\n\nالبيانات المكتوبة على الصورة لا تطابق رمزها السرّي — غُيّر التاريخ أو الوقت أو الرقم، أو صُنعت خارج التطبيق.");
+  }
+  return say(chat,
+    `✅ صورة أصلية من كاميرا الأماني\n\n` +
+    `📅 التُقطت: ${when}
+👤 المصوِّر: ${name || "غير معروف"} (${uc})
+🔢 رقم الصورة: ${id}
+
+` +
+    `ملاحظة: الرمز يضمن صحة الوقت والمصوِّر ورقم الصورة. تعديل محتوى الصورة نفسها لا يمكن كشفه بدون النسخة الأصلية.`);
 }
 
 /* ══ الرسائل ══ */
@@ -400,6 +470,9 @@ async function onMessage(m: any) {
     if (tk.action === "a") {
       if (!REVIEWERS.includes(p.role)) return say(chat, "التدقيق لمسؤولي التوصيل ومدير المبيعات فقط.");
       await setState(chat, { who });
+      if (!tk.trip_id) return say(chat, `🔍 أهلاً ${who.name || ""}
+
+أرسل هنا أي صورة من كاميرا الأماني (أو حوّلها من محادثة أخرى) وسأتحقق منها فوراً.`);
       return sendTrip(chat, who, tk.trip_id);
     }
     if (tk.action === "g") return startGps(chat, who, tk);
@@ -415,6 +488,16 @@ async function onMessage(m: any) {
     return say(chat, `✓ سُجّل سبب الوقفة: ${text.trim().slice(0, 200)}`);
   }
   const album = m.media_group_id ? String(m.media_group_id) : undefined;
+  /* صورة من مسؤول (لا من سائق في مهمة تصوير) = طلب تحقق */
+  const isImg = (m.photo && m.photo.length) || (m.document && /^image\/jpe?g$/.test(String(m.document.mime_type || "")));
+  if (isImg && !(st.job && st.job.mode === "photo")) {
+    const who = await whoOf(st, m.from?.id);
+    if (who && REVIEWERS.includes(who.role)) {
+      const fid = m.photo && m.photo.length ? m.photo[m.photo.length - 1].file_id : m.document.file_id;
+      try { return await verifyCamPhoto(chat, fid); }
+      catch (e) { console.error("verify", e); return say(chat, "تعذّر فحص الصورة — حاول مرة أخرى."); }
+    }
+  }
   if (m.photo && m.photo.length) return gotPhoto(chat, st, "tg:" + m.photo[m.photo.length - 1].file_id, album);
   if (m.video) return gotPhoto(chat, st, "tgv:" + m.video.file_id, album);
   if (m.video_note) return gotPhoto(chat, st, "tgn:" + m.video_note.file_id, album);

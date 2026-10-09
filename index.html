@@ -17580,6 +17580,75 @@ async function amaniCamSign(text){
   let o = ''; for (let i = 0; i < 8; i++) o += AMANI_CAM_ALPHA[mac[i] % 32];
   return o.slice(0, 4) + '-' + o.slice(4);
 }
+/* مولّد QR صغير بلا مكتبات — وضع البايت، تصحيح M، الإصدارات 1–6، قناع ثابت.
+   يكفي لنص قصير (حتى ١٠٦ بايت) ويعمل بلا إنترنت. */
+function amaniQr(text){
+  const ECC = [0,10,16,26,18,24,16], BLK = [0,1,1,1,2,2,4];
+  const data = Array.from(new TextEncoder().encode(text));
+  const raw = v => { let r = (16 * v + 128) * v + 64; if (v >= 2){ const n = Math.floor(v / 7) + 2; r -= (25 * n - 10) * n - 55; } return r; };
+  let ver = 1;
+  for (; ver <= 6; ver++){ const cap = Math.floor(raw(ver) / 8) - ECC[ver] * BLK[ver]; if (12 + data.length * 8 <= cap * 8) break; }
+  if (ver > 6) throw new Error('النص طويل على رمز QR');
+  const size = ver * 4 + 17, rawCw = Math.floor(raw(ver) / 8), dataCw = rawCw - ECC[ver] * BLK[ver];
+  /* البتات */
+  const bits = [], put = (v, n) => { for (let i = n - 1; i >= 0; i--) bits.push((v >>> i) & 1); };
+  put(4, 4); put(data.length, 8); data.forEach(b => put(b, 8));
+  const cap = dataCw * 8;
+  put(0, Math.min(4, cap - bits.length));
+  while (bits.length % 8) bits.push(0);
+  for (let p = 0xEC; bits.length < cap; p ^= 0xEC ^ 0x11) put(p, 8);
+  const cw = []; for (let i = 0; i < bits.length; i += 8){ let b = 0; for (let j = 0; j < 8; j++) b = (b << 1) | bits[i + j]; cw.push(b); }
+  /* ريد-سولومون */
+  const mul = (x, y) => { let z = 0; for (let i = 7; i >= 0; i--){ z = (z << 1) ^ ((z >>> 7) * 0x11D); z ^= ((y >>> i) & 1) * x; } return z; };
+  const deg = ECC[ver], div = new Array(deg).fill(0); div[deg - 1] = 1;
+  for (let i = 0, root = 1; i < deg; i++){
+    for (let j = 0; j < deg; j++){ div[j] = mul(div[j], root); if (j + 1 < deg) div[j] ^= div[j + 1]; }
+    root = mul(root, 2);
+  }
+  const rem = d => { const r = new Array(deg).fill(0); d.forEach(b => { const f = b ^ r.shift(); r.push(0); div.forEach((c, i) => r[i] ^= mul(c, f)); }); return r; };
+  const nb = BLK[ver], nShort = nb - rawCw % nb, shortLen = Math.floor(rawCw / nb), blocks = [];
+  for (let i = 0, k = 0; i < nb; i++){
+    const d = cw.slice(k, k + shortLen - deg + (i < nShort ? 0 : 1)); k += d.length;
+    const e = rem(d); if (i < nShort) d.push(0); blocks.push(d.concat(e));
+  }
+  const all = [];
+  for (let i = 0; i < blocks[0].length; i++) blocks.forEach((b, j) => { if (i !== shortLen - deg || j >= nShort) all.push(b[i]); });
+  /* المصفوفة */
+  const M = Array.from({ length:size }, () => new Array(size).fill(false));
+  const F = Array.from({ length:size }, () => new Array(size).fill(false));
+  const set = (x, y, d) => { M[y][x] = d; F[y][x] = true; };
+  for (let i = 0; i < size; i++){ set(6, i, i % 2 === 0); set(i, 6, i % 2 === 0); }
+  const finder = (cx, cy) => { for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++){
+    const x = cx + dx, y = cy + dy, d = Math.max(Math.abs(dx), Math.abs(dy));
+    if (x >= 0 && x < size && y >= 0 && y < size) set(x, y, d !== 2 && d !== 4); } };
+  finder(3, 3); finder(size - 4, 3); finder(3, size - 4);
+  if (ver >= 2){
+    const p = [6, size - 7];
+    for (const ay of p) for (const ax of p){
+      if ((ax === 6 && ay === 6) || (ax === size - 7 && ay === 6) || (ax === 6 && ay === size - 7)) continue;
+      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) set(ax + dx, ay + dy, Math.max(Math.abs(dx), Math.abs(dy)) !== 1);
+    }
+  }
+  const MASK = 0, fmt = (() => { const d = MASK; let r = d; for (let i = 0; i < 10; i++) r = (r << 1) ^ ((r >>> 9) * 0x537); return ((d << 10) | r) ^ 0x5412; })();
+  const fb = i => ((fmt >>> i) & 1) === 1;
+  for (let i = 0; i <= 5; i++) set(8, i, fb(i));
+  set(8, 7, fb(6)); set(8, 8, fb(7)); set(7, 8, fb(8));
+  for (let i = 9; i < 15; i++) set(14 - i, 8, fb(i));
+  for (let i = 0; i < 8; i++) set(size - 1 - i, 8, fb(i));
+  for (let i = 8; i < 15; i++) set(8, size - 15 + i, fb(i));
+  set(8, size - 8, true);
+  let bi = 0;
+  for (let right = size - 1; right >= 1; right -= 2){
+    if (right === 6) right = 5;
+    for (let v = 0; v < size; v++) for (let j = 0; j < 2; j++){
+      const x = right - j, up = ((right + 1) & 2) === 0, y = up ? size - 1 - v : v;
+      if (!F[y][x] && bi < all.length * 8){ M[y][x] = ((all[bi >>> 3] >>> (7 - (bi & 7))) & 1) === 1; bi++; }
+    }
+  }
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) if (!F[y][x] && (x + y) % 2 === 0) M[y][x] = !M[y][x];
+  return M;
+}
+
 /* رمز المستخدم القصير: من معرّف حسابه — ثابت له على كل هواتفه */
 function amaniCamUser(p){
   let h = 2166136261; for (const ch of String((p && p.id) || '')) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619) >>> 0; }
@@ -17617,7 +17686,7 @@ async function amaniCamStamp(file){
   const id = amaniCamRnd(6), code = await amaniCamSign([id, when, uc].join('|'));
   const MARK = 'شركة الأماني', u = Math.max(W, H) / 100;
   /* اسم الشركة كبيراً مائلاً في ثلاثة أسطر فقط — يغطّي الصورة ولا يزحمها */
-  g.save(); g.translate(W / 2, (H - u * 12) / 2); g.rotate(-Math.PI / 7);
+  g.save(); g.translate(W / 2, (H - u * 15) / 2); g.rotate(-Math.PI / 7);
   g.font = 'bold ' + Math.round(u * 7) + 'px Tahoma, Arial, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
   g.lineWidth = Math.max(2, u * 0.4);
   for (const dy of [-1, 0, 1]){
@@ -17626,22 +17695,29 @@ async function amaniCamStamp(file){
     g.fillStyle = 'rgba(255,255,255,0.26)'; g.fillText(MARK, 0, y);
   }
   g.restore();
-  /* الشريط السفلي */
-  const bh = u * 12;
-  g.fillStyle = 'rgba(8,14,26,0.85)'; g.fillRect(0, H - bh, W, bh);
+  /* الشريط السفلي، وفي يساره رمز QR يحمل بيانات الصورة ورمزها — يقرؤه بوت تلجرام للتحقق الآلي */
+  const bh = u * 15;
+  g.fillStyle = 'rgba(8,14,26,0.88)'; g.fillRect(0, H - bh, W, bh);
   g.fillStyle = '#38d9b9'; g.fillRect(0, H - bh, W, Math.max(2, u * 0.35));
+  const Q = amaniQr(['AMANI1', id, when, uc, code.replace('-', '')].join('|'));
+  const qs = bh - u * 1.6, qm = qs / (Q.length + 4), qx = u * 1.2, qy = H - bh + u * 0.8;
+  g.fillStyle = '#ffffff'; g.fillRect(qx, qy, qs, qs);
+  g.fillStyle = '#000000';
+  for (let y = 0; y < Q.length; y++) for (let x = 0; x < Q.length; x++)
+    if (Q[y][x]) g.fillRect(Math.floor(qx + (x + 2) * qm), Math.floor(qy + (y + 2) * qm), Math.ceil(qm), Math.ceil(qm));
+  const tx = qx + qs + u * 1.5;
   g.textBaseline = 'middle'; g.direction = 'rtl'; g.textAlign = 'right';
   g.fillStyle = '#ffffff'; g.font = 'bold ' + Math.round(u * 3.4) + 'px Tahoma, Arial, sans-serif';
-  g.fillText(MARK, W - u * 3, H - bh * 0.68);
+  g.fillText(MARK, W - u * 3, H - bh * 0.7);
   g.fillStyle = '#cfe0f5'; g.font = Math.round(u * 2.6) + 'px Tahoma, Arial, sans-serif';
-  g.fillText('المصوِّر: ' + name, W - u * 3, H - bh * 0.28);
+  g.fillText('المصوِّر: ' + name, W - u * 3, H - bh * 0.32);
   g.direction = 'ltr'; g.textAlign = 'left';
-  g.fillStyle = '#ffffff'; g.font = 'bold ' + Math.round(u * 2.8) + 'px Tahoma, Arial, sans-serif';
-  g.fillText(when, u * 3, H - bh * 0.72);
-  g.fillStyle = '#cfe0f5'; g.font = Math.round(u * 2.4) + 'px Tahoma, Arial, sans-serif';
-  g.fillText('No. ' + id + '   ID ' + uc, u * 3, H - bh * 0.42);
-  g.fillStyle = '#38d9b9'; g.font = 'bold ' + Math.round(u * 2.4) + 'px Tahoma, Arial, sans-serif';
-  g.fillText('CODE ' + code, u * 3, H - bh * 0.15);
+  g.fillStyle = '#ffffff'; g.font = 'bold ' + Math.round(u * 2.6) + 'px Tahoma, Arial, sans-serif';
+  g.fillText(when, tx, H - bh * 0.76);
+  g.fillStyle = '#cfe0f5'; g.font = Math.round(u * 2.2) + 'px Tahoma, Arial, sans-serif';
+  g.fillText('No. ' + id + '   ID ' + uc, tx, H - bh * 0.5);
+  g.fillStyle = '#38d9b9'; g.font = 'bold ' + Math.round(u * 2.2) + 'px Tahoma, Arial, sans-serif';
+  g.fillText('CODE ' + code, tx, H - bh * 0.24);
   const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.92));
   return { blob, id };
 }
@@ -18069,11 +18145,11 @@ window.fleetPurgeVehicle=async function(vid){
 
 /* ══ تتبّع الموقع (GPS) عبر الموقع المباشر في تلجرام ══
    البوت يخزّن نقاط الرحلة في fleet_gps، وهنا تُستخرج منها الوقفات:
-   التحرّك ضمن ١٠ أمتار لا يُعدّ مشياً، والبقاء ضمنها أكثر من ٣ دقائق وقفة. */
+   التحرّك ضمن ١٠ أمتار لا يُعدّ مشياً، والبقاء ضمنها أكثر من ٥ دقائق وقفة. */
 /* نصف قطر الوقفة 30 م لا 10: موقع الهاتف وهو واقف يتذبذب 15–40 م (مبانٍ، داخل السيارة)،
-   فبـ10 م كان كل تذبذب يقطع الوقفة إلى قطع أقصر من 3 دقائق فلا تظهر أي وقفة.
+   فبـ10 م كان كل تذبذب يقطع الوقفة إلى قطع أقصر من الحد فلا تظهر أي وقفة.
    والنقاط ضعيفة الدقة (أكثر من 100 م) لا تُعتمد في حساب الوقفات */
-var FLEET_STOP_M = 30, FLEET_STOP_MS = 3 * 60000, FLEET_GAP_MS = 10 * 60000, FLEET_BAD_ACC = 100;
+var FLEET_STOP_M = 30, FLEET_STOP_MS = 5 * 60000, FLEET_GAP_MS = 10 * 60000, FLEET_BAD_ACC = 100;
 var FLEET_GPS_ON='<div style="color:#38d9b9;font-size:11px;margin:4px 0;">📍 موقعك المباشر مُفعّل — يتوقف تسجيله عند الإرجاع</div>';
 /* هل وصل أي موقع لهذه الرحلة؟ البوت لا يخزّن إلا الموقع المباشر، فوجود نقطة = التتبع شغّال.
    null عند تعذّر القراءة — فلا نحبس السائق بسبب خلل شبكة */
@@ -18144,7 +18220,7 @@ async function fleetRenderStops(t){
   var pts;
   try{ pts=await fleetLoadGps(t.id); }
   catch(e){ box.innerHTML='<span style="color:#e8a0a4;">تعذّر تحميل الموقع: '+esc(e.message||'')+'</span>'; return; }
-  var h='<div style="color:#8fb8d8;font-size:12px;font-weight:700;margin-bottom:6px;">📍 الوقفات (أكثر من ٣ دقائق)</div>';
+  var h='<div style="color:#8fb8d8;font-size:12px;font-weight:700;margin-bottom:6px;">📍 الوقفات (أكثر من ٥ دقائق)</div>';
   if(!pts.length){
     box.innerHTML=h+'<div style="color:#5d6d80;font-size:11px;">لا توجد بيانات موقع — السائق لم يشارك موقعه المباشر في هذه الرحلة.</div>';
     return;
@@ -18167,7 +18243,7 @@ async function fleetRenderStops(t){
                  .sort(function(a,b){ return Math.abs(a.at-s.from)-Math.abs(b.at-s.from); })[0];
     return m ? (m.reason || '') : '';
   };
-  if(!stops.length) h+='<div style="color:#38d9b9;font-size:12px;">✓ لا وقفات تتجاوز ٣ دقائق</div>';
+  if(!stops.length) h+='<div style="color:#38d9b9;font-size:12px;">✓ لا وقفات تتجاوز ٥ دقائق</div>';
   stops.forEach(function(s,k){
     var why=reasonOf(s);
     h+='<div style="padding:9px;margin-bottom:6px;border-radius:10px;background:rgba(255,179,122,0.08);'
@@ -19016,7 +19092,7 @@ async function fsRenderSheet(keepLocal){
       +td(tinp(id,'note_before'),'in')+td(tinp(id,'note_after'),'in')+'</tr>';
     /* تفاصيل الرحلة: وقفاتها — تُفتح بزرّ الوقفات */
     var ss=c.stops.filter(function(x){ return x.n===rw.n; });
-    var det='<div class="det"><b>وقفات الرحلة '+rw.n+' (أكثر من ٣ دقائق)</b> — '+esc(rw.plate)+' · '+rw.gps+' نقطة موقع'
+    var det='<div class="det"><b>وقفات الرحلة '+rw.n+' (أكثر من ٥ دقائق)</b> — '+esc(rw.plate)+' · '+rw.gps+' نقطة موقع'
       +(rw.cov.none?' · <span style="color:#9c0006;font-weight:bold;">لا يوجد موقع لهذه الرحلة</span>'
         :' · الموقع من '+fsHM(rw.cov.first)+' إلى '+fsHM(rw.cov.last)
           +(rw.cov.bad?' · <span style="color:#9c0006;font-weight:bold;">⚠ انقطع الموقع '+fsH(rw.cov.gapMin)+' من '+fsHM(rw.cov.gapAt)+' — الوقفات في هذه المدة لا تُعرف</span>':''))
@@ -19222,7 +19298,7 @@ function fsPrintHtml(c,d){
     +'<h3>الرحلات</h3><table><tr><th>#</th><th>الخروج من الشركة</th><th>وقت تسليم الطلبات</th><th>ملاحظات قبل الانطلاق</th><th>الرجوع للشركة</th>'
     +'<th>مدة الرحلة (س:د)</th><th>الوقفات</th><th>البقاء بعدها (س:د)</th><th>ملاحظات بعد الانطلاق</th><th>اسم المجهز</th><th>وقت التجهيز</th><th>الفواتير</th><th>متوسط الفاتورة</th></tr>'
     +(rows||'<tr><td colspan="13">لا رحلات</td></tr>')+'</table>'
-    +'<h3>الوقفات (أكثر من ٣ دقائق)</h3><table><tr><th>رحلة</th><th>من</th><th>إلى</th><th>المدة (س:د)</th><th>السبب</th></tr>'
+    +'<h3>الوقفات (أكثر من ٥ دقائق)</h3><table><tr><th>رحلة</th><th>من</th><th>إلى</th><th>المدة (س:د)</th><th>السبب</th></tr>'
     +(stops||'<tr><td colspan="5">لا وقفات</td></tr>')+'</table>'
     +'<h3>البصمات وملخص الأداء</h3><table class="four">'+fsPairs([
       ['بصمة الدخول',e(d.fp_in)],
@@ -19512,7 +19588,8 @@ window.renderFleetManagerTab=async function(){
       +'<div style="color:#7487a0;font-size:10px;">رحلة (٦٠ يوم)</div></div></div>'
       +'<div style="color:#5d6d80;font-size:10px;margin-top:8px;">يُصفَّر كل ما تجاوز ٦٠ يوماً: الرحلة وصورها من التخزين وسجل تدقيقها — نافذة متدحرجة، لا يُمسح السجل دفعة واحدة</div>'
       +'<button class="secondary" style="width:100%;font-size:11px;padding:8px;margin-top:8px;" '
-      +'onclick="fleetCleanNow(this)">🧹 تنظيف ما تجاوز ٦٠ يوماً</button></div>';
+      +'onclick="fleetCleanNow(this)">🧹 تنظيف ما تجاوز ٦٠ يوماً</button>'
+      +'<div style="margin-top:8px;">'+fleetTgLink('a',null,null,null,'🔍 التحقق من صور كاميرا الأماني عبر تلجرام','font-size:12px;padding:10px;background:#1c7a4a;')+'</div></div>';
 
     /* تبويبان: المركبات (إدارة كاملة) والرحلات (أداء + سجل) */
     h+='<div class="card" style="padding:8px;">'
