@@ -27,8 +27,9 @@ import jpeg from "npm:jpeg-js@0.4.4";
 import jsQR from "npm:jsqr@1.4.0";
 
 const TOKEN  = Deno.env.get("BOT_TOKEN") ?? "";
-/* مفتاح كاميرا الأماني (نفس المفتاح داخل التطبيق) — يُضاف في Edge Functions ← Secrets باسم CAM_KEY */
-const CAM_KEY = Deno.env.get("CAM_KEY") ?? "";
+/* مفتاح كاميرا الأماني — نفس المفتاح داخل التطبيق. مكتوب هنا مباشرة (لا حاجة لـ Secrets)،
+   ولا يُرفع هذا الملف بمفتاحه إلى مستودع عام */
+const CAM_KEY = Deno.env.get("CAM_KEY") || "__AMANI_KEY__";
 const SB_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SB_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? Deno.env.get("SB_SECRET") ?? "";
 const FN_NAME = "tg-bot";

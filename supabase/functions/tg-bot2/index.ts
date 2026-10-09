@@ -27,8 +27,9 @@ import jpeg from "npm:jpeg-js@0.4.4";
 import jsQR from "npm:jsqr@1.4.0";
 
 const TOKEN  = Deno.env.get("BOT_TOKEN") ?? "";
-/* مفتاح كاميرا الأماني (نفس المفتاح داخل التطبيق) — يُضاف في Edge Functions ← Secrets باسم CAM_KEY */
-const CAM_KEY = Deno.env.get("CAM_KEY") ?? "";
+/* مفتاح كاميرا الأماني — نفس المفتاح داخل التطبيق. مكتوب هنا مباشرة (لا حاجة لـ Secrets)،
+   ولا يُرفع هذا الملف بمفتاحه إلى مستودع عام */
+const CAM_KEY = Deno.env.get("CAM_KEY") || "__AMANI_KEY__";
 const SB_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SB_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? Deno.env.get("SB_SECRET") ?? "";
 const FN_NAME = "tg-bot2";
@@ -420,9 +421,7 @@ async function verifyCamPhoto(chat: number, fileId: string) {
   const part = rgba.subarray(top * img.width * 4);
   qr = jsQR(part, img.width, img.height - top) || jsQR(rgba, img.width, img.height);
   if (!qr) {
-    return say(chat, "❌ لا يوجد رمز تحقق مقروء في هذه الصورة.
-
-إمّا أنها ليست من كاميرا الأماني، أو أن الشريط السفلي قُصّ أو غُطّي، أو أن الصورة صغيرة جداً — جرّب إرسالها «كملف» بدل صورة.");
+    return say(chat, "❌ لا يوجد رمز تحقق مقروء في هذه الصورة.\n\nإمّا أنها ليست من كاميرا الأماني، أو أن الشريط السفلي قُصّ أو غُطّي، أو أن الصورة صغيرة جداً — جرّب إرسالها «كملف» بدل صورة.");
   }
   const parts = String(qr.data).split("|");
   if (parts.length !== 5 || parts[0] !== "AMANI1") return say(chat, "❌ الرمز في الصورة ليس رمز كاميرا الأماني.");
@@ -435,14 +434,10 @@ async function verifyCamPhoto(chat: number, fileId: string) {
     const m = ps.find((p) => camUser(p.id) === uc); if (m) name = m.name || "";
   } catch { /* الاسم اختياري */ }
   if (!ok) {
-    return say(chat, "❌ الصورة مزوّرة أو معدّلة
-
-البيانات المكتوبة على الصورة لا تطابق رمزها السرّي — غُيّر التاريخ أو الوقت أو الرقم، أو صُنعت خارج التطبيق.");
+    return say(chat, "❌ الصورة مزوّرة أو معدّلة\n\nالبيانات المكتوبة على الصورة لا تطابق رمزها السرّي — غُيّر التاريخ أو الوقت أو الرقم، أو صُنعت خارج التطبيق.");
   }
   return say(chat,
-    `✅ صورة أصلية من كاميرا الأماني
-
-` +
+    `✅ صورة أصلية من كاميرا الأماني\n\n` +
     `📅 التُقطت: ${when}
 👤 المصوِّر: ${name || "غير معروف"} (${uc})
 🔢 رقم الصورة: ${id}
