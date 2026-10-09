@@ -260,12 +260,23 @@ async function startGps(chat: number, who: any, tk: any) {
   const trip = await openTripOf(String(who.id), tk.trip_id);
   if (!trip) return say(chat, "لا توجد رحلة مفتوحة باسمك — استلم المركبة في التطبيق أولاً.");
   const st = await getState(chat);
+  /* المشاركة شغّالة أصلاً من رحلة سابقة (آخر موقع قبل أقل من ٣٠ دقيقة): تلجرام لا يرسل تحديثاً
+     والهاتف ثابت، فنسجّل آخر موقع للرحلة الجديدة فوراً حتى تظهر مهامها بلا مشاركة جديدة */
+  const L = st.gps_last;
+  if (L && Date.now() - Number(L.at) < 30 * 60000) {
+    await db("fleet_gps", {
+      method: "POST",
+      body: JSON.stringify({ trip_id: trip.id, driver_id: String(who.id), lat: L.lat, lng: L.lng, acc: null, at: new Date().toISOString() }),
+    }, "return=minimal");
+    await setState(chat, { ...st, who, gps_trip: trip.id, gps_last: { ...L, at: Date.now() } });
+    return say(chat, "✓ موقعك المباشر شغّال — سُجّل لهذه الرحلة. ارجع للتطبيق، ستظهر مهام الاستلام.");
+  }
   await setState(chat, { ...st, who, gps_trip: trip.id });
   return say(chat,
     `📍 تتبّع الرحلة\n\nشارك موقعك المباشر الآن:\n` +
     `١) اضغط 📎 (المرفقات) أسفل المحادثة\n٢) اختر «الموقع» (Location)\n` +
-    `٣) اضغط «مشاركة موقعي المباشر» (Share My Live Location)\n٤) اختر أطول مدة (٨ ساعات)\n\n` +
-    `بعدها ارجع للتطبيق — ستظهر مهام الاستلام. التتبع يستمر حتى والشاشة مطفأة، وينتهي عند إرجاع المركبة.`);
+    `٣) اضغط «مشاركة موقعي المباشر» (Share My Live Location)\n٤) اختر «حتى أوقفه» (Until I turn it off) — لا تختر ٨ ساعات، تنتهي وسط الدوام\n\n` +
+    `بعدها ارجع للتطبيق — ستظهر مهام الاستلام. اترك المشاركة شغّالة طوال الدوام: لا يُسجَّل الموقع إلا أثناء الرحلات.`);
 }
 
 async function gotLocation(chat: number, st: any, m: any, edited: boolean) {
@@ -278,23 +289,26 @@ async function gotLocation(chat: number, st: any, m: any, edited: boolean) {
   /* الموقع الثابت (مرة واحدة) لا يُعدّ تتبّعاً — التطبيق يفتح المهام عند أول نقطة مخزّنة */
   if (!edited && !loc.live_period) {
     return say(chat, "هذا موقعك الحالي فقط — المطلوب «الموقع المباشر».\n" +
-      "اضغط 📎 ← «الموقع» ← «مشاركة موقعي المباشر» (Share My Live Location) ← ٨ ساعات.");
+      "اضغط 📎 ← «الموقع» ← «مشاركة موقعي المباشر» (Share My Live Location) ← «حتى أوقفه» (Until I turn it off).");
   }
   const pt = { lat: Number(loc.latitude), lng: Number(loc.longitude) };
   const at = new Date(((edited && m.edit_date) || m.date) * 1000);
   /* أغلب التحديثات تكرار لنفس المكان: نقارن بآخر نقطة محفوظة في حالة المحادثة
      ونخرج فوراً بلا أي طلب آخر للقاعدة — هذا أكبر توفير في الاستهلاك */
   const L = st.gps_last;
-  if (edited && L && st.gps_trip &&
+  if (edited && L &&
       distM(L, pt) <= GPS_MOVE_M && at.getTime() - Number(L.at) < GPS_STILL_MS) return;
   const trip = await openTripOf(String(who.id), st.gps_trip);
   if (!trip) {
-    /* انتهت الرحلة (سُلّمت المركبة): يتوقف التسجيل، ونطلب من السائق إيقاف المشاركة مرة واحدة */
+    /* انتهت الرحلة (سُلّمت المركبة): يتوقف التسجيل، والمشاركة تبقى شغّالة للرحلة التالية —
+       إيقافها بعد كل رحلة كان ينسى السائقون إعادتها فينقطع موقع الرحلة التالية */
     if (st.gps_trip) {
-      await setState(chat, { ...st, gps_trip: null, gps_last: null });
+      await setState(chat, { ...st, gps_trip: null, gps_last: { lat: pt.lat, lng: pt.lng, at: at.getTime() } });
       return say(chat, "✓ انتهت رحلتك وتوقّف تسجيل موقعك.\n" +
-        "أوقف مشاركة الموقع الآن: اضغط على رسالة «الموقع المباشر» في المحادثة ← «إيقاف المشاركة» (Stop Sharing).");
+        "اترك مشاركة الموقع شغّالة للرحلة القادمة — لا يُسجَّل شيء بين الرحلات. أوقفها فقط في نهاية دوامك.");
     }
+    /* بين الرحلات: نحفظ آخر موقع في الحالة فقط (بلا قاعدة) لتبدأ به الرحلة التالية فوراً */
+    if (edited) await setState(chat, { ...st, gps_last: { lat: pt.lat, lng: pt.lng, at: at.getTime() } });
     if (!edited) await say(chat, "لا توجد رحلة مفتوحة باسمك — الموقع لم يُسجَّل.");
     return;
   }

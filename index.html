@@ -18166,7 +18166,8 @@ function fleetGpsGate(trip){
     +'<div style="color:#8fd0f0;font-size:14px;font-weight:800;">📍 أولاً: شارك موقعك المباشر</div>'
     +'<div style="color:#a9b8c9;font-size:12px;line-height:1.9;margin:6px 0 10px;">'
     +'لن تظهر مهام الاستلام حتى يصل موقعك.<br>'
-    +'افتح البوت ← اضغط 📎 ← «الموقع» ← «مشاركة موقعي المباشر» ← ٨ ساعات، ثم ارجع هنا.</div>'
+    +'افتح البوت ← اضغط 📎 ← «الموقع» ← «مشاركة موقعي المباشر» ← «حتى أوقفه» (Until I turn it off)، ثم ارجع هنا.<br>'
+    +'<span style="color:#ffb37a;">لا تختر ٨ ساعات — تنتهي وسط الدوام وينقطع موقعك.</span></div>'
     +fleetTgLink('g',trip.id,null,null,'📍 فتح البوت ومشاركة الموقع','font-size:13px;padding:12px;background:#2e5ca8;')
     +'<button class="secondary" style="width:100%;margin-top:8px;font-size:12px;padding:10px;" '
     +'onclick="window.renderDriverView&&renderDriverView(window.__fleetProfile)">↻ شاركت موقعي — تحقّق</button></div>';
@@ -18918,10 +18919,16 @@ window.fleetSheetOpen=async function(day,driver){
 function fsGpsCoverage(pts,outMs,inMs){
   var end=inMs||Date.now();
   if(!pts.length) return {none:true, gapMin:fsMin(end-outMs), bad:true};
-  var ts=pts.map(function(p){ return Date.parse(p.at); }), mx=0, mxAt=null;
-  for(var i=1;i<ts.length;i++) if(ts[i]-ts[i-1]>mx){ mx=ts[i]-ts[i-1]; mxAt=ts[i-1]; }
+  /* تلجرام لا يرسل تحديثاً والهاتف ثابت — فجوة بين نقطتين في المكان نفسه وقوفٌ لا انقطاع،
+     وكذلك ما بعد آخر نقطة إن كانت داخل الشركة والرحلة مُرجَعة */
+  var ts=pts.map(function(p){ return Date.parse(p.at); }), mx=0, mxAt=null, still=FLEET_STOP_M*2;
+  for(var i=1;i<ts.length;i++){
+    if(fleetDistM(pts[i-1],pts[i])<=still) continue;
+    if(ts[i]-ts[i-1]>mx){ mx=ts[i]-ts[i-1]; mxAt=ts[i-1]; }
+  }
   var tail=end-ts[ts.length-1];
-  if(tail>mx){ mx=tail; mxAt=ts[ts.length-1]; }
+  var home=inMs && __fsGeo && fsGeoDist(pts[pts.length-1])<=__fsGeo.r+FS_GEO_HYST;
+  if(!home && tail>mx){ mx=tail; mxAt=ts[ts.length-1]; }
   return {first:ts[0], last:ts[ts.length-1], gapMin:fsMin(mx), gapAt:mxAt, tailMin:fsMin(tail), bad:mx>FLEET_GAP_MS};
 }
 async function fsCompute(){
