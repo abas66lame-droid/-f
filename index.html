@@ -17534,6 +17534,109 @@ async function forceRelease(v,by){
 }
 
 /* ════════════ واجهة موظف التوصيل ════════════ */
+/* ══ كاميرا الأماني ══
+   تصوير من داخل النظام، والحفظ في هاتف المستخدم فقط — لا يُرفع شيء للسيرفر.
+   كل صورة تُختم بنص الشركة مائلاً ومكرّراً على كاملها، وشريط سفلي فيه اسم المصوِّر (من
+   حسابه، لا يكتبه هو) والتاريخ والوقت ورقم الصورة ورمز تحقّق. الرمز HMAC بمفتاح سرّي
+   فوق (الرقم|الوقت|المعرّف)، وصفحة الفحص وحدها تعيد حسابه — أي تعديل على البيانات يكسره. */
+const AMANI_CAM_KEY = '__AMANI_KEY__';
+const AMANI_CAM_ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+function amaniCamRnd(n){ const b = new Uint8Array(n); crypto.getRandomValues(b); return Array.from(b, x => AMANI_CAM_ALPHA[x % 32]).join(''); }
+async function amaniCamSign(text){
+  const raw = new Uint8Array(AMANI_CAM_KEY.match(/../g).map(h => parseInt(h, 16)));
+  const key = await crypto.subtle.importKey('raw', raw, { name:'HMAC', hash:'SHA-256' }, false, ['sign']);
+  const mac = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(text)));
+  let o = ''; for (let i = 0; i < 8; i++) o += AMANI_CAM_ALPHA[mac[i] % 32];
+  return o.slice(0, 4) + '-' + o.slice(4);
+}
+/* رمز المستخدم القصير: من معرّف حسابه — ثابت له على كل هواتفه */
+function amaniCamUser(p){
+  let h = 2166136261; for (const ch of String((p && p.id) || '')) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619) >>> 0; }
+  let o = ''; for (let i = 0; i < 4; i++){ o += AMANI_CAM_ALPHA[h % 32]; h = Math.floor(h / 32); }
+  return o;
+}
+window.amaniCam = function(){
+  let inp = document.getElementById('amaniCamIn');
+  if (!inp){
+    inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = 'image/*'; inp.setAttribute('capture', 'environment'); inp.id = 'amaniCamIn';
+    inp.style.cssText = 'position:fixed;left:-9999px;width:1px;height:1px;opacity:0;';
+    inp.addEventListener('change', async function(){
+      const f = inp.files && inp.files[0]; inp.value = ''; if (!f) return;
+      try{ toast('⏳ جاري ختم الصورة…', true); }catch(e){}
+      try{ amaniCamShow(await amaniCamStamp(f)); }
+      catch(e){ alert('تعذّر ختم الصورة: ' + ((e && e.message) || e)); }
+    });
+    document.body.appendChild(inp);
+  }
+  inp.click();
+};
+async function amaniCamStamp(file){
+  const im = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('تعذّر قراءة الصورة')); i.src = URL.createObjectURL(file); });
+  const MAX = 2400, k = Math.min(1, MAX / Math.max(im.naturalWidth, im.naturalHeight));
+  const W = Math.round(im.naturalWidth * k), H = Math.round(im.naturalHeight * k);
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const g = cv.getContext('2d'); g.drawImage(im, 0, 0, W, H);
+  const p = window.__fleetProfile || (typeof currentShiftProfile !== 'undefined' ? currentShiftProfile : null) || {};
+  const name = String(p.name || '').trim() || 'موظف', uc = amaniCamUser(p);
+  const d = new Date(), pd = n => String(n).padStart(2, '0');
+  const when = d.getFullYear() + '-' + pd(d.getMonth() + 1) + '-' + pd(d.getDate()) + ' ' + pd(d.getHours()) + ':' + pd(d.getMinutes()) + ':' + pd(d.getSeconds());
+  const id = amaniCamRnd(6), code = await amaniCamSign([id, when, uc].join('|'));
+  const MARK = 'شركة الأماني', u = Math.max(W, H) / 100;
+  /* نص الشركة واسم المصوِّر مائلَين على كامل الصورة */
+  const tile = MARK + '  •  ' + name + '  •  ' + id;
+  g.save(); g.translate(W / 2, H / 2); g.rotate(-Math.PI / 6);
+  g.font = 'bold ' + Math.round(u * 3.2) + 'px Tahoma, Arial, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  const tw = g.measureText(tile).width + u * 8, th = u * 9, R = Math.hypot(W, H);
+  g.lineWidth = Math.max(2, u * 0.35);
+  for (let y = -R; y <= R; y += th){
+    const off = (Math.round(y / th) % 2) * tw / 2;
+    for (let x = -R - tw; x <= R + tw; x += tw){
+      g.strokeStyle = 'rgba(0,0,0,0.30)'; g.strokeText(tile, x + off, y);
+      g.fillStyle = 'rgba(255,255,255,0.32)'; g.fillText(tile, x + off, y);
+    }
+  }
+  g.restore();
+  /* الشريط السفلي */
+  const bh = u * 12;
+  g.fillStyle = 'rgba(8,14,26,0.85)'; g.fillRect(0, H - bh, W, bh);
+  g.fillStyle = '#38d9b9'; g.fillRect(0, H - bh, W, Math.max(2, u * 0.35));
+  g.textBaseline = 'middle'; g.direction = 'rtl'; g.textAlign = 'right';
+  g.fillStyle = '#ffffff'; g.font = 'bold ' + Math.round(u * 3.4) + 'px Tahoma, Arial, sans-serif';
+  g.fillText(MARK, W - u * 3, H - bh * 0.68);
+  g.fillStyle = '#cfe0f5'; g.font = Math.round(u * 2.6) + 'px Tahoma, Arial, sans-serif';
+  g.fillText('المصوِّر: ' + name, W - u * 3, H - bh * 0.28);
+  g.direction = 'ltr'; g.textAlign = 'left';
+  g.fillStyle = '#ffffff'; g.font = 'bold ' + Math.round(u * 2.8) + 'px Tahoma, Arial, sans-serif';
+  g.fillText(when, u * 3, H - bh * 0.72);
+  g.fillStyle = '#cfe0f5'; g.font = Math.round(u * 2.4) + 'px Tahoma, Arial, sans-serif';
+  g.fillText('No. ' + id + '   ID ' + uc, u * 3, H - bh * 0.42);
+  g.fillStyle = '#38d9b9'; g.font = 'bold ' + Math.round(u * 2.4) + 'px Tahoma, Arial, sans-serif';
+  g.fillText('CODE ' + code, u * 3, H - bh * 0.15);
+  const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.92));
+  return { blob, id };
+}
+function amaniCamShow(out){
+  const o = document.createElement('div');
+  o.style.cssText = 'position:fixed;inset:0;z-index:1000030;background:rgba(4,7,12,.95);overflow-y:auto;padding:16px;';
+  const url = URL.createObjectURL(out.blob);
+  o.innerHTML = '<div style="max-width:520px;margin:0 auto;">'
+    + '<img src="' + url + '" style="width:100%;border-radius:10px;display:block;margin-bottom:10px;">'
+    + '<button id="acSave" style="width:100%;font-size:15px;padding:14px;">💾 حفظ في الهاتف</button>'
+    + '<div style="color:#8fa3b8;font-size:12px;text-align:center;margin:8px 0;">في الآيفون اختر «حفظ الصورة» (Save Image) — الصورة لا تُرفع لأي سيرفر</div>'
+    + '<div style="display:flex;gap:8px;"><button class="secondary" id="acAgain" style="flex:1;">📸 صورة أخرى</button>'
+    + '<button class="secondary" id="acClose" style="flex:1;">إغلاق</button></div></div>';
+  document.body.appendChild(o);
+  o.querySelector('#acClose').onclick = () => o.remove();
+  o.querySelector('#acAgain').onclick = () => { o.remove(); window.amaniCam(); };
+  o.querySelector('#acSave').onclick = async () => {
+    const file = new File([out.blob], 'Amani-' + out.id + '.jpg', { type:'image/jpeg' });
+    try{ if (navigator.canShare && navigator.canShare({ files:[file] })){ await navigator.share({ files:[file] }); return; } }
+    catch(e){ if (e && e.name === 'AbortError') return; }
+    const a = document.createElement('a'); a.href = url; a.download = file.name; document.body.appendChild(a); a.click(); a.remove();
+  };
+}
+
 window.renderDriverView = async function(profile){
   var el=document.getElementById('driverView');
   if(!el) return;
@@ -17549,6 +17652,7 @@ window.renderDriverView = async function(profile){
 
     var h='<div class="card"><h2>🛵 التوصيل — '+esc(uname)+'</h2>'
       +'<div style="color:#8fa3b8;font-size:12px;">'+free.length+' متاحة · '+busy.length+' مستخدمة</div></div>';
+    h+='<div class="card" style="padding:10px;"><button style="width:100%;font-size:15px;padding:14px;" onclick="amaniCam()">📸 كاميرا الأماني — صورة مختومة تُحفظ في هاتفك</button></div>';
 
     if(mine.length){
       for(var i=0;i<mine.length;i++){

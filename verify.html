@@ -21,7 +21,7 @@
 <div class="sub">انقل ما هو مطبوع في الشريط السفلي للصورة كما هو. إن كان الرمز صحيحاً فالصورة من التطبيق ولم يُغيَّر تاريخها ولا وقتها ولا رقمها.</div>
 <label>التاريخ والوقت (مثل 2026-10-09 13:24:55)</label><input id="w" placeholder="2026-10-09 13:24:55">
 <label>رقم الصورة (بعد No.)</label><input id="n" placeholder="RUWRPY">
-<label>رمز الجهاز (بعد DEV)</label><input id="d" placeholder="K7QM">
+<label>رمز المصوِّر (بعد ID أو DEV)</label><input id="d" placeholder="K7QM">
 <label>رمز التحقق (بعد CODE)</label><input id="c" placeholder="ABCD-EFGH">
 <button onclick="check()">فحص</button>
 <div id="res"></div>
@@ -44,7 +44,7 @@ async function check(){
   res.style.display = 'block';
   res.style.background = ok ? 'rgba(56,217,185,0.15)' : 'rgba(225,91,100,0.18)';
   res.innerHTML = ok
-    ? '✅ <b>صورة أصلية</b><br>التُقطت ' + when + '<br>من الجهاز ' + dev
+    ? '✅ <b>صورة أصلية</b><br>التُقطت ' + when + '<br>رمز المصوِّر ' + dev
     : '❌ <b>الرمز لا يطابق</b><br>إمّا أن الصورة ليست من التطبيق، أو أن أحد البيانات عُدِّل، أو نُقل خطأً — تأكّد من النقل حرفاً حرفاً.';
 }
 </script>
