@@ -499,46 +499,47 @@ async function verifyCamPhoto(chat: number, fileId: string) {
     `ملاحظة: الرمز يضمن صحة الوقت والمصوِّر ورقم الصورة. تعديل محتوى الصورة نفسها لا يمكن كشفه بدون النسخة الأصلية.`);
 }
 
-/* ══ رسائل السائقين إلى كروب المسؤولين ══
-   السائق يكتب أو يسجّل صوتاً أو فيديو أو يرسل صورة أو موقعاً في محادثة البوت — فيصل مباشرة إلى
-   كروب المسؤولين (التدقيق، التوصيل، الآليات) باسمه ومركبته وآخر موقعه. المسؤول يردّ بـ«رد»
-   (Reply) على رسالته في الكروب، فيوصل البوت ردّه للسائق في محادثته الخاصة.
-   السائق لا يرى الكروب ولا أعضاءه. ورسائل التصوير (أثناء مهام الصور) وأسباب الوقفات تبقى كما هي.
-   ضبط الكروب مرة واحدة: أضف البوت للكروب، ثم يكتب فيه أحد المسؤولين:  /setalerts */
-let ALERT_GROUP: number | null | undefined;
-async function alertGroup(): Promise<number | null> {
-  if (ALERT_GROUP !== undefined) return ALERT_GROUP;
-  try {
-    const r = await one("app_settings?key=eq.tg_alert_group&select=value");
-    ALERT_GROUP = r && r.value && r.value.chat ? Number(r.value.chat) : null;
-  } catch { ALERT_GROUP = null; }
-  return ALERT_GROUP;
-}
-async function setAlertGroup(chat: number) {
-  await db("app_settings?on_conflict=key", {
-    method: "POST", body: JSON.stringify({ key: "tg_alert_group", value: { chat } }),
-  }, "resolution=merge-duplicates,return=minimal");
-  ALERT_GROUP = chat;
-}
+/* ══ رسائل السائقين إلى المسؤولين — كل مسؤول في محادثته الخاصة ══
+   السائق يكتب أو يسجّل صوتاً أو فيديو أو يرسل صورة أو موقعاً في محادثة البوت — فتصل لكل مسؤول
+   (حسابات «التوصيل» في التطبيق: التدقيق، التوصيل، الآليات) في محادثته مع البوت، باسم السائق
+   ومركبته وآخر موقعه. أي مسؤول يردّ بـ«رد» (Reply) على رسالة السائق، فيوصل البوت ردّه للسائق.
+   السائق لا يعرف من استلم ولا يراسل أحداً مباشرة. ويصل للمسؤول فقط إن سبق أن فتح البوت من
+   زرّ في التطبيق (هكذا يعرف البوت محادثته). رسائل التصوير وأسباب الوقفات تبقى كما هي. */
 const isDriver = (st: any) => !!(st.who && st.who.role === "driver");
-/* رسائل الكروب ← محادثة السائق: آخر ٣٠٠ تنبيه تُحفظ في حالة الكروب */
-async function mapAlert(group: number, ids: number[], driverChat: number, name: string) {
-  const gs = await getState(group);
-  const m: Record<string, any> = gs.amap || {};
-  for (const id of ids) m[String(id)] = { c: driverChat, n: name };
-  const keys = Object.keys(m);
-  for (const k of keys.slice(0, Math.max(0, keys.length - 300))) delete m[k];
-  await setState(group, { ...gs, amap: m });
+/* محادثات المسؤولين: آخر محادثة تلجرام فتح منها كل حساب «توصيل» البوت */
+async function managerChats(): Promise<{ chat: number; name: string }[]> {
+  const ps: any[] = (await db("profiles?role=eq.fleet&or=(removed.is.null,removed.eq.false)&select=id,name")) ?? [];
+  if (!ps.length) return [];
+  const tk: any[] = (await db(`tg_tickets?profile_id=in.(${ps.map((p) => `"${p.id}"`).join(",")})` +
+    `&tg_user=not.is.null&select=profile_id,tg_user&order=used_at.desc&limit=500`)) ?? [];
+  const seen = new Set<string>(), out: { chat: number; name: string }[] = [];
+  for (const t of tk) {
+    if (seen.has(String(t.profile_id))) continue;
+    seen.add(String(t.profile_id));
+    out.push({ chat: Number(t.tg_user), name: (ps.find((p) => String(p.id) === String(t.profile_id)) || {}).name || "" });
+  }
+  return out;
 }
-/* رسالة السائق ← الكروب: عنوان باسمه ومركبته وموقعه، ثم رسالته نفسها (نسخة) ردّاً عليه.
-   الرسائل المتتابعة خلال ٣ دقائق تُضمّ تحت العنوان نفسه بلا تكرار */
+/* رسالة عند المسؤول ← محادثة السائق: صفّ واحد في tg_state (chat_id = 0) لآخر ١٥٠٠ رسالة */
+const ROUTER = 0;
+async function mapAlert(pairs: [number, number][], driverChat: number, name: string) {
+  const gs = await getState(ROUTER);
+  const m: Record<string, any> = gs.amap || {};
+  for (const [mc, id] of pairs) m[`${mc}:${id}`] = { c: driverChat, n: name };
+  const keys = Object.keys(m);
+  for (const k of keys.slice(0, Math.max(0, keys.length - 1500))) delete m[k];
+  await setState(ROUTER, { ...gs, amap: m });
+}
+/* رسالة السائق ← كل مسؤول: عنوان باسمه ومركبته وموقعه، ثم رسالته نفسها (نسخة) ردّاً عليه.
+   الرسائل المتتابعة خلال ٣ دقائق تُضمّ تحت العنوان نفسه عند كل مسؤول */
 async function sendAlert(chat: number, st: any, m: any) {
   const who = st.who;
-  const group = await alertGroup();
-  if (!group) return say(chat, "⚠️ كروب المسؤولين لم يُضبط بعد — أخبر مسؤول التوصيل.");
-  let head = st.alert_head && Date.now() - Number(st.alert_head.at) < 3 * 60000 ? st.alert_head : null;
-  const ids: number[] = [];
-  if (!head) {
+  const fresh = st.alert_head && Date.now() - Number(st.alert_head.at) < 3 * 60000;
+  let heads: Record<string, number> = fresh ? (st.alert_head.h || {}) : {};
+  const mgrs = await managerChats();
+  if (!mgrs.length) return say(chat, "⚠️ لم تصل رسالتك — لا يوجد مسؤول مرتبط بالبوت بعد. أخبر مسؤول التوصيل.");
+  let headText = "";
+  if (!fresh) {
     const trip = await openTripOf(String(who.id), st.gps_trip);
     let car = "بلا رحلة مفتوحة";
     if (trip) {
@@ -547,60 +548,56 @@ async function sendAlert(chat: number, st: any, m: any) {
       car = vehName(v);
     }
     const L = st.gps_last, ago = L ? Math.round((Date.now() - Number(L.at)) / 60000) : null;
-    const text = `🚨 رسالة من السائق: ${who.name || "—"}\n${car} · ${hmB(Date.now())}` +
+    headText = `🚨 رسالة من السائق: ${who.name || "—"}\n${car} · ${hmB(Date.now())}` +
       (L && ago! < 60 ? `\n📍 آخر موقع (قبل ${ago} د): https://maps.google.com/?q=${L.lat},${L.lng}` : "") +
       `\n\n↩️ للرد على السائق: اضغط «رد» (Reply) على رسالته`;
-    const h = await tg("sendMessage", { chat_id: group, text, disable_web_page_preview: true });
-    if (!h.ok) return say(chat, "⚠️ لم تصل رسالتك — أرسلها مرة أخرى.");
-    head = { id: h.result.message_id, at: Date.now(), told: false };
-    ids.push(head.id);
   }
-  const c = await tg("copyMessage", { chat_id: group, from_chat_id: chat, message_id: m.message_id,
-    reply_to_message_id: head.id });
-  if (!c.ok) return say(chat, "⚠️ لم تصل رسالتك — أرسلها مرة أخرى.");
-  ids.push(c.result.message_id);
-  await mapAlert(group, ids, chat, who.name || "");
-  const told = head.told;
-  head = { ...head, at: Date.now(), told: true };
-  await setState(chat, { ...st, alert_head: head });
+  const pairs: [number, number][] = [];
+  let ok = 0;
+  for (const g of mgrs) {
+    if (g.chat === chat) continue;                       /* المسؤول نفسه لا يُرسَل له */
+    let hid = heads[String(g.chat)];
+    if (!hid) {
+      const h = await tg("sendMessage", { chat_id: g.chat, text: headText ||
+        `🚨 رسالة من السائق: ${who.name || "—"}\n\n↩️ للرد: اضغط «رد» (Reply) على رسالته`, disable_web_page_preview: true });
+      if (!h.ok) continue;                               /* أوقف البوت أو لم يفتحه */
+      hid = h.result.message_id; heads[String(g.chat)] = hid; pairs.push([g.chat, hid]);
+    }
+    const c = await tg("copyMessage", { chat_id: g.chat, from_chat_id: chat, message_id: m.message_id,
+      reply_to_message_id: hid });
+    if (c.ok) { pairs.push([g.chat, c.result.message_id]); ok++; }
+  }
+  if (!ok) return say(chat, "⚠️ لم تصل رسالتك — أرسلها مرة أخرى.");
+  await mapAlert(pairs, chat, who.name || "");
+  const told = fresh && st.alert_head.told;
+  await setState(chat, { ...st, alert_head: { h: heads, at: Date.now(), told: true } });
   /* تأكيد مرة واحدة لكل مجموعة رسائل — لا رسالة تأكيد بعد كل صورة أو مقطع */
   if (!told) await say(chat, "✓ وصلت رسالتك للمسؤولين — سيصلك ردّهم هنا.");
 }
-/* رسائل الكروب: ضبطه، وردود المسؤولين على التنبيهات */
-async function onGroup(m: any) {
-  const chat = m.chat.id, text: string = m.text || "";
-  if (m.migrate_to_chat_id && (await alertGroup()) === chat) return setAlertGroup(Number(m.migrate_to_chat_id));
-  if (/^\/setalerts(@\w+)?$/.test(text.trim())) {
-    const who = await whoOf({}, m.from?.id);
-    if (!who || !REVIEWERS.includes(who.role))
-      return say(chat, "لم أتعرّف عليك — افتح البوت مرة من أي زرّ تلجرام في تطبيق الأماني، ثم أعد كتابة /setalerts هنا.");
-    await setAlertGroup(chat);
-    return say(chat, "✓ هذا الكروب صار كروب تنبيهات السائقين.\nللرد على أي تنبيه: اضغط «رد» (Reply) على رسالته واكتب أو سجّل صوتاً.");
-  }
-  if (chat !== (await alertGroup())) return;
+/* ردّ المسؤول (Reply على رسالة سائق في محادثته) ← السائق. يرجع true إن كان ردّاً على سائق */
+async function managerReply(m: any, st: any): Promise<boolean> {
   const rt = m.reply_to_message;
-  if (!rt || !rt.from?.is_bot) return;
-  const gs = await getState(chat);
-  const to = (gs.amap || {})[String(rt.message_id)];
-  if (!to) return;
-  const who = await whoOf({}, m.from?.id);
+  if (!rt || !rt.from?.is_bot) return false;
+  const gs = await getState(ROUTER);
+  const to = (gs.amap || {})[`${m.chat.id}:${rt.message_id}`];
+  if (!to) return false;
+  const who = await whoOf(st, m.from?.id);
   const by = who ? `${titleOf(who)} — ${who.name || ""}` : (m.from?.first_name || "المسؤول");
-  if (m.text) {
-    const r = await say(to.c, `💬 رد من ${by}:\n\n${m.text}`);
-    if (!r.ok) return say(chat, "⚠️ لم يصل الرد للسائق.", { reply_to_message_id: m.message_id });
-  } else {
+  let r: any;
+  if (m.text) r = await say(to.c, `💬 رد من ${by}:\n\n${m.text}`);
+  else {
     await say(to.c, `💬 رد من ${by}:`);
-    const r = await tg("copyMessage", { chat_id: to.c, from_chat_id: chat, message_id: m.message_id });
-    if (!r.ok) return say(chat, "⚠️ لم يصل الرد للسائق.", { reply_to_message_id: m.message_id });
+    r = await tg("copyMessage", { chat_id: to.c, from_chat_id: m.chat.id, message_id: m.message_id });
   }
-  return say(chat, `✓ وصل الرد إلى ${to.n || "السائق"}`, { reply_to_message_id: m.message_id });
+  await say(m.chat.id, r && r.ok ? `✓ وصل الرد إلى ${to.n || "السائق"}` : "⚠️ لم يصل الرد للسائق — حاول مرة أخرى.",
+    { reply_to_message_id: m.message_id });
+  return true;
 }
 
 /* ══ الرسائل ══ */
 async function onMessage(m: any) {
   const chat = m.chat?.id;
   if (!chat) return;
-  if (m.chat.type === "group" || m.chat.type === "supergroup") return onGroup(m);
   if (m.chat.type !== "private") return;
   const text: string = m.text || "";
 
@@ -633,6 +630,8 @@ async function onMessage(m: any) {
   }
 
   const st = await getState(chat);
+  /* ردّ مسؤول على رسالة سائق وصلته */
+  if (m.reply_to_message && !isDriver(st) && await managerReply(m, st)) return;
   if (m.location && (m.location.live_period || !isDriver(st))) return gotLocation(chat, st, m, false);
   if (st.await_reason && text && !text.startsWith("/")) {
     const ar = st.await_reason;
