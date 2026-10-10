@@ -19101,7 +19101,7 @@ async function fsRenderSheet(keepLocal){
 
   /* ٢ الرحلات — صفّ لكل رحلة، يسبقها فرق بصمة الدخول ويليها فرق بصمة الخروج */
   var COLS=14;
-  var rows='<tr>'+th('#',0,64)+th('الخروج من الشركة',0,80)+th('الرجوع للشركة',0,80)+th('مدة الرحلة',0,62)+th('عدد الفواتير',0,58)
+  var rows='<tr>'+th('#',0,96)+th('الخروج من الشركة',0,80)+th('الرجوع للشركة',0,80)+th('مدة الرحلة',0,62)+th('عدد الفواتير',0,58)
     +th('متوسط الفاتورة',0,62)+th('وقت التجهيز',0,70)+th('اسم المجهز',0,110)+th('وقت تسليم الطلبات',0,140)+th('الوقفات',0,64)
     +th('البقاء في الشركة بعدها',0,90)+th('سبب البقاء',0,130)+th('ملاحظات قبل الانطلاق',0,140)+th('ملاحظات بعد الانطلاق',0,140)+'</tr>';
   var edgeRow=function(label,v,rk){ var b=over(v,FS_EDGE_MAX);
@@ -19111,7 +19111,8 @@ async function fsRenderSheet(keepLocal){
   if(!c.rows.length) rows+='<tr>'+td('لا رحلات لهذا المندوب في هذا اليوم','',COLS)+'</tr>';
   c.rows.forEach(function(rw){
     var id=rw.trip.id, invBad=rw.invAvg!=null&&rw.invAvg>FS_INV_MAX[rw.kind];
-    rows+='<tr>'+td('<b>'+rw.n+'</b>'+fleetTgLink('a',id,null,null,'📷 الصور','display:block;white-space:nowrap;margin-top:3px;padding:3px 7px;font:bold 11px Tahoma,Arial,sans-serif;border-radius:6px;'))
+    /* زرّ واحد للصور والمهام: يفتح مهام الرحلة (المنجز وعدد الصور) ومنه زرّ صورها في تلجرام */
+    rows+='<tr>'+td('<b>'+rw.n+'</b><button class="stb" style="display:block;white-space:nowrap;margin-top:3px!important;" onclick="fleetTripDetail('+id+')">📷 الصور والمهام</button>')
       +td(fsHM(rw.outMs)+(rw.outGeo?' 📍':''))
       +td(rw.inMs?fsHM(rw.inMs)+(rw.inGeo?' 📍':''):'لم يرجع',rw.inMs?'':'bad')
       +td(fsH(rw.durMin))
@@ -19139,8 +19140,7 @@ async function fsRenderSheet(keepLocal){
         +' · الدقة ~'+(rw.q.acc==null?'غير معروفة':Math.round(rw.q.acc)+' م')
         +(rw.q.badShare>0.3?' · <span style="color:#9c0006;font-weight:bold;">📡 '+Math.round(rw.q.badShare*100)+'% من النقاط تقريبية (أكثر من 100 م) فلا تُحسب منها الوقفات — في هاتف السائق شغّل «الموقع الدقيق» لتلجرام</span>':'')
         +'</div>':'');
-    det+='<div class="det">'+(rw.gps?'<button class="stb" onclick="fsMapTrip('+id+')">🗺 المسار على الخريطة</button> ':'')
-      +'<button class="stb" onclick="fleetTripDetail('+id+')">📋 المهام وصورها</button></div>';
+    if(rw.gps) det+='<div class="det"><button class="stb" onclick="fsMapTrip('+id+')">🗺 المسار على الخريطة</button></div>';
     det+=ss.length?'<table class="sub"><tr>'+th('من')+th('إلى')+th('المدة')+th('السبب')+th('الموقع')+'</tr>'
       +ss.map(function(x){ return '<tr>'+td(fsHM(x.from))+td(x.live?'مستمرة':fsHM(x.to))+td(fsH(x.min)+(x.approx?' (تقريبية)':''))
         +td(x.why?esc(x.why):'⚠ بلا سبب',x.why?'ok':'bad')
