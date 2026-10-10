@@ -17767,8 +17767,6 @@ window.renderDriverView = async function(profile){
     var h='<div class="card"><h2>🛵 التوصيل — '+esc(uname)+'</h2>'
       +'<div style="color:#8fa3b8;font-size:12px;">'+free.length+' متاحة · '+busy.length+' مستخدمة</div></div>';
     h+='<div class="card" style="padding:10px;"><button style="width:100%;font-size:15px;padding:14px;" onclick="amaniCam()">📸 كاميرا الأماني — صورة مختومة تُحفظ في هاتفك</button></div>';
-    /* تنبيه للمسؤولين: يفتح البوت فيختار السائق تنبيهاً أو يرسل صوتاً — يصل لكروب المسؤولين وحدهم */
-    h+='<div class="card" style="padding:10px;">'+fleetTgLink('n',null,null,null,'🚨 تنبيه للمسؤولين (عطل، حادث، تأخير…)','font-size:15px;padding:14px;background:#a8323a;')+'</div>';
 
     if(mine.length){
       for(var i=0;i<mine.length;i++){
