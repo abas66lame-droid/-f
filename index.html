@@ -2820,6 +2820,13 @@ async function handleLoggedIn(){
       await renderDriverView(profile);
     } else if (profile.role === 'fleet'){
       document.getElementById('fleetSupView').classList.remove('hidden');
+      /* مسؤول يقود المركبات أيضاً (الآليات، علي خالد): قسم «مركبتي» كالسائق فوق شاشته */
+      if (window.fleetCanDrive && fleetCanDrive(profile)){
+        const dv = document.getElementById('driverView'), sv = document.getElementById('fleetSupView');
+        if (dv && sv && sv.parentNode) sv.parentNode.insertBefore(dv, sv);
+        dv.classList.remove('hidden');
+        await renderDriverView(profile);
+      }
       await renderFleetSupView(profile);
     } else if (profile.role === 'clean' || profile.role === 'stock'){
       document.getElementById('linkView').classList.remove('hidden');
@@ -17331,6 +17338,7 @@ document.addEventListener('visibilitychange', function(){
   var p=window.__fleetProfile; if(!p) return;
   try{
     if(p.role==='driver' && window.renderDriverView) window.renderDriverView(p);
+    else if(window.fleetCanDrive && fleetCanDrive(p) && window.renderDriverView) window.renderDriverView(p);
     /* المسؤول: لا إعادة رسم كاملة (كانت تحمّل كل شيء وتُضيّع مكانه في الجدول) —
        تُحدَّث قائمة الرحلات بصمت إن كانت مفتوحة، وجدول اليوم يبقى كما هو */
     else if(window.__fmActiveTab==='t') fleetRefreshTripsQuiet();
@@ -17751,6 +17759,16 @@ function amaniCamShow(out){
   };
 }
 
+/* حسابات «التوصيل» التي تقود المركبات وتخرج بها كالسائق، مع بقاء صلاحيات المسؤول كاملة:
+   كل من في مسمّاه «آليات»، والحساب «علي خالد». لإضافة غيرهم: أضف الاسم في FLEET_DRIVER_NAMES */
+var FLEET_DRIVER_NAMES = ['علي خالد'];
+function fleetNormName(x){ return String(x||'').replace(/[\u0640\s]+/g,'').replace(/ى/g,'ي').replace(/[أإآ]/g,'ا').replace(/ة/g,'ه'); }
+window.fleetCanDrive = function(p){
+  if(!p || p.role!=='fleet') return false;
+  if(/آليات|اليات/.test(String(p.job_title||''))) return true;
+  var n=fleetNormName(p.name);
+  return FLEET_DRIVER_NAMES.some(function(x){ return fleetNormName(x)===n; });
+};
 window.renderDriverView = async function(profile){
   var el=document.getElementById('driverView');
   if(!el) return;
@@ -17764,7 +17782,7 @@ window.renderDriverView = async function(profile){
     var free=vs.filter(function(v){ return !v.holder_id; });
     var busy=vs.filter(function(v){ return v.holder_id && String(v.holder_id)!==uid; });
 
-    var h='<div class="card"><h2>🛵 التوصيل — '+esc(uname)+'</h2>'
+    var h='<div class="card"><h2>'+(profile.role==='driver'?'🛵 التوصيل':'🚗 مركبتي')+' — '+esc(uname)+'</h2>'
       +'<div style="color:#8fa3b8;font-size:12px;">'+free.length+' متاحة · '+busy.length+' مستخدمة</div></div>';
     h+='<div class="card" style="padding:10px;"><button style="width:100%;font-size:15px;padding:14px;" onclick="amaniCam()">📸 كاميرا الأماني — صورة مختومة تُحفظ في هاتفك</button></div>';
 
