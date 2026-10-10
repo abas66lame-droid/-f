@@ -19372,6 +19372,18 @@ var __fsLibs={};
    (فجوة أطول من ١٠ دقائق مع تحرّك) خطاً أحمر متقطعاً — بين نقطتين بخط مستقيم لا على الطريق.
    Leaflet وخرائط OpenStreetMap مجانية بلا مفتاح، وتُحمَّل عند أول فتح فقط */
 var FS_LEAFLET='https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/';
+/* طبقات الخريطة: قمر صناعي مع أسماء الشوارع (الافتراضي)، أو قمر صناعي فقط، أو خريطة شوارع.
+   الصور الجوية من Esri World Imagery والخريطة من OpenStreetMap — كلاهما بلا مفتاح */
+function fsMapLayers(map){
+  var esri='https://server.arcgisonline.com/ArcGIS/rest/services/';
+  var sat=function(){ return L.tileLayer(esri+'World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'صور: Esri'}); };
+  var hybrid=L.layerGroup([sat(),
+    L.tileLayer(esri+'Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}',{maxZoom:19}),
+    L.tileLayer(esri+'Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',{maxZoom:19})]);
+  var osm=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'});
+  hybrid.addTo(map);
+  L.control.layers({'🛰 قمر صناعي + شوارع':hybrid,'🛰 قمر صناعي فقط':sat(),'🗺 خريطة الشوارع والمباني':osm},null,{collapsed:false}).addTo(map);
+}
 window.fsMapTrip=async function(tid){
   var rw=((__fs.calc||{}).rows||[]).filter(function(r){ return r.trip.id===tid; })[0]; if(!rw) return;
   var pts=(rw.pts||[]).filter(function(p){ return !(p.acc>FLEET_BAD_ACC); });
@@ -19389,7 +19401,7 @@ window.fsMapTrip=async function(tid){
     +'<div id="fsMap" style="flex:1;"></div>';
   document.body.appendChild(o);
   var map=L.map('fsMap'), ll=function(p){ return [p.lat,p.lng]; };
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
+  fsMapLayers(map);
   /* المسار مقطّعاً: الفجوة الطويلة مع تحرّك تُرسم حمراء متقطعة */
   var seg=[ll(pts[0])];
   for(var i=1;i<pts.length;i++){
