@@ -1,0 +1,52 @@
+<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>تجربة Traccar</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+<style>body{margin:0;background:#0b1220;color:#e3ecf7;font-family:Tahoma,Arial,sans-serif}
+#h{padding:10px 12px;font-size:13px;line-height:1.9}#map{height:72vh}
+table{width:100%;border-collapse:collapse;font-size:12px}td,th{border:1px solid #33465f;padding:5px;text-align:center}</style></head><body>
+<div id="h">رقم الجهاز: <input id="dev" inputmode="numeric" style="width:130px;font-size:15px;padding:6px"> <button onclick="go()" style="font-size:14px;padding:6px 12px">عرض</button> <span id="msg"></span><div id="info"></div></div><div id="map"></div><div style="padding:10px"><table id="tb"></table></div>
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const FN='https://lfkifdlvafoziznrlham.supabase.co/functions/v1/gps-in';
+let map=null;
+function draw(raw){
+const P=raw.map(p=>({lat:+p.lat,lng:+p.lng,acc:p.acc,batt:p.batt,t:Date.parse(p.at)}));
+const hm=t=>new Date(t+3*3600000).toISOString().slice(11,16), H=m=>Math.floor(m/60)+':'+String(m%60).padStart(2,'0');
+const D=(a,b)=>{const r=Math.PI/180,x=Math.sin((b.lat-a.lat)*r/2)**2+Math.cos(a.lat*r)*Math.cos(b.lat*r)*Math.sin((b.lng-a.lng)*r/2)**2;return 12742000*Math.asin(Math.sqrt(x));};
+const h=document.getElementById('info');
+if(!P.length){h.innerHTML='لا نقاط في آخر ٢٤ ساعة لهذا الجهاز — شغّل «تتبع مستمر» في Traccar وتأكد من عنوان الخادم، ثم حدّث الصفحة.';}
+else{
+ const med=a=>{a=a.filter(x=>x!=null).sort((x,y)=>x-y);return a.length?a[Math.floor(a.length/2)]:null;};
+ const gaps=[];for(let i=1;i<P.length;i++)gaps.push((P[i].t-P[i-1].t)/1000);
+ const good=P.filter(p=>!(p.acc>100));
+ const st=[];let i=0;while(i<good.length){let c={lat:good[i].lat,lng:good[i].lng},n=1,j=i+1;
+  while(j<good.length&&D(c,good[j])<=30){n++;c={lat:c.lat+(good[j].lat-c.lat)/n,lng:c.lng+(good[j].lng-c.lng)/n};j++;}
+  const last=good[j-1].t,to=j<good.length?last+Math.max(0,good[j].t-last-D(c,good[j])/(30/3.6)*1000):last;
+  if(to-good[i].t>=300000)st.push({...c,from:good[i].t,to,min:Math.round((to-good[i].t)/60000)});i=j;}
+ const cuts=[];for(let k=1;k<P.length;k++){const g=P[k].t-P[k-1].t;if(g>600000&&D(P[k-1],P[k])>60)cuts.push({a:P[k-1],b:P[k],min:Math.round(g/60000)});}
+ const b=P[P.length-1].batt;
+ h.innerHTML='<b>🧪 تجربة Traccar</b><br>'+P.length+' نقطة · من '+hm(P[0].t)+' إلى '+hm(P[P.length-1].t)
+  +' · نقطة كل ~'+Math.round(med(gaps)||0)+' ث · الدقة ~'+Math.round(med(P.map(p=>p.acc))||0)+' م'
+  +(b!=null?' · البطارية '+Math.round(b)+'%':'')+'<br>⏸ '+st.length+' وقفات (أكثر من ٥ د) · 📵 '+cuts.length+' انقطاع (أكثر من ١٠ د)'
+  +' · آخر نقطة وصلت قبل '+Math.round((Date.now()-P[P.length-1].t)/60000)+' د';
+ if(map) map.remove(); map=L.map('map'); const E='https://server.arcgisonline.com/ArcGIS/rest/services/';
+ L.layerGroup([L.tileLayer(E+'World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'Esri'}),
+  L.tileLayer(E+'Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}',{maxZoom:19})]).addTo(map);
+ L.polyline(P.map(p=>[p.lat,p.lng]),{color:'#2e7df6',weight:4}).addTo(map);
+ cuts.forEach(c=>L.polyline([[c.a.lat,c.a.lng],[c.b.lat,c.b.lng]],{color:'#ff5c5c',weight:3,dashArray:'8 8'}).addTo(map).bindPopup('📵 انقطاع '+H(c.min)+' من '+hm(c.a.t)));
+ st.forEach((s,k)=>L.marker([s.lat,s.lng],{icon:L.divIcon({className:'',iconSize:null,html:'<div style="background:#c0392b;color:#fff;border-radius:8px;padding:2px 6px;font:bold 11px Tahoma;white-space:nowrap">'+(k+1)+' ⏸ '+H(s.min)+'</div>'})}).addTo(map).bindPopup(hm(s.from)+' — '+hm(s.to)));
+ L.circleMarker([P[0].lat,P[0].lng],{radius:7,color:'#fff',fillColor:'#1fbf5f',fillOpacity:1}).addTo(map).bindPopup('البداية '+hm(P[0].t));
+ L.circleMarker([P[P.length-1].lat,P[P.length-1].lng],{radius:7,color:'#fff',fillColor:'#e5484d',fillOpacity:1}).addTo(map).bindPopup('آخر نقطة '+hm(P[P.length-1].t));
+ map.fitBounds(L.latLngBounds(P.map(p=>[p.lat,p.lng])).pad(.15));
+ document.getElementById('tb').innerHTML='<tr><th>#</th><th>من</th><th>إلى</th><th>المدة</th></tr>'+st.map((s,k)=>'<tr><td>'+(k+1)+'</td><td>'+hm(s.from)+'</td><td>'+hm(s.to)+'</td><td>'+H(s.min)+'</td></tr>').join('');
+}
+}
+async function go(){const d=document.getElementById('dev').value.trim(),m=document.getElementById('msg');
+ if(!d) return; try{localStorage.setItem('gpsDev',d);}catch(e){}
+ m.textContent='⏳';
+ try{const r=await fetch(FN+'?view='+encodeURIComponent(d));const j=await r.json();
+  if(j.error){m.textContent='❌ '+j.error;return;} m.textContent='';draw(j.pts);}
+ catch(e){m.textContent='❌ تعذّر الاتصال: '+e.message;}}
+try{const s=localStorage.getItem('gpsDev');if(s){document.getElementById('dev').value=s;go();}}catch(e){}
+setInterval(()=>{if(document.getElementById('dev').value.trim())go();},60000);
+</script></body></html>

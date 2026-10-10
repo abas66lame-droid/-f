@@ -8,6 +8,9 @@
 //  يقبل الصيغتين: JSON (Traccar Client الجديد) وOsmAnd (?id=&lat=&lon=...).
 //  تُحفظ النقطة فقط إن كان الجهاز مسجّلاً ولسائقه رحلة مفتوحة — بين الرحلات لا يُحفظ شيء.
 //
+//  وضع التجربة: جهاز مسجّل بـ driver_id = 'test' تُحفظ نقاطه في gps_test فقط (لا رحلة ولا سائق)،
+//  وتعرضها صفحة gps-test.html على الخريطة (تقرأ من <رابط الدالة>?view=<معرّف الجهاز>)
+//
 //  الإعداد مرة واحدة: أطفئ «Enforce JWT verification» لهذه الدالة
 //  (Traccar لا يرسل مفتاح دخول).
 // ══════════════════════════════════════════════════════════════════
@@ -61,8 +64,25 @@ function parse(q: URLSearchParams, body: any): Pt[] {
   return out.filter((p) => /^[A-Za-z0-9_-]{1,64}$/.test(p.dev) && Math.abs(p.lat) <= 90 && Math.abs(p.lng) <= 180);
 }
 
+/* ══ بيانات التجربة: نقاط جهاز التجربة لآخر ٢٤ ساعة (JSON) — تعرضها صفحة gps-test.html على الخريطة.
+   (Supabase لا يعرض صفحات HTML من الدوال، فالصفحة منفصلة) */
+const CORS = { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json; charset=utf-8" };
+async function viewData(dev: string) {
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(dev)) return new Response(JSON.stringify({ error: "رقم جهاز غير صالح" }), { status: 400, headers: CORS });
+  const reg = ((await db(`fleet_gps_devices?device_id=eq.${dev}&select=driver_id`)) ?? [])[0];
+  if (!reg || reg.driver_id !== "test")
+    return new Response(JSON.stringify({ error: "هذا الجهاز غير مسجّل كجهاز تجربة" }), { status: 404, headers: CORS });
+  const since = new Date(Date.now() - 86400000).toISOString();
+  const pts: any[] = (await db(`gps_test?device_id=eq.${dev}&at=gte.${since}&select=lat,lng,acc,batt,at&order=at.asc&limit=5000`)) ?? [];
+  return new Response(JSON.stringify({ pts }), { headers: CORS });
+}
+
 Deno.serve(async (req) => {
   const url = new URL(req.url);
+  if (req.method === "GET" && url.searchParams.get("view")) {
+    try { return await viewData(url.searchParams.get("view")!); }
+    catch (e) { console.error(e); return new Response(JSON.stringify({ error: String(e).slice(0, 200) }), { status: 500, headers: CORS }); }
+  }
   let body: any = null;
   if (req.method === "POST") {
     const t = await req.text();
@@ -78,10 +98,11 @@ Deno.serve(async (req) => {
     const rows: any[] = (await db(`fleet_gps_devices?device_id=in.(${devs.map((d) => `"${d.replace(/"/g, "")}"`).join(",")})&select=device_id,driver_id`)) ?? [];
     const drv: Record<string, string> = {}; rows.forEach((r) => (drv[r.device_id] = String(r.driver_id)));
     const trips: Record<string, number | null> = {};
-    const ins: any[] = [];
+    const ins: any[] = [], test: any[] = [];
     for (const p of pts) {
       const d = drv[p.dev];
       if (!d) { console.log("unknown device", p.dev); continue; }
+      if (d === "test") { test.push({ device_id: p.dev, lat: p.lat, lng: p.lng, acc: p.acc, batt: p.batt, at: p.at }); continue; }
       if (!(d in trips)) {
         const t = ((await db(`fleet_trips?driver_id=eq.${encodeURIComponent(d)}&in_at=is.null&select=id&order=out_at.desc&limit=1`)) ?? [])[0];
         trips[d] = t ? t.id : null;
@@ -90,6 +111,7 @@ Deno.serve(async (req) => {
       ins.push({ trip_id: trips[d], driver_id: d, lat: p.lat, lng: p.lng, acc: p.acc, at: p.at, batt: p.batt });
     }
     if (ins.length) await db("fleet_gps", { method: "POST", body: JSON.stringify(ins) }, "return=minimal");
+    if (test.length) await db("gps_test", { method: "POST", body: JSON.stringify(test) }, "return=minimal");
   } catch (e) {
     /* خطأ عندنا: 500 فيعيد Traccar الإرسال لاحقاً (يحفظ النقاط في الهاتف) */
     console.error(e);
