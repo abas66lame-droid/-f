@@ -18931,6 +18931,15 @@ function fsGpsCoverage(pts,outMs,inMs){
   if(!home && tail>mx){ mx=tail; mxAt=ts[ts.length-1]; }
   return {first:ts[0], last:ts[ts.length-1], gapMin:fsMin(mx), gapAt:mxAt, tailMin:fsMin(tail), bad:mx>FLEET_GAP_MS};
 }
+/* تشخيص جودة الموقع: الفاصل المعتاد بين النقاط، ودقتها، ونسبة النقاط الضعيفة (أكثر من 100 م —
+   تُستبعد من الوقفات). «الموقع التقريبي» في الهاتف يعطي دقة مئات الأمتار فتختفي كل الوقفات */
+function fsGpsQuality(pts){
+  var med=function(a){ if(!a.length) return null; a=a.slice().sort(function(x,y){return x-y;}); return a[Math.floor(a.length/2)]; };
+  var gaps=[]; for(var i=1;i<pts.length;i++) gaps.push((Date.parse(pts[i].at)-Date.parse(pts[i-1].at))/1000);
+  var accs=pts.map(function(p){ return p.acc; }).filter(function(x){ return x!=null && isFinite(x); });
+  var bad=pts.filter(function(p){ return p.acc>FLEET_BAD_ACC; }).length;
+  return { gapS:med(gaps), acc:med(accs), badShare: pts.length?bad/pts.length:0 };
+}
 async function fsCompute(){
   var trips=__fs.trips, row=__fs.row||{}, d=row.data||{};
   await fsLoadGeo();
@@ -18978,7 +18987,7 @@ async function fsCompute(){
     rows.push({ trip:tr, n:k+1, plate:(vmap[vk2]||{}).plate||'', ok:ok, outMs:outMs, inMs:inMs,
       inv:invN, kind:kindV, invAvg:(durM!=null&&invN)?Math.round(durM/invN):null,
       outGeo:!!g.leave, inGeo:!!(g.back&&appIn), appOut:appOut, appIn:appIn, exits:g.exits,
-      durMin: inMs?fsMin(inMs-outMs):null, deliv:deliv, gps:pts.length, cov:fsGpsCoverage(pts,appOut,appIn) });
+      durMin: inMs?fsMin(inMs-outMs):null, deliv:deliv, gps:pts.length, cov:fsGpsCoverage(pts,appOut,appIn), q:fsGpsQuality(pts) });
   }
   rows.forEach(function(r){ var ss=stopsAll.filter(function(x){ return x.n===r.n; });
     r.stops=ss.length; r.stopsNoWhy=ss.filter(function(x){ return !x.why; }).length; });
@@ -19093,7 +19102,8 @@ async function fsRenderSheet(keepLocal){
       +td(tinpV(id,'preparer',rw.trip.preparer),'in')
       +td(tinp(id,'deliv',rw.deliv.join('، ')||''),'in')
       +td('<button onclick="fsToggleTrip('+id+')" class="stb'+(rw.stopsNoWhy?' nw':'')+'">⏸ '+rw.stops+(rw.stopsNoWhy?' ⚠':'')+'</button>'
-        +(rw.cov.bad?'<div class="sm" style="color:#9c0006;font-weight:bold;">📵 انقطع '+fsH(rw.cov.gapMin)+'</div>':''),rw.cov.bad?'bad':'')
+        +(rw.cov.bad?'<div class="sm" style="color:#9c0006;font-weight:bold;">📵 انقطع '+fsH(rw.cov.gapMin)+'</div>':'')
+        +(rw.q.badShare>0.3?'<div class="sm" style="color:#9c0006;font-weight:bold;">📡 موقع تقريبي</div>':''),(rw.cov.bad||rw.q.badShare>0.3)?'bad':'')
       +td(rw.stayMin==null?'—':fsH(rw.stayMin)+(rw.stayBreak?' ☕ استراحة':''),rw.stayMin==null?'':(rw.stayBad?'bad':'ok'))
       +td(rw.stayBad?tinp(id,'stay_reason','⚠️ السبب'):'',rw.stayBad?'in':'')
       +td(tinp(id,'note_before'),'in')+td(tinp(id,'note_after'),'in')+'</tr>';
@@ -19105,12 +19115,18 @@ async function fsRenderSheet(keepLocal){
           +(rw.cov.bad?' · <span style="color:#9c0006;font-weight:bold;">⚠ انقطع الموقع '+fsH(rw.cov.gapMin)+' من '+fsHM(rw.cov.gapAt)+' — الوقفات في هذه المدة لا تُعرف</span>':''))
       +' · التطبيق: استلام '+fsHM(rw.appOut)
       +(rw.appIn?' · إرجاع '+fsHM(rw.appIn):'')+(rw.exits>1?' · <span style="color:#9c0006;">خرج من الشركة '+rw.exits+' مرات</span>':'')
-      +(rw.trip.note?' · ملاحظة السائق: '+esc(rw.trip.note):'')+'</div>';
+      +(rw.trip.note?' · ملاحظة السائق: '+esc(rw.trip.note):'')+'</div>'
+      +(rw.gps?'<div class="det">تشخيص الموقع: نقطة كل ~'+(rw.q.gapS==null?'—':(rw.q.gapS<90?Math.round(rw.q.gapS)+' ث':Math.round(rw.q.gapS/60)+' د'))
+        +' · الدقة ~'+(rw.q.acc==null?'غير معروفة':Math.round(rw.q.acc)+' م')
+        +(rw.q.badShare>0.3?' · <span style="color:#9c0006;font-weight:bold;">📡 '+Math.round(rw.q.badShare*100)+'% من النقاط تقريبية (أكثر من 100 م) فلا تُحسب منها الوقفات — في هاتف السائق شغّل «الموقع الدقيق» لتلجرام</span>':'')
+        +'</div>':'');
     det+=ss.length?'<table class="sub"><tr>'+th('من')+th('إلى')+th('المدة')+th('السبب')+th('الموقع')+'</tr>'
       +ss.map(function(x){ return '<tr>'+td(fsHM(x.from))+td(x.live?'مستمرة':fsHM(x.to))+td(fsH(x.min)+(x.approx?' (تقريبية)':''))
         +td(x.why?esc(x.why):'⚠ بلا سبب',x.why?'ok':'bad')
         +td('<a href="'+fleetMapUrl(x.lat,x.lng)+'" target="_blank" rel="noopener">📍 الخارطة</a>')+'</tr>'; }).join('')+'</table>'
-      :'<div class="det" style="color:#006100;">✓ لا وقفات</div>';
+      :(rw.cov.bad||rw.q.badShare>0.3||!rw.gps)
+        ?'<div class="det" style="color:#9c0006;font-weight:bold;">⚠ لا وقفات مسجّلة — لكن الموقع ناقص أو تقريبي، فلا يُعرف إن توقّف</div>'
+        :'<div class="det" style="color:#006100;">✓ لا وقفات</div>';
     rows+='<tr id="fsDet'+id+'" style="display:none;"><td colspan="'+COLS+'" class="detc">'+det+'</td></tr>';
   });
   rows+=edgeRow('آخر رجوع ← بصمة الخروج',c.gapLast,'gap_last_reason');
