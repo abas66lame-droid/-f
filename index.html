@@ -1117,7 +1117,7 @@ body > *:not(#neoParticles):not(#neoSplash):not(#neoTopBar){ position:relative; 
   display:flex; align-items:center; justify-content:center; padding:0 4px;
   box-shadow:0 0 8px rgba(225,91,100,0.6); animation:breath 1.6s ease-in-out infinite; }
 /* ── القفل المركزي للحركة ── */
-body div:not(.ring):not(.core):not(.radar):not(#neoOrbit):not(.check):not(#neoToast),
+body div:not(.ring):not(.core):not(.radar):not(#neoOrbit):not(.check):not(#neoToast):not([class*="leaflet-"]),
 .card, .dept-card, table, tr, td, th, section, main, header, footer{ transform:none !important; }
 ::-webkit-scrollbar{ width:8px; height:8px; }
 ::-webkit-scrollbar-track{ background:rgba(255,255,255,0.02); }
@@ -18987,7 +18987,7 @@ async function fsCompute(){
     rows.push({ trip:tr, n:k+1, plate:(vmap[vk2]||{}).plate||'', ok:ok, outMs:outMs, inMs:inMs,
       inv:invN, kind:kindV, invAvg:(durM!=null&&invN)?Math.round(durM/invN):null,
       outGeo:!!g.leave, inGeo:!!(g.back&&appIn), appOut:appOut, appIn:appIn, exits:g.exits,
-      durMin: inMs?fsMin(inMs-outMs):null, deliv:deliv, gps:pts.length, cov:fsGpsCoverage(pts,appOut,appIn), q:fsGpsQuality(pts) });
+      durMin: inMs?fsMin(inMs-outMs):null, deliv:deliv, gps:pts.length, cov:fsGpsCoverage(pts,appOut,appIn), q:fsGpsQuality(pts), pts:pts });
   }
   rows.forEach(function(r){ var ss=stopsAll.filter(function(x){ return x.n===r.n; });
     r.stops=ss.length; r.stopsNoWhy=ss.filter(function(x){ return !x.why; }).length; });
@@ -19120,6 +19120,7 @@ async function fsRenderSheet(keepLocal){
         +' · الدقة ~'+(rw.q.acc==null?'غير معروفة':Math.round(rw.q.acc)+' م')
         +(rw.q.badShare>0.3?' · <span style="color:#9c0006;font-weight:bold;">📡 '+Math.round(rw.q.badShare*100)+'% من النقاط تقريبية (أكثر من 100 م) فلا تُحسب منها الوقفات — في هاتف السائق شغّل «الموقع الدقيق» لتلجرام</span>':'')
         +'</div>':'');
+    if(rw.gps) det+='<div class="det"><button class="stb" onclick="fsMapTrip('+id+')">🗺 المسار على الخريطة</button></div>';
     det+=ss.length?'<table class="sub"><tr>'+th('من')+th('إلى')+th('المدة')+th('السبب')+th('الموقع')+'</tr>'
       +ss.map(function(x){ return '<tr>'+td(fsHM(x.from))+td(x.live?'مستمرة':fsHM(x.to))+td(fsH(x.min)+(x.approx?' (تقريبية)':''))
         +td(x.why?esc(x.why):'⚠ بلا سبب',x.why?'ok':'bad')
@@ -19362,6 +19363,53 @@ var FS_PRINT_CSS='.fsp{direction:rtl;color:#000;background:#fff;font-family:Taho
   +'.fsp .st{margin-top:8px}.fsp .sig{display:flex;justify-content:space-between;margin-top:34px}';
 /* تحميل واحد لكل مكتبة مهما تكرّر الطلب (التحميل المسبق ثم الضغط) */
 var __fsLibs={};
+/* ══ مسار الرحلة على الخريطة ══
+   من نقاط الموقع نفسها (fleet_gps): خط المسار، والوقفات بأسبابها، ونطاق الشركة، والانقطاع
+   (فجوة أطول من ١٠ دقائق مع تحرّك) خطاً أحمر متقطعاً — بين نقطتين بخط مستقيم لا على الطريق.
+   Leaflet وخرائط OpenStreetMap مجانية بلا مفتاح، وتُحمَّل عند أول فتح فقط */
+var FS_LEAFLET='https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/';
+window.fsMapTrip=async function(tid){
+  var rw=((__fs.calc||{}).rows||[]).filter(function(r){ return r.trip.id===tid; })[0]; if(!rw) return;
+  var pts=(rw.pts||[]).filter(function(p){ return !(p.acc>FLEET_BAD_ACC); });
+  if(!pts.length){ neoToast('لا نقاط دقيقة لرسم المسار'); return; }
+  if(!document.getElementById('fsLeafCss')){
+    var l=document.createElement('link'); l.id='fsLeafCss'; l.rel='stylesheet'; l.href=FS_LEAFLET+'leaflet.css'; document.head.appendChild(l);
+  }
+  try{ await fsLoadScript(FS_LEAFLET+'leaflet.js'); }catch(e){ neoToast('تعذّر تحميل الخريطة — تحقّق من الإنترنت'); return; }
+  var o=document.createElement('div'); o.id='fsMapOv';
+  o.style.cssText='position:fixed;inset:0;z-index:1000030;background:#0b1220;display:flex;flex-direction:column;';
+  o.innerHTML='<div style="display:flex;align-items:center;gap:8px;padding:8px;color:#cfe0f5;font-size:13px;">'
+    +'<b style="flex:1;">🗺 الرحلة '+rw.n+' — '+esc(rw.plate)+' · '+fsHM(rw.appOut)+(rw.appIn?' ← '+fsHM(rw.appIn):'')+'</b>'
+    +'<button class="secondary" style="font-size:13px;padding:8px 14px;" onclick="document.getElementById(\'fsMapOv\').remove()">✕ إغلاق</button></div>'
+    +'<div style="color:#8fa3b8;font-size:11px;padding:0 8px 6px;">🟢 البداية · 🔴 النهاية · ⏸ وقفة (اضغطها للسبب) · <span style="color:#ff5c5c;">- - -</span> انقطاع الموقع</div>'
+    +'<div id="fsMap" style="flex:1;"></div>';
+  document.body.appendChild(o);
+  var map=L.map('fsMap'), ll=function(p){ return [p.lat,p.lng]; };
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
+  /* المسار مقطّعاً: الفجوة الطويلة مع تحرّك تُرسم حمراء متقطعة */
+  var seg=[ll(pts[0])];
+  for(var i=1;i<pts.length;i++){
+    var gap=Date.parse(pts[i].at)-Date.parse(pts[i-1].at);
+    if(gap>FLEET_GAP_MS && fleetDistM(pts[i-1],pts[i])>FLEET_STOP_M*2){
+      L.polyline(seg,{color:'#2e7df6',weight:4}).addTo(map);
+      L.polyline([ll(pts[i-1]),ll(pts[i])],{color:'#ff5c5c',weight:3,dashArray:'8 8'}).addTo(map)
+        .bindPopup('📵 انقطع الموقع '+fsH(fsMin(gap))+' من '+fsHM(Date.parse(pts[i-1].at)));
+      seg=[];
+    }
+    seg.push(ll(pts[i]));
+  }
+  if(seg.length>1) L.polyline(seg,{color:'#2e7df6',weight:4}).addTo(map);
+  var dot=function(p,c,t){ L.circleMarker(ll(p),{radius:8,color:'#fff',weight:2,fillColor:c,fillOpacity:1}).addTo(map).bindPopup(t); };
+  dot(pts[0],'#1fbf5f','🟢 البداية '+fsHM(Date.parse(pts[0].at)));
+  dot(pts[pts.length-1],'#e5484d','🔴 آخر نقطة '+fsHM(Date.parse(pts[pts.length-1].at)));
+  (__fs.calc.stops||[]).filter(function(x){ return x.n===rw.n; }).forEach(function(x){
+    L.marker([x.lat,x.lng],{icon:L.divIcon({className:'',iconSize:null,html:'<div style="background:'+(x.why?'#2e5ca8':'#c0392b')
+      +';color:#fff;border-radius:8px;padding:2px 6px;font:bold 11px Tahoma;white-space:nowrap;">⏸ '+fsH(x.min)+'</div>'})}).addTo(map)
+      .bindPopup('⏸ '+fsHM(x.from)+' — '+(x.live?'مستمرة':fsHM(x.to))+' ('+fsH(x.min)+')<br>'+(x.why?esc(x.why):'⚠ بلا سبب'));
+  });
+  if(__fsGeo) L.circle([__fsGeo.lat,__fsGeo.lng],{radius:__fsGeo.r,color:'#38d9b9',weight:2,fillOpacity:0.08}).addTo(map).bindPopup('🏢 الشركة');
+  map.fitBounds(L.latLngBounds(pts.map(ll)).pad(0.15));
+};
 function fsLoadScript(src){
   if(__fsLibs[src]) return __fsLibs[src];
   __fsLibs[src]=new Promise(function(res,rej){
