@@ -17331,9 +17331,18 @@ document.addEventListener('visibilitychange', function(){
   var p=window.__fleetProfile; if(!p) return;
   try{
     if(p.role==='driver' && window.renderDriverView) window.renderDriverView(p);
-    else if(window.__fleetAfterAudit) window.__fleetAfterAudit(p);
+    /* المسؤول: لا إعادة رسم كاملة (كانت تحمّل كل شيء وتُضيّع مكانه في الجدول) —
+       تُحدَّث قائمة الرحلات بصمت إن كانت مفتوحة، وجدول اليوم يبقى كما هو */
+    else if(window.__fmActiveTab==='t') fleetRefreshTripsQuiet();
   }catch(e){}
 });
+async function fleetRefreshTripsQuiet(){
+  try{
+    var C=window.__fsCache; if(!C) return;
+    C.trips=await getTrips(RETAIN_DAYS);
+    await window.fleetSupTrips(window.__fsDate||'');
+  }catch(e){}
+}
 async function fleetUploadProof(){ throw new Error('الصور تُرسل عبر بوت تلجرام'); }
 /* «٣ صور و١ فيديو» — نوع كل إثبات من علامته: tgv: فيديو، tgn: فيديو دائري، والباقي صورة */
 function fleetProofCount(pl){
@@ -18285,7 +18294,7 @@ window.fleetTripDetail=async function(tripId){
 
     var o=document.createElement('div');
     o.id='ftdOv';
-    o.style.cssText='position:fixed;inset:0;z-index:1000014;background:rgba(4,7,12,.94);overflow-y:auto;padding:16px;';
+    o.style.cssText='position:fixed;inset:0;z-index:1000032;background:rgba(4,7,12,.94);overflow-y:auto;padding:16px;';
     var h='<div style="max-width:440px;margin:0 auto;background:#0d1622;border-radius:14px;padding:16px;">'
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">'
       +'<b style="color:#c8d4e2;font-size:14px;">'+kindLabel(v.kind)+' '+esc(v.plate||'?')+'</b>'
@@ -18330,7 +18339,7 @@ window.fleetTripDetail=async function(tripId){
 
 window.fleetViewProof=function(url){
   var o=document.createElement('div');
-  o.style.cssText='position:fixed;inset:0;z-index:1000015;background:rgba(4,7,12,.94);display:flex;'
+  o.style.cssText='position:fixed;inset:0;z-index:1000033;background:rgba(4,7,12,.94);display:flex;'
     +'align-items:center;justify-content:center;padding:18px;';
   o.innerHTML='<div style="max-width:420px;width:100%;text-align:center;">'
     +'<img src="'+esc(url)+'" style="width:100%;border-radius:12px;">'
@@ -18869,6 +18878,11 @@ async function fsLoadDay(day){
 window.fleetSheetOpen=async function(day,driver){
   var box=document.getElementById('fsSheetWrap'); if(!box) return;
   if(!fsIsAuditor(window.__fleetProfile)){ box.innerHTML=''; return; }
+  if(day===undefined && driver===undefined && !__fs.day){
+    /* رجوع بعد إعادة تحميل (الهاتف يغلق الصفحة أحياناً عند فتح تلجرام): نفس اليوم والمندوب */
+    try{ var sv0=JSON.parse(localStorage.getItem('fsPos')||'null');
+      if(sv0 && Date.now()-sv0.t<12*3600000){ __fs.day=sv0.day||''; __fs.driver=sv0.driver||''; } }catch(e){}
+  }
   if(day!==undefined) __fs.day=day||'';
   if(driver!==undefined) __fs.driver=driver;
   /* التاريخ أولاً: لا شيء يُحمَّل ولا يُحسب قبل اختياره */
@@ -18885,6 +18899,7 @@ window.fleetSheetOpen=async function(day,driver){
     var drivers={}; all.forEach(function(t){ drivers[String(t.driver_id)]=t.driver_name||t.driver_id; });
     var ids=Object.keys(drivers);
     if(__fs.driver && !drivers[__fs.driver]) __fs.driver='';
+    try{ localStorage.setItem('fsPos',JSON.stringify({day:__fs.day,driver:__fs.driver,t:Date.now()})); }catch(e){}
     if(!__fs.driver && ids.length===1) __fs.driver=ids[0];
     var saved=[];
     try{ var sv=await SB().from('fleet_day_audit').select('day,driver_id,driver_name,locked_at')
@@ -19086,7 +19101,7 @@ async function fsRenderSheet(keepLocal){
 
   /* ٢ الرحلات — صفّ لكل رحلة، يسبقها فرق بصمة الدخول ويليها فرق بصمة الخروج */
   var COLS=14;
-  var rows='<tr>'+th('#',0,28)+th('الخروج من الشركة',0,80)+th('الرجوع للشركة',0,80)+th('مدة الرحلة',0,62)+th('عدد الفواتير',0,58)
+  var rows='<tr>'+th('#',0,64)+th('الخروج من الشركة',0,80)+th('الرجوع للشركة',0,80)+th('مدة الرحلة',0,62)+th('عدد الفواتير',0,58)
     +th('متوسط الفاتورة',0,62)+th('وقت التجهيز',0,70)+th('اسم المجهز',0,110)+th('وقت تسليم الطلبات',0,140)+th('الوقفات',0,64)
     +th('البقاء في الشركة بعدها',0,90)+th('سبب البقاء',0,130)+th('ملاحظات قبل الانطلاق',0,140)+th('ملاحظات بعد الانطلاق',0,140)+'</tr>';
   var edgeRow=function(label,v,rk){ var b=over(v,FS_EDGE_MAX);
@@ -19096,7 +19111,7 @@ async function fsRenderSheet(keepLocal){
   if(!c.rows.length) rows+='<tr>'+td('لا رحلات لهذا المندوب في هذا اليوم','',COLS)+'</tr>';
   c.rows.forEach(function(rw){
     var id=rw.trip.id, invBad=rw.invAvg!=null&&rw.invAvg>FS_INV_MAX[rw.kind];
-    rows+='<tr>'+td('<b>'+rw.n+'</b>')
+    rows+='<tr>'+td('<b>'+rw.n+'</b>'+fleetTgLink('a',id,null,null,'📷 الصور','display:block;white-space:nowrap;margin-top:3px;padding:3px 7px;font:bold 11px Tahoma,Arial,sans-serif;border-radius:6px;'))
       +td(fsHM(rw.outMs)+(rw.outGeo?' 📍':''))
       +td(rw.inMs?fsHM(rw.inMs)+(rw.inGeo?' 📍':''):'لم يرجع',rw.inMs?'':'bad')
       +td(fsH(rw.durMin))
@@ -19124,7 +19139,8 @@ async function fsRenderSheet(keepLocal){
         +' · الدقة ~'+(rw.q.acc==null?'غير معروفة':Math.round(rw.q.acc)+' م')
         +(rw.q.badShare>0.3?' · <span style="color:#9c0006;font-weight:bold;">📡 '+Math.round(rw.q.badShare*100)+'% من النقاط تقريبية (أكثر من 100 م) فلا تُحسب منها الوقفات — في هاتف السائق شغّل «الموقع الدقيق» لتلجرام</span>':'')
         +'</div>':'');
-    if(rw.gps) det+='<div class="det"><button class="stb" onclick="fsMapTrip('+id+')">🗺 المسار على الخريطة</button></div>';
+    det+='<div class="det">'+(rw.gps?'<button class="stb" onclick="fsMapTrip('+id+')">🗺 المسار على الخريطة</button> ':'')
+      +'<button class="stb" onclick="fleetTripDetail('+id+')">📋 المهام وصورها</button></div>';
     det+=ss.length?'<table class="sub"><tr>'+th('من')+th('إلى')+th('المدة')+th('السبب')+th('الموقع')+'</tr>'
       +ss.map(function(x){ return '<tr>'+td(fsHM(x.from))+td(x.live?'مستمرة':fsHM(x.to))+td(fsH(x.min)+(x.approx?' (تقريبية)':''))
         +td(x.why?esc(x.why):'⚠ بلا سبب',x.why?'ok':'bad')
@@ -19183,8 +19199,8 @@ function fsSheetCss(){
   var X='#fsZoomIn .xls ';
   st.textContent='#fsZoomBox{overflow:auto;max-height:78vh;background:#fff;border-radius:10px;border:1px solid #9fb0c5;'
     +'-webkit-overflow-scrolling:touch;touch-action:pan-x pan-y;overscroll-behavior:contain}'
-    +'#fsZoomBox.full{position:fixed;inset:0;max-height:none;border-radius:0;z-index:1000020;padding-top:60px}'
-    +'#fsZoomBar.full{position:fixed;top:0;left:0;right:0;z-index:1000021;background:#0b1220;padding:8px;margin:0}'
+    +'#fsFullOv #fsZoomBox{flex:1;max-height:none;border-radius:0;border:0}'
+    +'#fsFullOv #fsZoomBar{padding:8px;margin:0;flex-wrap:wrap}'
     +'#fsZoomIn{width:max-content}'
     +'#fsZoomIn .xls{direction:rtl;color:#000;background:#fff;padding:10px;font-family:Tahoma,Arial,sans-serif;font-size:12px}'
     +X+'*{letter-spacing:0!important;word-spacing:normal!important;text-shadow:none!important;animation:none!important;transform:none!important}'
@@ -19236,17 +19252,37 @@ window.fsZoomFit=function(){
   el.style.zoom=1; var w=el.offsetWidth;
   if(w) fsZoomSet((box.clientWidth-4)/w); else fsZoomSet(__fs.zoom||1);
 };
-window.fsZoomFull=function(){
+/* ملء الشاشة: الشريط والورقة يُنقلان إلى طبقة مستقلة على مستوى الصفحة — داخل التطبيق كانا تحت
+   شريطه العلوي وطبقاته فلا يُرى زرّ الإغلاق (خصوصاً في الحاسوب). وزرّ Esc يغلقه أيضاً */
+window.fsZoomFull=function(force){
+  var ov=document.getElementById('fsFullOv');
+  var on=(force!==undefined)?!!force:!ov;
+  if(ov){
+    var ph=document.getElementById('fsFullPh');
+    while(ov.firstChild){ if(ph&&ph.parentNode) ph.parentNode.insertBefore(ov.firstChild,ph); else ov.removeChild(ov.firstChild); }
+    if(ph) ph.remove();
+    ov.remove();
+    try{ document.documentElement.style.overflow=''; }catch(e){}
+  }
+  __fs.full=on;
   var box=document.getElementById('fsZoomBox'), bar=document.getElementById('fsZoomBar'); if(!box||!bar) return;
-  var on=!box.classList.contains('full'); __fs.full=on;
-  box.classList.toggle('full',on); bar.classList.toggle('full',on);
-  var b=bar.lastElementChild; if(b) b.textContent=on?'✕ إغلاق':'⛶ ملء الشاشة';
+  var b=bar.lastElementChild; if(b) b.textContent=on?'✕ خروج من ملء الشاشة':'⛶ ملء الشاشة';
+  if(!on) return;
+  ph=document.createElement('span'); ph.id='fsFullPh'; bar.parentNode.insertBefore(ph,bar);
+  ov=document.createElement('div'); ov.id='fsFullOv';
+  ov.style.cssText='position:fixed;inset:0;z-index:1000020;background:#0b1220;display:flex;flex-direction:column;';
+  ov.appendChild(bar); ov.appendChild(box);
+  document.body.appendChild(ov);
+  try{ document.documentElement.style.overflow='hidden'; }catch(e){}
 };
+document.addEventListener('keydown',function(e){
+  if(e.key==='Escape' && document.getElementById('fsFullOv')) fsZoomFull(false);
+});
 function fsZoomInit(){
   var box=document.getElementById('fsZoomBox'); if(!box) return;
   var z=__fs.zoom; if(!z){ try{ z=Number(localStorage.getItem('fsZoom'))||0; }catch(e){} }
   if(z) fsZoomSet(z); else { fsZoomSet(1); fsZoomFit(); }
-  if(__fs.full){ __fs.full=false; fsZoomFull(); }
+  if(__fs.full) fsZoomFull(true);
   var d0=0, z0=1;
   var dist=function(t){ return Math.hypot(t[0].clientX-t[1].clientX, t[0].clientY-t[1].clientY); };
   box.addEventListener('touchstart',function(e){ if(e.touches.length===2){ d0=dist(e.touches); z0=__fs.zoom||1; } },{passive:true});
@@ -19788,6 +19824,8 @@ window.renderFleetManagerTab=async function(){
       try{ if(typeof currentSalesTab!=='undefined') window.currentSalesTab='fleet'; }catch(e){}
     }
     window.__fsCache={ vmap:vmap, trips:trips };
+    if(!window.__fmActiveTab){ try{ var tb0=JSON.parse(localStorage.getItem('fmTab')||'null');
+      if(tb0 && Date.now()-tb0.t<12*3600000) window.__fmActiveTab=tb0.k; }catch(e){} }
     window.fleetMgrTab(window.__fmActiveTab||'v');
     window.fleetSupTrips(window.__fsDate||'');
   }catch(e){
@@ -19804,6 +19842,7 @@ window.fleetMgrTab=function(k){
   var sW=document.getElementById('fsSheetWrap');
   if(k==='s' && !sW) k='v';                    /* جدول اليوم لمسؤول التدقيق وحده */
   window.__fmActiveTab=k;
+  try{ localStorage.setItem('fmTab',JSON.stringify({k:k,t:Date.now()})); }catch(e){}
   var vW=document.getElementById('fmVehWrap'), tW=document.getElementById('fmTripWrap');
   if(!vW||!tW) return;
   var tabs={v:[vW,'fmTabV'], t:[tW,'fmTabT'], s:[sW,'fmTabS']};
