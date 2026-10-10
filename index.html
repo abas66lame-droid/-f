@@ -18960,14 +18960,16 @@ function fsGpsCoverage(pts,outMs,inMs){
   var end=inMs||Date.now();
   if(!pts.length) return {none:true, gapMin:fsMin(end-outMs), bad:true};
   /* تلجرام لا يرسل تحديثاً والهاتف ثابت — فجوة بين نقطتين في المكان نفسه وقوفٌ لا انقطاع،
-     وكذلك ما بعد آخر نقطة إن كانت داخل الشركة والرحلة مُرجَعة */
+     وكذلك ما بعد آخر نقطة إن رُئي السائق عائداً إلى الشركة فعلاً والرحلة مُرجَعة.
+     والفجوة من الاستلام حتى أول نقطة تُحسب أيضاً (موقع تأخّر في بداية الرحلة) */
   var ts=pts.map(function(p){ return Date.parse(p.at); }), mx=0, mxAt=null, still=FLEET_STOP_M*2;
+  if(outMs && ts[0]-outMs>0){ mx=ts[0]-outMs; mxAt=outMs; }
   for(var i=1;i<ts.length;i++){
     if(fleetDistM(pts[i-1],pts[i])<=still) continue;
     if(ts[i]-ts[i-1]>mx){ mx=ts[i]-ts[i-1]; mxAt=ts[i-1]; }
   }
   var tail=end-ts[ts.length-1];
-  var home=inMs && __fsGeo && fsGeoDist(pts[pts.length-1])<=__fsGeo.r+FS_GEO_HYST;
+  var home=inMs && __fsGeo && fsGeoTrip(pts).back!=null;
   if(!home && tail>mx){ mx=tail; mxAt=ts[ts.length-1]; }
   return {first:ts[0], last:ts[ts.length-1], gapMin:fsMin(mx), gapAt:mxAt, tailMin:fsMin(tail), bad:mx>FLEET_GAP_MS};
 }
@@ -19200,7 +19202,7 @@ async function fsRenderSheet(keepLocal){
     +'</div></div></div>';
 
   /* الأزرار */
-  h+='<div class="card" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">'
+  h+='<div id="fsSheetBtns" class="card" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">'
     +(locked?'':'<button style="flex:1;min-width:110px;font-size:13px;padding:12px;" onclick="fleetSheetSave(false)">💾 حفظ</button>'
       +'<button style="flex:1;min-width:110px;font-size:13px;padding:12px;background:#7a2f2f;" onclick="fleetSheetSave(true)">🔒 قفل نهائي</button>')
     +'<button class="secondary" style="flex:1;min-width:110px;font-size:13px;padding:12px;" onclick="fleetSheetExport(this)">📄 تصدير PDF</button></div>';
@@ -19222,6 +19224,7 @@ function fsSheetCss(){
     +'-webkit-overflow-scrolling:touch;touch-action:pan-x pan-y;overscroll-behavior:contain}'
     +'#fsFullOv #fsZoomBox{flex:1;max-height:none;border-radius:0;border:0}'
     +'#fsFullOv #fsZoomBar{padding:8px;margin:0;flex-wrap:wrap}'
+    +'#fsFullOv #fsSheetBtns{margin:0;border-radius:0}'
     +'#fsZoomIn{width:max-content}'
     +'#fsZoomIn .xls{direction:rtl;color:#000;background:#fff;padding:10px;font-family:Tahoma,Arial,sans-serif;font-size:12px}'
     +X+'*{letter-spacing:0!important;word-spacing:normal!important;text-shadow:none!important;animation:none!important;transform:none!important}'
@@ -19293,6 +19296,8 @@ window.fsZoomFull=function(force){
   ov=document.createElement('div'); ov.id='fsFullOv';
   ov.style.cssText='position:fixed;inset:0;z-index:1000020;background:#0b1220;display:flex;flex-direction:column;';
   ov.appendChild(bar); ov.appendChild(box);
+  /* الحفظ والقفل والتصدير يبقون ظاهرين في ملء الشاشة */
+  var btns=document.getElementById('fsSheetBtns'); if(btns) ov.appendChild(btns);
   document.body.appendChild(ov);
   try{ document.documentElement.style.overflow='hidden'; }catch(e){}
 };

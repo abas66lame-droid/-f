@@ -88,14 +88,19 @@ async function setState(chat: number, data: Record<string, unknown>) {
   }, "resolution=merge-duplicates,return=minimal");
 }
 
-/* التذكرة قد تصل بعد لحظات من فتح البوت — ننتظرها قليلاً */
-async function takeTicket(code: string) {
+/* التذكرة قد تصل بعد لحظات من فتح البوت — ننتظرها قليلاً. والانتظار مرة واحدة في الدقيقة لكل
+   شخص: رمز وهمي متكرر كان يوقف البوت ٥ ثوانٍ في كل مرة على كل السائقين */
+const ticketWait = new Map<number, number>();
+async function takeTicket(code: string, fromId: number) {
   if (!/^[A-Za-z0-9_-]{16,64}$/.test(code)) return null;
-  for (let i = 0; i < 6; i++) {
+  const waited = Date.now() - (ticketWait.get(fromId) || 0) < 60000;
+  const tries = waited ? 1 : 6;
+  for (let i = 0; i < tries; i++) {
     const t = await one(`tg_tickets?code=eq.${code}&select=*`);
     if (t) return t;
-    await new Promise((r) => setTimeout(r, 800));
+    if (i < tries - 1) await new Promise((r) => setTimeout(r, 800));
   }
+  ticketWait.set(fromId, Date.now());
   return null;
 }
 
@@ -138,7 +143,7 @@ async function startPhotos(chat: number, who: any, tk: any) {
   if (!queue.length) return say(chat, "لا توجد مهام تحتاج صورة في هذه الرحلة.");
 
   const job = {
-    mode: "photo", trip: trip.id, vehicle: trip.vehicle_id, driver: String(who.id),
+    mode: "photo", at: Date.now(), trip: trip.id, vehicle: trip.vehicle_id, driver: String(who.id),
     plate: vehName(veh), queue: queue.map((t) => ({ id: t.id, title: t.title })), i: 0,
   };
   await setState(chat, { who, job });
@@ -152,7 +157,7 @@ async function startPhotos(chat: number, who: any, tk: any) {
 async function gotPhoto(chat: number, st: any, fileRef: string, album?: string, isImage = false) {
   const job = st.job;
   if (!job || job.mode !== "photo")
-    return say(chat, "افتح البوت من زرّ «📷 تصوير عبر تلجرام» في التطبيق أولاً.");
+    return say(chat, "افتح البوت من زرّ «📷🎥 صورة أو فيديو عبر تلجرام» في التطبيق أولاً.");
   /* الصور تُقبل من كاميرا الأماني وحدها وبتاريخ اليوم — أي صورة أخرى تُرفض ولا تُحفظ */
   if (isImage) {
     let r: Awaited<ReturnType<typeof readCam>>;
@@ -178,12 +183,13 @@ async function gotPhoto(chat: number, st: any, fileRef: string, album?: string, 
   if (sameAlbum) return;
   if (album) { job.album = album; job.albumI = i; } else { delete job.album; delete job.albumI; }
   job.i = i + 1;
+  job.at = Date.now();
   await setState(chat, { ...st, job });
   const again = { reply_markup: { inline_keyboard: [[{ text: "➕ صورة أو فيديو آخر لنفس المهمة", callback_data: "again" }]] } };
   if (job.i < job.queue.length) {
     return say(chat, `✓ حُفظت «${task.title}»\n\n📷 التالي: «${job.queue[job.i].title}» (${job.i + 1}/${job.queue.length})`, again);
   }
-  return say(chat, `✓ حُفظت «${task.title}»\n\n🎉 اكتملت صور هذه المهام.\nارجع للتطبيق واضغط «تم إكمال المهمة» لكل مهمة.`, again);
+  return say(chat, `✓ حُفظت «${task.title}»\n\n🎉 اكتملت صور هذه المهام.\nارجع للتطبيق.`, again);
 }
 
 /* ══ المدقّق: كل صور الرحلة مرتّبة بمهامها ══ */
@@ -280,7 +286,8 @@ async function startGps(chat: number, who: any, tk: any) {
       method: "POST",
       body: JSON.stringify({ trip_id: trip.id, driver_id: String(who.id), lat: L.lat, lng: L.lng, acc: null, at: new Date().toISOString() }),
     }, "return=minimal");
-    await setState(chat, { ...st, who, gps_trip: trip.id, gps_last: { ...L, at: Date.now() } });
+    /* وقت آخر موقع يبقى كما هو — تجديده كان يُبقي البوابة مفتوحة على موقع قديم بلا مشاركة فعلية */
+    await setState(chat, { ...st, who, gps_trip: trip.id });
     return say(chat, "✓ موقعك المباشر شغّال — سُجّل لهذه الرحلة. ارجع للتطبيق، ستظهر مهام الاستلام.");
   }
   await setState(chat, { ...st, who, gps_trip: trip.id });
@@ -295,7 +302,7 @@ async function startGps(chat: number, who: any, tk: any) {
 async function gotLocation(chat: number, st: any, m: any, edited: boolean) {
   const who = st.who;
   if (!who) {
-    if (!edited) await say(chat, "افتح البوت من زرّ «📍 شارك موقعك المباشر» في رحلتك بالتطبيق أولاً.");
+    if (!edited) await say(chat, "افتح البوت من زرّ «📍 فتح البوت ومشاركة الموقع» في رحلتك بالتطبيق أولاً.");
     return;
   }
   const loc = m.location;
@@ -604,14 +611,16 @@ async function onMessage(m: any) {
   if (text.startsWith("/start")) {
     const code = text.split(/\s+/)[1] || "";
     if (!code) return say(chat, "أهلاً 👋\nهذا البوت يُفتح من أزرار التصوير والتدقيق داخل تطبيق الأماني.");
-    const tk = await takeTicket(code);
+    const tk = await takeTicket(code, Number(m.from?.id || 0));
     if (!tk) return say(chat, "الرابط غير صالح أو لم يُفعَّل بعد — ارجع للتطبيق واضغط الزر مرة أخرى.");
     if (tk.used_at) return say(chat, "هذا الرابط استُعمل مسبقاً — اضغط الزر في التطبيق مرة أخرى.");
     if (Date.now() - new Date(tk.created_at).getTime() > TICKET_TTL_MIN * 60000)
       return say(chat, "انتهت صلاحية الرابط — اضغط الزر في التطبيق مرة أخرى.");
-    await db(`tg_tickets?code=eq.${code}`, {
+    /* استعمال واحد مضمون: لا يُقبل إلا إن كانت التذكرة لم تُستعمل لحظة التحديث نفسها */
+    const used = (await db(`tg_tickets?code=eq.${code}&used_at=is.null`, {
       method: "PATCH", body: JSON.stringify({ used_at: new Date().toISOString(), tg_user: m.from?.id ?? null }),
-    }, "return=minimal");
+    })) ?? [];
+    if (!used.length) return say(chat, "هذا الرابط استُعمل مسبقاً — اضغط الزر في التطبيق مرة أخرى.");
 
     const p = await one(`profiles?id=eq.${tk.profile_id}&select=id,name,role,job_title,removed`);
     if (!p || p.removed) return say(chat, "الحساب غير موجود أو موقوف.");
@@ -651,7 +660,9 @@ async function onMessage(m: any) {
     }
   }
   /* مهمة تصوير جارية: الصور والفيديو لها. وغير ذلك كل ما يرسله السائق يذهب للمسؤولين */
-  const photoJob = st.job && st.job.mode === "photo" && st.job.i < st.job.queue.length;
+  /* مهمة تصوير جارية، أو انتهت قبل أقل من ٣٠ دقيقة (صور إضافية تُضاف لآخر مهمة لا تذهب للمسؤولين) */
+  const photoJob = st.job && st.job.mode === "photo" &&
+    (st.job.i < st.job.queue.length || Date.now() - Number(st.job.at || 0) < 30 * 60000);
   const media = (m.photo && m.photo.length) || m.video || m.video_note ||
     (m.document && /^(image|video)\//.test(String(m.document.mime_type || "")));
   if (isDriver(st) && !text.startsWith("/") && !(photoJob && media) && !m.sticker)
@@ -729,8 +740,11 @@ Deno.serve(async (req) => {
   const url = new URL(req.url);
   if (!SECRET) SECRET = await hookSecret();
   if (req.method === "GET") {
-    if (url.searchParams.get("setup") === "1") {
+    if (url.searchParams.get("setup")) {
       if (!TOKEN) return Response.json({ ok: false, error: "BOT_TOKEN غير مضبوط في Secrets" });
+      /* إعادة ضبط الـ webhook تحتاج آخر ٨ أحرف من توكن البوت — كان أي شخص يستطيع إسقاط الرسائل المنتظرة */
+      if (url.searchParams.get("setup") !== TOKEN.slice(-8))
+        return new Response("forbidden", { status: 403 });
       const hook = await tg("setWebhook", {
         url: FN_URL, secret_token: SECRET, allowed_updates: ["message", "edited_message", "callback_query"],
         drop_pending_updates: true,
