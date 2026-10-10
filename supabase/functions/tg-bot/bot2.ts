@@ -288,7 +288,8 @@ async function startGps(chat: number, who: any, tk: any) {
     `📍 تتبّع الرحلة\n\nشارك موقعك المباشر الآن:\n` +
     `١) اضغط 📎 (المرفقات) أسفل المحادثة\n٢) اختر «الموقع» (Location)\n` +
     `٣) اضغط «مشاركة موقعي المباشر» (Share My Live Location)\n٤) اختر «حتى أوقفه» (Until I turn it off) — لا تختر ٨ ساعات، تنتهي وسط الدوام\n\n` +
-    `بعدها ارجع للتطبيق — ستظهر مهام الاستلام. اترك المشاركة شغّالة طوال الدوام: لا يُسجَّل الموقع إلا أثناء الرحلات.`);
+    `بعدها ارجع للتطبيق — ستظهر مهام الاستلام. اترك المشاركة شغّالة طوال الدوام: لا يُسجَّل الموقع إلا أثناء الرحلات.`,
+    { reply_markup: ALERT_KB });
 }
 
 async function gotLocation(chat: number, st: any, m: any, edited: boolean) {
@@ -498,10 +499,116 @@ async function verifyCamPhoto(chat: number, fileId: string) {
     `ملاحظة: الرمز يضمن صحة الوقت والمصوِّر ورقم الصورة. تعديل محتوى الصورة نفسها لا يمكن كشفه بدون النسخة الأصلية.`);
 }
 
+/* ══ تنبيهات السائقين إلى كروب المسؤولين ══
+   السائق يضغط «🚨 تنبيه للمسؤولين» (في التطبيق أو في البوت)، فيختار تنبيهاً جاهزاً أو يرسل
+   صوتاً/كتابة/صورة/موقعاً. البوت ينشره في كروب المسؤولين (التدقيق، التوصيل، الآليات) باسم
+   السائق ومركبته وآخر موقعه. المسؤول يردّ بـ«رد» (Reply) على رسالة التنبيه في الكروب، فيوصل
+   البوت ردّه للسائق في محادثته الخاصة. السائق لا يرى الكروب ولا أعضاءه ولا يراسلهم مباشرة.
+   ضبط الكروب مرة واحدة: أضف البوت للكروب، ثم يكتب فيه أحد المسؤولين:  /setalerts */
+const ALERTS: Record<string, string> = {
+  b: "🔧 عطل في المركبة", c: "💥 حادث", t: "🛞 بنشر / إطار", f: "⛽ الوقود خلص",
+  l: "⏰ سأتأخر", o: "📦 مشكلة في طلب أو زبون", h: "🆘 أحتاج مساعدة الآن",
+};
+const ALERT_BTN = "🚨 تنبيه للمسؤولين";
+const ALERT_KB = { keyboard: [[{ text: ALERT_BTN }]], resize_keyboard: true, is_persistent: true };
+let ALERT_GROUP: number | null | undefined;
+async function alertGroup(): Promise<number | null> {
+  if (ALERT_GROUP !== undefined) return ALERT_GROUP;
+  try {
+    const r = await one("app_settings?key=eq.tg_alert_group&select=value");
+    ALERT_GROUP = r && r.value && r.value.chat ? Number(r.value.chat) : null;
+  } catch { ALERT_GROUP = null; }
+  return ALERT_GROUP;
+}
+async function setAlertGroup(chat: number) {
+  await db("app_settings?on_conflict=key", {
+    method: "POST", body: JSON.stringify({ key: "tg_alert_group", value: { chat } }),
+  }, "resolution=merge-duplicates,return=minimal");
+  ALERT_GROUP = chat;
+}
+async function alertMenu(chat: number, st: any) {
+  await setState(chat, { ...st, alert_until: Date.now() + 10 * 60000 });
+  const keys = Object.keys(ALERTS), kb = [];
+  for (let k = 0; k < keys.length; k += 2)
+    kb.push(keys.slice(k, k + 2).map((x) => ({ text: ALERTS[x], callback_data: `al:${x}` })));
+  await say(chat, "🚨 تنبيه للمسؤولين\n\nاختر من الأزرار، أو أرسل الآن 🎤 رسالة صوتية أو ✍️ كتابة أو 📷 صورة أو 📍 موقعك.",
+    { reply_markup: { inline_keyboard: kb } });
+}
+/* رسائل الكروب ← محادثة السائق: آخر ٣٠٠ تنبيه تُحفظ في حالة الكروب */
+async function mapAlert(group: number, ids: number[], driverChat: number, name: string) {
+  const gs = await getState(group);
+  const m: Record<string, any> = gs.amap || {};
+  for (const id of ids) m[String(id)] = { c: driverChat, n: name };
+  const keys = Object.keys(m);
+  for (const k of keys.slice(0, Math.max(0, keys.length - 300))) delete m[k];
+  await setState(group, { ...gs, amap: m });
+}
+async function sendAlert(chat: number, st: any, preset: string | null, m?: any) {
+  const who = st.who;
+  if (!who) return say(chat, "افتح البوت من زرّ «🚨 تنبيه للمسؤولين» في التطبيق أولاً.");
+  const group = await alertGroup();
+  if (!group) return say(chat, "⚠️ كروب المسؤولين لم يُضبط بعد — أخبر مسؤول التوصيل.");
+  if (st.alert_last && Date.now() - Number(st.alert_last) < 15000) return;   /* ضغط مكرّر */
+  const trip = await openTripOf(String(who.id), st.gps_trip);
+  let car = "بلا رحلة مفتوحة";
+  if (trip) {
+    const t = await one(`fleet_trips?id=eq.${trip.id}&select=vehicle_id`);
+    const v = t ? await one(`fleet_vehicles?id=eq.${t.vehicle_id}&select=plate,kind`) : null;
+    car = vehName(v);
+  }
+  const L = st.gps_last, ago = L ? Math.round((Date.now() - Number(L.at)) / 60000) : null;
+  const head = `🚨 تنبيه من السائق: ${who.name || "—"}\n${car} · ${hmB(Date.now())}` +
+    (preset ? `\n\n${preset}` : "") +
+    (L && ago! < 60 ? `\n\n📍 آخر موقع (قبل ${ago} د): https://maps.google.com/?q=${L.lat},${L.lng}` : "") +
+    `\n\n↩️ للرد على السائق: اضغط «رد» (Reply) على هذه الرسالة`;
+  const h = await tg("sendMessage", { chat_id: group, text: head, disable_web_page_preview: true });
+  if (!h.ok) return say(chat, "⚠️ تعذّر إيصال التنبيه — حاول مرة أخرى.");
+  const ids = [h.result.message_id];
+  if (m) {
+    const c = await tg("copyMessage", { chat_id: group, from_chat_id: chat, message_id: m.message_id,
+      reply_to_message_id: h.result.message_id });
+    if (c.ok) ids.push(c.result.message_id);
+  }
+  await mapAlert(group, ids, chat, who.name || "");
+  await setState(chat, { ...st, alert_until: null, alert_last: Date.now() });
+  return say(chat, "✓ وصل تنبيهك للمسؤولين — سيصلك ردّهم هنا.", { reply_markup: ALERT_KB });
+}
+/* رسائل الكروب: ضبطه، وردود المسؤولين على التنبيهات */
+async function onGroup(m: any) {
+  const chat = m.chat.id, text: string = m.text || "";
+  if (m.migrate_to_chat_id && (await alertGroup()) === chat) return setAlertGroup(Number(m.migrate_to_chat_id));
+  if (/^\/setalerts(@\w+)?$/.test(text.trim())) {
+    const who = await whoOf({}, m.from?.id);
+    if (!who || !REVIEWERS.includes(who.role))
+      return say(chat, "لم أتعرّف عليك — افتح البوت مرة من أي زرّ تلجرام في تطبيق الأماني، ثم أعد كتابة /setalerts هنا.");
+    await setAlertGroup(chat);
+    return say(chat, "✓ هذا الكروب صار كروب تنبيهات السائقين.\nللرد على أي تنبيه: اضغط «رد» (Reply) على رسالته واكتب أو سجّل صوتاً.");
+  }
+  if (chat !== (await alertGroup())) return;
+  const rt = m.reply_to_message;
+  if (!rt || !rt.from?.is_bot) return;
+  const gs = await getState(chat);
+  const to = (gs.amap || {})[String(rt.message_id)];
+  if (!to) return;
+  const who = await whoOf({}, m.from?.id);
+  const by = who ? `${titleOf(who)} — ${who.name || ""}` : (m.from?.first_name || "المسؤول");
+  if (m.text) {
+    const r = await say(to.c, `💬 رد من ${by}:\n\n${m.text}`);
+    if (!r.ok) return say(chat, "⚠️ لم يصل الرد للسائق.", { reply_to_message_id: m.message_id });
+  } else {
+    await say(to.c, `💬 رد من ${by}:`);
+    const r = await tg("copyMessage", { chat_id: to.c, from_chat_id: chat, message_id: m.message_id });
+    if (!r.ok) return say(chat, "⚠️ لم يصل الرد للسائق.", { reply_to_message_id: m.message_id });
+  }
+  return say(chat, `✓ وصل الرد إلى ${to.n || "السائق"}`, { reply_to_message_id: m.message_id });
+}
+
 /* ══ الرسائل ══ */
 async function onMessage(m: any) {
   const chat = m.chat?.id;
-  if (!chat || m.chat.type !== "private") return;
+  if (!chat) return;
+  if (m.chat.type === "group" || m.chat.type === "supergroup") return onGroup(m);
+  if (m.chat.type !== "private") return;
   const text: string = m.text || "";
 
   if (text.startsWith("/start")) {
@@ -529,10 +636,15 @@ async function onMessage(m: any) {
       return sendTrip(chat, who, tk.trip_id);
     }
     if (tk.action === "g") return startGps(chat, who, tk);
+    if (tk.action === "n") return alertMenu(chat, { ...(await getState(chat)), who });
     return startPhotos(chat, who, tk);
   }
 
   const st = await getState(chat);
+  /* تنبيه للمسؤولين: الزر، ثم أول رسالة بعده (صوت، كتابة، صورة، موقع ثابت) تُرسل تنبيهاً */
+  if (text === ALERT_BTN || /^\/alert\b/.test(text)) return alertMenu(chat, st);
+  if (st.alert_until && Date.now() < Number(st.alert_until) && !text.startsWith("/") &&
+      !(m.location && m.location.live_period)) return sendAlert(chat, st, null, m);
   if (m.location) return gotLocation(chat, st, m, false);
   if (st.await_reason && text && !text.startsWith("/")) {
     const ar = st.await_reason;
@@ -558,6 +670,8 @@ async function onMessage(m: any) {
     return gotPhoto(chat, st, "tgd:" + m.document.file_id, album, /^image\//.test(String(m.document.mime_type)));
   if (st.job && st.job.mode === "photo" && st.job.i < st.job.queue.length)
     return say(chat, `📷 أرسل صورة أو فيديو (وليس نصّاً): «${st.job.queue[st.job.i].title}»`);
+  if (st.who && st.who.role === "driver")
+    return say(chat, `استعمل أزرار التطبيق للتصوير والموقع.\nولإرسال تنبيه للمسؤولين اضغط «${ALERT_BTN}» في الأسفل.`, { reply_markup: ALERT_KB });
   return say(chat, "استعمل أزرار التطبيق لفتح التصوير أو التدقيق.");
 }
 
@@ -572,6 +686,13 @@ async function onCallback(q: any) {
     await setState(chat, st);
     await tg("answerCallbackQuery", { callback_query_id: q.id });
     return say(chat, `📷 أرسل صورة أو فيديو آخر: «${st.job.queue[st.job.i].title}»`);
+  }
+
+  if (data.startsWith("al:")) {
+    await tg("answerCallbackQuery", { callback_query_id: q.id });
+    const txt = ALERTS[data.slice(3)];
+    if (!txt) return;
+    return sendAlert(chat, st, txt);
   }
 
   if (data.startsWith("sr:")) {
