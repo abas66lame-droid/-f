@@ -17760,12 +17760,15 @@ function amaniCamShow(out){
 }
 
 /* حسابات «التوصيل» التي تقود المركبات وتخرج بها كالسائق، مع بقاء صلاحيات المسؤول كاملة:
-   كل من في مسمّاه «آليات»، والحساب «علي خالد». لإضافة غيرهم: أضف الاسم في FLEET_DRIVER_NAMES */
+   كل من في مسمّاه «آليات»، والحساب «علي خالد» (بمعرّفه، وبالاسم احتياطاً).
+   لإضافة غيرهم: أضف المعرّف في FLEET_DRIVER_IDS أو الاسم في FLEET_DRIVER_NAMES */
+var FLEET_DRIVER_IDS = ['dd71f18f-cf0d-48ee-8eca-7ec2842dce6e'];
 var FLEET_DRIVER_NAMES = ['علي خالد'];
 function fleetNormName(x){ return String(x||'').replace(/[\u0640\s]+/g,'').replace(/ى/g,'ي').replace(/[أإآ]/g,'ا').replace(/ة/g,'ه'); }
 window.fleetCanDrive = function(p){
   if(!p || p.role!=='fleet') return false;
   if(/آليات|اليات/.test(String(p.job_title||''))) return true;
+  if(FLEET_DRIVER_IDS.indexOf(String(p.id||'').toLowerCase())>-1) return true;
   var n=fleetNormName(p.name);
   return FLEET_DRIVER_NAMES.some(function(x){ return fleetNormName(x)===n; });
 };
