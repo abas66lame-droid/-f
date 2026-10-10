@@ -145,13 +145,25 @@ async function startPhotos(chat: number, who: any, tk: any) {
   await say(chat,
     `أهلاً ${who.name || ""} 👋\n${job.plate} — ${phase === "in" ? "مهام التسليم" : "مهام الاستلام"}\n\n` +
     `📷 أرسل صورة أو فيديو: «${job.queue[0].title}» (1/${job.queue.length})\n` +
-    `يمكنك إرسال عدة صور وفيديوهات دفعة واحدة، وتُحسب كلها لنفس المهمة.`);
+    `يمكنك إرسال عدة صور وفيديوهات دفعة واحدة، وتُحسب كلها لنفس المهمة.\n\n` +
+    `⚠️ الصور تُقبل من كاميرا الأماني فقط (زرّ 📸 في التطبيق) وبتاريخ اليوم — غيرها يُرفض.`);
 }
 
-async function gotPhoto(chat: number, st: any, fileRef: string, album?: string) {
+async function gotPhoto(chat: number, st: any, fileRef: string, album?: string, isImage = false) {
   const job = st.job;
   if (!job || job.mode !== "photo")
     return say(chat, "افتح البوت من زرّ «📷 تصوير عبر تلجرام» في التطبيق أولاً.");
+  /* الصور تُقبل من كاميرا الأماني وحدها وبتاريخ اليوم — أي صورة أخرى تُرفض ولا تُحفظ */
+  if (isImage) {
+    let r: Awaited<ReturnType<typeof readCam>>;
+    try { r = await readCam(fileRef.slice(fileRef.indexOf(":") + 1), false); }
+    catch (e) { console.error("readCam", e); return say(chat, "⚠️ تعذّر فحص الصورة — أرسلها مرة أخرى."); }
+    if (r.err === "dl") return say(chat, "⚠️ تعذّر تنزيل الصورة — أرسلها مرة أخرى.");
+    if (r.err)
+      return say(chat, "❌ الصورة مرفوضة — ليست من كاميرا الأماني.\n\n📸 صوّر من زرّ الكاميرا داخل تطبيق الأماني، ثم أرسل الصورة هنا.");
+    if (!camDayOk(r.when!))
+      return say(chat, `❌ الصورة مرفوضة — قديمة (${String(r.when).slice(0, 10)}).\n\n📸 صوّر صورة جديدة اليوم من كاميرا الأماني.`);
+  }
   /* بقية الألبوم نفسه: تُحفظ لنفس المهمة بصمت، بلا تقدّم ولا رسالة لكل عنصر */
   const sameAlbum = !!album && job.album === album;
   const i = sameAlbum ? job.albumI : Math.min(job.i, job.queue.length - 1);
@@ -419,37 +431,59 @@ async function whoOf(st: any, fromId: number) {
   const p = await one(`profiles?id=eq.${t.profile_id}&select=id,name,role,job_title`);
   return p ? { id: p.id, name: p.name, role: p.role, job_title: p.job_title } : null;
 }
+/* قراءة صورة كاميرا الأماني: تنزيلها من تلجرام، وقراءة رمز QR من شريطها السفلي، والتحقق
+   من رمزها السرّي. full=true يبحث في الصورة كلها إن لم يجده في الأسفل (أبطأ — للمسؤولين فقط) */
+async function readCam(fileId: string, full: boolean):
+  Promise<{ err?: "dl" | "jpg" | "noqr" | "notcam" | "forged"; id?: string; when?: string; uc?: string }> {
+  const f = await tg("getFile", { file_id: fileId });
+  if (!f.ok) return { err: "dl" };
+  const bin = new Uint8Array(await (await fetch(`https://api.telegram.org/file/bot${TOKEN}/${f.result.file_path}`,
+    { signal: AbortSignal.timeout(15000) })).arrayBuffer());
+  let img: any;
+  try { img = jpeg.decode(bin, { useTArray: true, maxMemoryUsageInMB: 256 }); }
+  catch { return { err: "jpg" }; }
+  const rgba = new Uint8ClampedArray(img.data.buffer, img.data.byteOffset, img.data.byteLength);
+  /* الرمز في الربع السفلي: نبحث فيه أولاً (أسرع وأدق) */
+  const top = Math.floor(img.height * 0.7);
+  const qr: any = jsQR(rgba.subarray(top * img.width * 4), img.width, img.height - top) ||
+    (full ? jsQR(rgba, img.width, img.height) : null);
+  if (!qr) return { err: "noqr" };
+  const parts = String(qr.data).split("|");
+  if (parts.length !== 5 || parts[0] !== "AMANI1") return { err: "notcam" };
+  const [, id, when, uc, code] = parts;
+  if ((await camSign([id, when, uc].join("|"))) !== code) return { err: "forged", id, when, uc };
+  return { id, when, uc };
+}
+/* صور التوصيل: من يوم اليوم فقط (بتوقيت بغداد)، وحتى الساعة ٣ فجراً تُقبل صور اليوم السابق أيضاً */
+const CAM_GRACE_H = 3;
+function camDayOk(when: string) {
+  const day = String(when).slice(0, 10);
+  const now = new Date(Date.now() + 3 * 3600000);              /* بغداد UTC+3 */
+  const today = now.toISOString().slice(0, 10);
+  if (day === today) return true;
+  const yest = new Date(now.getTime() - 86400000).toISOString().slice(0, 10);
+  return now.getUTCHours() < CAM_GRACE_H && day === yest;
+}
 async function verifyCamPhoto(chat: number, fileId: string) {
   if (!CAM_KEY) return say(chat, "⚠️ مفتاح الكاميرا CAM_KEY غير مضبوط في أسرار الدالة — أضفه من Edge Functions ← Secrets.");
   await tg("sendChatAction", { chat_id: chat, action: "typing" });
-  const f = await tg("getFile", { file_id: fileId });
-  if (!f.ok) return say(chat, "تعذّر تنزيل الصورة من تلجرام.");
-  const bin = new Uint8Array(await (await fetch(`https://api.telegram.org/file/bot${TOKEN}/${f.result.file_path}`)).arrayBuffer());
-  let img: any;
-  try { img = jpeg.decode(bin, { useTArray: true, maxMemoryUsageInMB: 256 }); }
-  catch { return say(chat, "❌ هذه ليست صورة JPG من كاميرا الأماني."); }
-  const rgba = new Uint8ClampedArray(img.data.buffer, img.data.byteOffset, img.data.byteLength);
-  /* الرمز في الربع السفلي: نبحث فيه أولاً (أسرع وأدق)، ثم في الصورة كلها */
-  let qr: any = null;
-  const top = Math.floor(img.height * 0.7);
-  const part = rgba.subarray(top * img.width * 4);
-  qr = jsQR(part, img.width, img.height - top) || jsQR(rgba, img.width, img.height);
-  if (!qr) {
+  const r = await readCam(fileId, true);
+  if (r.err === "dl") return say(chat, "تعذّر تنزيل الصورة من تلجرام.");
+  if (r.err === "jpg") return say(chat, "❌ هذه ليست صورة JPG من كاميرا الأماني.");
+  if (r.err === "noqr") {
     return say(chat, "❌ لا يوجد رمز تحقق مقروء في هذه الصورة.\n\nإمّا أنها ليست من كاميرا الأماني، أو أن الشريط السفلي قُصّ أو غُطّي، أو أن الصورة صغيرة جداً — جرّب إرسالها «كملف» بدل صورة.");
   }
-  const parts = String(qr.data).split("|");
-  if (parts.length !== 5 || parts[0] !== "AMANI1") return say(chat, "❌ الرمز في الصورة ليس رمز كاميرا الأماني.");
-  const [, id, when, uc, code] = parts;
-  const ok = (await camSign([id, when, uc].join("|"))) === code;
+  if (r.err === "notcam") return say(chat, "❌ الرمز في الصورة ليس رمز كاميرا الأماني.");
+  if (r.err === "forged") {
+    return say(chat, "❌ الصورة مزوّرة أو معدّلة\n\nالبيانات المكتوبة على الصورة لا تطابق رمزها السرّي — غُيّر التاريخ أو الوقت أو الرقم، أو صُنعت خارج التطبيق.");
+  }
+  const { id, when, uc } = r as { id: string; when: string; uc: string };
   /* اسم المصوِّر: نبحث عن الحساب الذي يعطي هذا الرمز */
   let name = "";
   try {
     const ps: any[] = (await db("profiles?select=id,name")) ?? [];
     const m = ps.find((p) => camUser(p.id) === uc); if (m) name = m.name || "";
   } catch { /* الاسم اختياري */ }
-  if (!ok) {
-    return say(chat, "❌ الصورة مزوّرة أو معدّلة\n\nالبيانات المكتوبة على الصورة لا تطابق رمزها السرّي — غُيّر التاريخ أو الوقت أو الرقم، أو صُنعت خارج التطبيق.");
-  }
   return say(chat,
     `✅ صورة أصلية من كاميرا الأماني\n\n` +
     `📅 التُقطت: ${when}
@@ -513,11 +547,11 @@ async function onMessage(m: any) {
       catch (e) { console.error("verify", e); return say(chat, "تعذّر فحص الصورة — حاول مرة أخرى."); }
     }
   }
-  if (m.photo && m.photo.length) return gotPhoto(chat, st, "tg:" + m.photo[m.photo.length - 1].file_id, album);
+  if (m.photo && m.photo.length) return gotPhoto(chat, st, "tg:" + m.photo[m.photo.length - 1].file_id, album, true);
   if (m.video) return gotPhoto(chat, st, "tgv:" + m.video.file_id, album);
   if (m.video_note) return gotPhoto(chat, st, "tgn:" + m.video_note.file_id, album);
   if (m.document && /^(image|video)\//.test(String(m.document.mime_type || "")))
-    return gotPhoto(chat, st, "tgd:" + m.document.file_id, album);
+    return gotPhoto(chat, st, "tgd:" + m.document.file_id, album, /^image\//.test(String(m.document.mime_type)));
   if (st.job && st.job.mode === "photo" && st.job.i < st.job.queue.length)
     return say(chat, `📷 أرسل صورة أو فيديو (وليس نصّاً): «${st.job.queue[st.job.i].title}»`);
   return say(chat, "استعمل أزرار التطبيق لفتح التصوير أو التدقيق.");
