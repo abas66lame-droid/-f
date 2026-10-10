@@ -18150,6 +18150,8 @@ window.fleetPurgeVehicle=async function(vid){
    فبـ10 م كان كل تذبذب يقطع الوقفة إلى قطع أقصر من الحد فلا تظهر أي وقفة.
    والنقاط ضعيفة الدقة (أكثر من 100 م) لا تُعتمد في حساب الوقفات */
 var FLEET_STOP_M = 30, FLEET_STOP_MS = 5 * 60000, FLEET_GAP_MS = 10 * 60000, FLEET_BAD_ACC = 100;
+/* سرعة المدينة (30 كم/س) لتقدير زمن الانتقال من مكان الوقفة إلى النقطة التالية */
+var FLEET_MOVE_MPS = 30/3.6;
 var FLEET_GPS_ON='<div style="color:#38d9b9;font-size:11px;margin:4px 0;">📍 موقعك المباشر مُفعّل — يتوقف تسجيله عند الإرجاع</div>';
 /* هل وصل أي موقع لهذه الرحلة؟ البوت لا يخزّن إلا الموقع المباشر، فوجود نقطة = التتبع شغّال.
    null عند تعذّر القراءة — فلا نحبس السائق بسبب خلل شبكة */
@@ -18190,7 +18192,9 @@ function fleetStops(pts){
     }
     var from=new Date(pts[i].at).getTime();
     var lastHere=new Date(pts[j-1].at).getTime();
-    var to=(j<pts.length)?new Date(pts[j].at).getTime():lastHere;
+    /* نهاية الوقفة: النقطة التالية ناقصاً زمن الوصول إليها بسرعة مدينة — فجوة في الموقع
+       والسائق يقطع مسافة كبيرة (طريق سريع بلا تغطية) ليست وقفة */
+    var to=(j<pts.length)?lastHere+Math.max(0,new Date(pts[j].at).getTime()-lastHere-fleetDistM(c,pts[j])/FLEET_MOVE_MPS*1000):lastHere;
     if(to-from>=FLEET_STOP_MS){
       out.push({lat:c.lat,lng:c.lng,from:from,to:to,ms:to-from,
         last:(j>=pts.length), approx:(j<pts.length && to-lastHere>FLEET_GAP_MS)});

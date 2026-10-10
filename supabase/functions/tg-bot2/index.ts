@@ -361,7 +361,11 @@ function stopClusters(pts: { lat: number; lng: number; at: number }[]) {
       n++; c = { lat: c.lat + (pts[j].lat - c.lat) / n, lng: c.lng + (pts[j].lng - c.lng) / n }; j++;
     }
     const closed = j < pts.length;
-    out.push({ ...c, from: pts[i].at, last: pts[j - 1].at, end: closed ? pts[j].at : pts[j - 1].at, closed });
+    /* نهاية الوقفة: النقطة التالية ناقصاً زمن الوصول إليها بسرعة مدينة (30 كم/س) — فجوة في الموقع
+       والسائق يقطع مسافة كبيرة ليست وقفة (مثل التطبيق) */
+    const last = pts[j - 1].at;
+    const end = closed ? last + Math.max(0, pts[j].at - last - distM(c, pts[j]) / (30 / 3.6) * 1000) : last;
+    out.push({ ...c, from: pts[i].at, last, end, closed });
     i = j;
   }
   return out;
