@@ -17597,6 +17597,14 @@ async function amaniCamSign(text){
   let o = ''; for (let i = 0; i < 8; i++) o += AMANI_CAM_ALPHA[mac[i] % 32];
   return o.slice(0, 4) + '-' + o.slice(4);
 }
+/* التاريخ مخفيّ داخل الرمز (AM2): وقت التصوير (ثوانٍ منذ ١٩٧٠) مُعمّى بقناع من المفتاح السرّي
+   ورقم الصورة، فلا يظهر في الصورة ولا عند مسح الرمز بأي تطبيق — البوت وحده يفكّه ويتحقق منه */
+function amaniB32(n){ let o = ''; for (let i = 0; i < 7; i++){ o += AMANI_CAM_ALPHA[n % 32]; n = Math.floor(n / 32); } return o; }
+function amaniTimeMask(id){
+  const raw = new Uint8Array(AMANI_CAM_KEY.match(/../g).map(h => parseInt(h, 16)));
+  const m = amaniHmac(raw, new TextEncoder().encode('T|' + id));
+  return ((m[0] << 24) | (m[1] << 16) | (m[2] << 8) | m[3]) >>> 0;
+}
 /* مولّد QR صغير بلا مكتبات — وضع البايت، تصحيح M، الإصدارات 1–6، قناع ثابت.
    يكفي لنص قصير (حتى ١٠٦ بايت) ويعمل بلا إنترنت. */
 function amaniQr(text){
@@ -17698,9 +17706,10 @@ async function amaniCamStamp(file){
   try{ URL.revokeObjectURL(im.src); }catch(e){}
   const p = window.__fleetProfile || (typeof currentShiftProfile !== 'undefined' ? currentShiftProfile : null) || {};
   const name = String(p.name || '').trim() || 'موظف', uc = amaniCamUser(p);
-  const d = new Date(), pd = n => String(n).padStart(2, '0');
-  const when = d.getFullYear() + '-' + pd(d.getMonth() + 1) + '-' + pd(d.getDate()) + ' ' + pd(d.getHours()) + ':' + pd(d.getMinutes()) + ':' + pd(d.getSeconds());
-  const id = amaniCamRnd(6), code = await amaniCamSign([id, when, uc].join('|'));
+  /* الوقت لا يُكتب على الصورة — يُخفى مُعمّى داخل رمز QR وحده */
+  const id = amaniCamRnd(6);
+  const enc = amaniB32(((Math.floor(Date.now() / 1000) ^ amaniTimeMask(id)) >>> 0));
+  const code = await amaniCamSign([id, enc, uc].join('|'));
   const MARK = 'شركة الأماني', u = Math.max(W, H) / 100;
   /* اسم الشركة كبيراً مائلاً في ثلاثة أسطر فقط — يغطّي الصورة ولا يزحمها */
   g.save(); g.translate(W / 2, (H - u * 15) / 2); g.rotate(-Math.PI / 7);
@@ -17716,7 +17725,7 @@ async function amaniCamStamp(file){
   const bh = u * 15;
   g.fillStyle = 'rgba(8,14,26,0.88)'; g.fillRect(0, H - bh, W, bh);
   g.fillStyle = '#38d9b9'; g.fillRect(0, H - bh, W, Math.max(2, u * 0.35));
-  const Q = amaniQr(['AMANI1', id, when, uc, code.replace('-', '')].join('|'));
+  const Q = amaniQr(['AM2', id, enc, uc, code.replace('-', '')].join('|'));
   const qs = bh - u * 1.6, qm = qs / (Q.length + 4), qx = u * 1.2, qy = H - bh + u * 0.8;
   g.fillStyle = '#ffffff'; g.fillRect(qx, qy, qs, qs);
   g.fillStyle = '#000000';
@@ -17729,12 +17738,8 @@ async function amaniCamStamp(file){
   g.fillStyle = '#cfe0f5'; g.font = Math.round(u * 2.6) + 'px Tahoma, Arial, sans-serif';
   g.fillText('المصوِّر: ' + name, W - u * 3, H - bh * 0.32);
   g.direction = 'ltr'; g.textAlign = 'left';
-  g.fillStyle = '#ffffff'; g.font = 'bold ' + Math.round(u * 2.6) + 'px Tahoma, Arial, sans-serif';
-  g.fillText(when, tx, H - bh * 0.76);
-  g.fillStyle = '#cfe0f5'; g.font = Math.round(u * 2.2) + 'px Tahoma, Arial, sans-serif';
-  g.fillText('No. ' + id + '   ID ' + uc, tx, H - bh * 0.5);
-  g.fillStyle = '#38d9b9'; g.font = 'bold ' + Math.round(u * 2.2) + 'px Tahoma, Arial, sans-serif';
-  g.fillText('CODE ' + code, tx, H - bh * 0.24);
+  g.fillStyle = '#cfe0f5'; g.font = Math.round(u * 2.4) + 'px Tahoma, Arial, sans-serif';
+  g.fillText('No. ' + id, tx, H - bh * 0.5);
   const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.92));
   return { blob, id };
 }

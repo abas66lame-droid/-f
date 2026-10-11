@@ -151,7 +151,7 @@ async function startPhotos(chat: number, who: any, tk: any) {
     `أهلاً ${who.name || ""} 👋\n${job.plate} — ${phase === "in" ? "مهام التسليم" : "مهام الاستلام"}\n\n` +
     `📷 أرسل صورة أو فيديو: «${job.queue[0].title}» (1/${job.queue.length})\n` +
     `يمكنك إرسال عدة صور وفيديوهات دفعة واحدة، وتُحسب كلها لنفس المهمة.\n\n` +
-    `⚠️ الصور تُقبل من كاميرا الأماني فقط (زرّ 📸 في التطبيق) وبتاريخ اليوم — غيرها يُرفض.`);
+    `⚠️ الصور تُقبل من كاميرا الأماني فقط (زرّ 📸 في التطبيق) — غيرها يُرفض.`);
 }
 
 async function gotPhoto(chat: number, st: any, fileRef: string, album?: string, isImage = false) {
@@ -167,7 +167,7 @@ async function gotPhoto(chat: number, st: any, fileRef: string, album?: string, 
     if (r.err)
       return say(chat, "❌ الصورة مرفوضة — ليست من كاميرا الأماني.\n\n📸 صوّر من زرّ الكاميرا داخل تطبيق الأماني، ثم أرسل الصورة هنا.");
     if (!camDayOk(r.when!))
-      return say(chat, `❌ الصورة مرفوضة — قديمة (${String(r.when).slice(0, 10)}).\n\n📸 صوّر صورة جديدة اليوم من كاميرا الأماني.`);
+      return say(chat, "❌ الصورة مرفوضة.\n\n📸 صوّر صورة جديدة الآن من كاميرا الأماني وأرسلها.");
   }
   /* بقية الألبوم نفسه: تُحفظ لنفس المهمة بصمت، بلا تقدّم ولا رسالة لكل عنصر */
   const sameAlbum = !!album && job.album === album;
@@ -423,12 +423,25 @@ async function saveStopReason(tripId: string, fromS: string, reason: string) {
    المسؤول (مدير المبيعات أو أحد مسؤولي التوصيل) يرسل الصورة للبوت، فيقرأ البوت رمز QR من
    شريطها السفلي، ويعيد حساب رمز التحقق بالمفتاح السرّي، ويردّ بالنتيجة واسم المصوِّر. */
 const CAM_ALPHA = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-async function camSign(text: string) {
+async function camMac(text: string) {
   const raw = new Uint8Array((CAM_KEY.match(/../g) || []).map((h) => parseInt(h, 16)));
   const key = await crypto.subtle.importKey("raw", raw, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(text)));
+  return new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(text)));
+}
+async function camSign(text: string) {
+  const mac = await camMac(text);
   let o = ""; for (let i = 0; i < 8; i++) o += CAM_ALPHA[mac[i] % 32];
   return o;
+}
+/* AM2: وقت التصوير مخفيّ داخل الرمز — يُفكّ بقناع من المفتاح ورقم الصورة، ويُعرض بتوقيت بغداد */
+async function camDecodeTime(id: string, enc: string): Promise<string | null> {
+  if (!/^[A-Z2-9]{7}$/.test(enc)) return null;
+  let n = 0;
+  for (let i = 6; i >= 0; i--) { const v = CAM_ALPHA.indexOf(enc[i]); if (v < 0) return null; n = n * 32 + v; }
+  const m = await camMac("T|" + id);
+  const mask = ((m[0] << 24) | (m[1] << 16) | (m[2] << 8) | m[3]) >>> 0;
+  const t = (n ^ mask) >>> 0;
+  return new Date(t * 1000 + 3 * 3600000).toISOString().slice(0, 19).replace("T", " ");
 }
 function camUser(id: string) {
   let h = 2166136261; for (const ch of String(id)) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619) >>> 0; }
@@ -461,9 +474,12 @@ async function readCam(fileId: string, full: boolean):
     (full ? jsQR(rgba, img.width, img.height) : null);
   if (!qr) return { err: "noqr" };
   const parts = String(qr.data).split("|");
-  if (parts.length !== 5 || parts[0] !== "AMANI1") return { err: "notcam" };
-  const [, id, when, uc, code] = parts;
-  if ((await camSign([id, when, uc].join("|"))) !== code) return { err: "forged", id, when, uc };
+  if (parts.length !== 5 || (parts[0] !== "AMANI1" && parts[0] !== "AM2")) return { err: "notcam" };
+  const [ver, id, mid, uc, code] = parts;
+  if ((await camSign([id, mid, uc].join("|"))) !== code) return { err: "forged", id, uc };
+  /* AMANI1 القديم: الوقت مكتوب صراحة · AM2: مخفيّ ويُفكّ هنا */
+  const when = ver === "AM2" ? await camDecodeTime(id, mid) : mid;
+  if (!when) return { err: "forged", id, uc };
   return { id, when, uc };
 }
 /* صور التوصيل: من يوم اليوم فقط (بتوقيت بغداد)، وحتى الساعة ٣ فجراً تُقبل صور اليوم السابق أيضاً */
