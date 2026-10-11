@@ -17715,10 +17715,17 @@ async function amaniCamStamp(file){
   g.save(); g.translate(W / 2, (H - u * 15) / 2); g.rotate(-Math.PI / 7);
   g.font = 'bold ' + Math.round(u * 7) + 'px Tahoma, Arial, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
   g.lineWidth = Math.max(2, u * 0.4);
+  /* التاريخ والوقت داخل العلامة المائية نفسها، بخط أصغر تحت كل سطر من اسم الشركة */
+  const d = new Date(), pd = n => String(n).padStart(2, '0');
+  const stamp = d.getFullYear() + '-' + pd(d.getMonth() + 1) + '-' + pd(d.getDate()) + '  ' + pd(d.getHours()) + ':' + pd(d.getMinutes());
   for (const dy of [-1, 0, 1]){
     const y = dy * H * 0.32;
+    g.font = 'bold ' + Math.round(u * 7) + 'px Tahoma, Arial, sans-serif';
     g.strokeStyle = 'rgba(0,0,0,0.22)'; g.strokeText(MARK, 0, y);
     g.fillStyle = 'rgba(255,255,255,0.26)'; g.fillText(MARK, 0, y);
+    g.font = 'bold ' + Math.round(u * 3.2) + 'px Tahoma, Arial, sans-serif';
+    g.strokeText(stamp, 0, y + u * 6.2);
+    g.fillText(stamp, 0, y + u * 6.2);
   }
   g.restore();
   /* الشريط السفلي، وفي يساره رمز QR يحمل بيانات الصورة ورمزها — يقرؤه بوت تلجرام للتحقق الآلي */
