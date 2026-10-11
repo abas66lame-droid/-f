@@ -35,6 +35,8 @@ const SB_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? Deno.env.get("SB_SEC
 const FN_NAME = "tg-bot2";
 const FN_URL = SB_URL + "/functions/v1/" + FN_NAME;
 
+/* إصدار البوت — اكتب /version في البوت لتعرف أيّ نسخة تعمل فعلاً بعد النشر */
+const BOT_VERSION = "2026-10-11 · فحص الكاميرا AM2 + التاريخ المخفي";
 const TICKET_TTL_MIN = 30;
 const REVIEWERS = ["fleet", "sales", "dev"];
 const ROLE_AR: Record<string, string> = {
@@ -624,6 +626,7 @@ async function onMessage(m: any) {
   if (m.chat.type !== "private") return;
   const text: string = m.text || "";
 
+  if (text.startsWith("/version")) return say(chat, `🤖 نسخة البوت: ${BOT_VERSION}`);
   if (text.startsWith("/start")) {
     const code = text.split(/\s+/)[1] || "";
     if (!code) return say(chat, "أهلاً 👋\nهذا البوت يُفتح من أزرار التصوير والتدقيق داخل تطبيق الأماني.");
