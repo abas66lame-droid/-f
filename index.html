@@ -17697,6 +17697,10 @@ window.amaniCam = function(){
   inp.click();
 };
 async function amaniCamStamp(file){
+  /* نسخة بلا المفتاح الحقيقي (المرفوعة من المستودع العام بدل النسخة الخاصة) تختم برمز يرفضه البوت —
+     نوقف الختم برسالة واضحة بدل صور تبدو سليمة وتُرفض */
+  if (!/^[0-9a-f]{64}$/i.test(AMANI_CAM_KEY))
+    throw new Error('هذه النسخة من التطبيق بلا مفتاح الكاميرا — الصور ستُرفض. أخبر المسؤول ليرفع النسخة الصحيحة من التطبيق.');
   const im = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('تعذّر قراءة الصورة')); i.src = URL.createObjectURL(file); });
   /* 1600 بكسل تكفي وتحمي ذاكرة الهواتف — صورة الكاميرا الكاملة كانت تُسقط الصفحة في بعض التطبيقات */
   const MAX = 1600, k = Math.min(1, MAX / Math.max(im.naturalWidth, im.naturalHeight));
