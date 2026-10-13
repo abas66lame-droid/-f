@@ -4,6 +4,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
+<meta name="app-version" content="2026.10.13.01">
 <script>
 /* ══ مخزن أخطاء المطوّر — يجب أن يبقى أول سكربت ليلتقط كل شيء ══ */
 
@@ -12465,74 +12466,102 @@ window.neoRenderCredibility = neoRenderCredibility;
 
 
 <script>
-/* ══ التحديث التلقائي: يكتشف النسخة الجديدة ويحدّث بلا إعادة تثبيت ══ */
-const APP_VERSION = "2026.09.27.01";
+/* ══ التحديث الإجباري: يكتشف النسخة الجديدة ويحدّث وحده بلا ضغط زر ══
+   رقم النسخة في <meta name="app-version"> بأول الملف — نقرأ أول بضعة كيلوبايت فقط
+   من الصفحة على الخادم (لا الملف كله) ونقارنه بالرقم الذي يعمل الآن. */
+const APP_VERSION = (document.querySelector('meta[name="app-version"]') || {}).content || '0';
 (function(){
-  /* منع تخزين الصفحة في ذاكرة المتصفح */
-  const noCache = [
-    ['Cache-Control','no-cache, no-store, must-revalidate'],
-    ['Pragma','no-cache'], ['Expires','0']
-  ];
-  noCache.forEach(([k,v]) => {
-    const m = document.createElement('meta');
-    m.httpEquiv = k; m.content = v; document.head.appendChild(m);
-  });
+  let busy = false, lastCheck = 0, forcing = false;
 
-  let notified = false;
-  /* فحص خفيف: نطلب رأس الصفحة فقط (HEAD — بلا محتوى) ونقارن بصمتها.
-     سابقاً كانت الصفحة كاملة (~٤٠٠ ك.ب) تُنزَّل كل ١٠ دقائق ومع كل رجوع
-     للتطبيق لكل جهاز — وهذا وحده يستهلك عشرات الغيغات شهرياً من الاستضافة. */
-  let baseTag = null, lastFull = 0;
-  async function checkUpdate(){
-    if (notified || document.hidden) return;
-    try{
-      const url = location.pathname + '?v=' + Date.now();
-      const h = await fetch(url, { method: 'HEAD', cache: 'no-store' });
-      const tag = h.headers.get('etag') || h.headers.get('last-modified');
-      if (tag){
-        if (baseTag === null){ baseTag = tag; return; }
-        if (tag !== baseTag){ notified = true; showUpdateBar(); }
-        return;
+  /* يقرأ رقم النسخة من رأس الصفحة على الخادم ثم يقطع التنزيل */
+  async function serverVersion(){
+    const res = await fetch(location.pathname + '?vchk=' + Date.now(),
+      { cache: 'no-store', headers: { 'Range': 'bytes=0-4095' } });
+    if (!res.ok && res.status !== 206) return null;
+    let txt = '';
+    if (res.body && res.body.getReader){
+      const rd = res.body.getReader(), dec = new TextDecoder();
+      while (txt.length < 16384){
+        const { done, value } = await rd.read();
+        if (done) break;
+        txt += dec.decode(value, { stream: true });
+        if (/name="app-version"/.test(txt) && /<\/head>|<script/i.test(txt)) break;
       }
-      /* الخادم لا يعطي بصمة — الطريقة القديمة، لكن مرة كل ساعة فقط */
-      if (Date.now() - lastFull < 3600000) return;
-      lastFull = Date.now();
-      const txt = await (await fetch(url, { cache: 'no-store' })).text();
-      const m = txt.match(/APP_VERSION\s*=\s*"([^"]+)"/);
-      if (m && m[1] !== APP_VERSION){
-        notified = true;
-        showUpdateBar(m[1]);
+      try{ rd.cancel(); }catch(e){}
+    } else txt = (await res.text()).slice(0, 16384);
+    const m = txt.match(/<meta name="app-version" content="([^"]+)"/);
+    return m ? m[1] : null;
+  }
+
+  /* لا نحدّث والمستخدم يكتب — ننتظر حتى يترك الحقل (حدّ أقصى دقيقتان) */
+  function typing(){
+    const a = document.activeElement;
+    return a && (a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' && !/^(button|submit|checkbox|radio|file)$/i.test(a.type)));
+  }
+
+  async function forceUpdate(newVer){
+    if (forcing) return;
+    /* حماية من الحلقة: لو الخادم ما زال يعطي القديم بعد التحديث لا نعيد بلا نهاية */
+    const k = 'neoUpd:' + newVer;
+    let n = 0; try{ n = +(sessionStorage.getItem(k) || 0); }catch(e){}
+    if (n >= 2) return;
+    try{ sessionStorage.setItem(k, n + 1); }catch(e){}
+    forcing = true;
+
+    /* لو يكتب: شريط صغير أعلى الشاشة، وننتظر حتى يترك الحقل (حدّ أقصى دقيقتان) */
+    if (typing()){
+      const tip = document.createElement('div');
+      tip.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:2147483646;background:#12303a;'
+        + 'border-bottom:1px solid #38d9b9;color:#a8ecdc;padding:10px;font-size:13px;text-align:center;pointer-events:none;';
+      tip.textContent = '🔄 سيتحدّث التطبيق تلقائياً بعد انتهائك من الكتابة';
+      document.body.appendChild(tip);
+      const t0 = Date.now();
+      while (typing() && Date.now() - t0 < 120000) await new Promise(r => setTimeout(r, 1500));
+      tip.remove();
+    }
+    const ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;z-index:2147483646;background:rgba(8,14,26,.94);'
+      + 'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;'
+      + 'color:#a8ecdc;font-size:15px;text-align:center;padding:24px;';
+    ov.innerHTML = '<div style="font-size:34px;">🔄</div><b>يوجد تحديث جديد للتطبيق</b>'
+      + '<div style="font-size:12px;color:#7f9dbb;">جاري التحديث تلقائياً…</div>';
+    document.body.appendChild(ov);
+
+    try{
+      if (window.caches){
+        const keys = await caches.keys();
+        await Promise.all(keys.map(k => caches.delete(k)));
       }
     }catch(e){}
+    /* عامل خدمة قديم (غير OneSignal) قد يحتفظ بالنسخة القديمة */
+    try{
+      if (navigator.serviceWorker){
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map(r => { try{ r.update(); }catch(e){} }));
+      }
+    }catch(e){}
+    setTimeout(() => location.replace(location.pathname + '?v=' + encodeURIComponent(newVer) + '.' + Date.now() + location.hash), 900);
   }
 
-  function showUpdateBar(newVer){
-    const bar = document.createElement('div');
-    bar.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:100002;'
-      + 'background:linear-gradient(135deg,#12303a,#0e1728);border-top:1px solid #38d9b9;'
-      + 'padding:14px 16px calc(14px + env(safe-area-inset-bottom));display:flex;'
-      + 'align-items:center;justify-content:space-between;gap:12px;'
-      + 'box-shadow:0 -6px 24px rgba(0,0,0,0.5);';
-    bar.innerHTML = '<div style="font-size:13px;color:#a8ecdc;line-height:1.6;">'
-      + '<b>✨ يوجد تحديث جديد</b><div style="font-size:11px;color:#7f9dbb;">'
-      + 'اضغط تحديث للحصول على آخر نسخة</div></div>'
-      + '<button id="nuNow" style="flex-shrink:0;">🔄 تحديث</button>';
-    document.body.appendChild(bar);
-    bar.querySelector('#nuNow').onclick = async () => {
-      try{
-        if (window.caches){
-          const keys = await caches.keys();
-          await Promise.all(keys.map(k => caches.delete(k)));
-        }
-      }catch(e){}
-      location.replace(location.pathname + '?v=' + Date.now());
-    };
+  async function checkUpdate(force){
+    if (busy || forcing) return;
+    if (!force && Date.now() - lastCheck < 60000) return;
+    busy = true; lastCheck = Date.now();
+    try{
+      const v = await serverVersion();
+      if (v && v !== APP_VERSION) forceUpdate(v);
+    }catch(e){}
+    busy = false;
   }
+  window.neoCheckUpdate = () => checkUpdate(true);
 
-  /* فحص عند الفتح، وعند العودة للتطبيق، وكل 10 دقائق */
-  setTimeout(checkUpdate, 5000);
-  setInterval(checkUpdate, 600000);
+  /* فحص فور الفتح، وعند كل رجوع للتطبيق، وعند الرجوع من ذاكرة المتصفح، وكل 5 دقائق */
+  setTimeout(() => checkUpdate(true), 1500);
+  setInterval(() => { if (!document.hidden) checkUpdate(); }, 300000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) checkUpdate(); });
+  window.addEventListener('focus', () => checkUpdate());
+  window.addEventListener('online', () => checkUpdate(true));
+  window.addEventListener('pageshow', e => { if (e.persisted) checkUpdate(true); });
 })();
 </script>
 
