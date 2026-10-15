@@ -4,7 +4,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<meta name="app-version" content="2026.10.15.01">
+<meta name="app-version" content="2026.10.15.02">
 <script>
 /* نسخة بلا مفتاح الكاميرا = نسخة معاينة لفرع تطوير نشرتها الاستضافة على رابط جانبي.
    نحوّل المستخدم تلقائياً للموقع الرسمي (الذي يُنشر من main وفيه المفتاح) — فلا يعلق أحد عليها. */
@@ -17754,18 +17754,19 @@ async function amaniCamStamp(file){
   try{ URL.revokeObjectURL(im.src); }catch(e){}
   const p = window.__fleetProfile || (typeof currentShiftProfile !== 'undefined' ? currentShiftProfile : null) || {};
   const name = String(p.name || '').trim() || 'موظف', uc = amaniCamUser(p);
-  /* الوقت لا يُكتب على الصورة — يُخفى مُعمّى داخل رمز QR وحده */
+  /* صيغة AMANI1 (الوقت داخل الرمز موقّعاً) — يقبلها البوت بكل نسخه، القديمة والجديدة،
+     فلا يتوقف قبول الصور على إعادة نشر البوت. التاريخ ظاهر أصلاً في العلامة المائية */
+  const d0 = new Date(), p0 = n => String(n).padStart(2, '0');
+  const when = d0.getFullYear() + '-' + p0(d0.getMonth() + 1) + '-' + p0(d0.getDate()) + ' ' + p0(d0.getHours()) + ':' + p0(d0.getMinutes()) + ':' + p0(d0.getSeconds());
   const id = amaniCamRnd(6);
-  const enc = amaniB32(((Math.floor(Date.now() / 1000) ^ amaniTimeMask(id)) >>> 0));
-  const code = await amaniCamSign([id, enc, uc].join('|'));
+  const code = await amaniCamSign([id, when, uc].join('|'));
   const MARK = 'شركة الأماني', u = Math.max(W, H) / 100;
   /* اسم الشركة كبيراً مائلاً في ثلاثة أسطر فقط — يغطّي الصورة ولا يزحمها */
   g.save(); g.translate(W / 2, (H - u * 15) / 2); g.rotate(-Math.PI / 7);
   g.font = 'bold ' + Math.round(u * 7) + 'px Tahoma, Arial, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
   g.lineWidth = Math.max(2, u * 0.4);
   /* التاريخ والوقت داخل العلامة المائية نفسها، بخط أصغر تحت كل سطر من اسم الشركة */
-  const d = new Date(), pd = n => String(n).padStart(2, '0');
-  const stamp = d.getFullYear() + '-' + pd(d.getMonth() + 1) + '-' + pd(d.getDate()) + '  ' + pd(d.getHours()) + ':' + pd(d.getMinutes());
+  const stamp = when.slice(0, 10) + '  ' + when.slice(11, 16);
   for (const dy of [-1, 0, 1]){
     const y = dy * H * 0.32;
     g.font = 'bold ' + Math.round(u * 7) + 'px Tahoma, Arial, sans-serif';
@@ -17780,7 +17781,7 @@ async function amaniCamStamp(file){
   const bh = u * 15;
   g.fillStyle = 'rgba(8,14,26,0.88)'; g.fillRect(0, H - bh, W, bh);
   g.fillStyle = '#38d9b9'; g.fillRect(0, H - bh, W, Math.max(2, u * 0.35));
-  const Q = amaniQr(['AM2', id, enc, uc, code.replace('-', '')].join('|'));
+  const Q = amaniQr(['AMANI1', id, when, uc, code.replace('-', '')].join('|'));
   const qs = bh - u * 1.6, qm = qs / (Q.length + 4), qx = u * 1.2, qy = H - bh + u * 0.8;
   g.fillStyle = '#ffffff'; g.fillRect(qx, qy, qs, qs);
   g.fillStyle = '#000000';
