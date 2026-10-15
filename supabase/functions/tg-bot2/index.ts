@@ -29,14 +29,19 @@ import jsQR from "npm:jsqr@1.4.0";
 const TOKEN  = Deno.env.get("BOT_TOKEN") ?? "";
 /* مفتاح كاميرا الأماني — نفس المفتاح داخل التطبيق. مكتوب هنا مباشرة (لا حاجة لـ Secrets)،
    ولا يُرفع هذا الملف بمفتاحه إلى مستودع عام */
-const CAM_KEY = Deno.env.get("CAM_KEY") || "__AMANI_KEY__";
+/* بصمة المفتاح الصحيح (ناتج HMAC لا يكشف المفتاح): نختار من المفتاحين — سرّ CAM_KEY أو المكتوب هنا —
+   الذي يطابقها، فلا يُفسد سرٌّ قديم أو نسخة بلا مفتاح فحصَ الصور بصمت */
+const CAM_FP = "B5TWH9WM";
+const CAM_KEYS = [Deno.env.get("CAM_KEY") || "", "__AMANI_KEY__"].filter((k) => /^[0-9a-f]{64}$/i.test(k));
+let CAM_KEY = CAM_KEYS[0] || "";
+let CAM_OK = false;
 const SB_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SB_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? Deno.env.get("SB_SECRET") ?? "";
 const FN_NAME = "tg-bot2";
 const FN_URL = SB_URL + "/functions/v1/" + FN_NAME;
 
 /* إصدار البوت — اكتب /version في البوت لتعرف أيّ نسخة تعمل فعلاً بعد النشر */
-const BOT_VERSION = "2026-10-11 · فحص الكاميرا AM2 + التاريخ المخفي";
+const BOT_VERSION = "2026-10-15 · سبب رفض الصورة + اختيار المفتاح الصحيح";
 const TICKET_TTL_MIN = 30;
 const REVIEWERS = ["fleet", "sales", "dev"];
 const ROLE_AR: Record<string, string> = {
@@ -166,8 +171,12 @@ async function gotPhoto(chat: number, st: any, fileRef: string, album?: string, 
     try { r = await readCam(fileRef.slice(fileRef.indexOf(":") + 1), false); }
     catch (e) { console.error("readCam", e); return say(chat, "⚠️ تعذّر فحص الصورة — أرسلها مرة أخرى."); }
     if (r.err === "dl") return say(chat, "⚠️ تعذّر تنزيل الصورة — أرسلها مرة أخرى.");
+    if (r.err === "nokey")
+      return say(chat, "⚠️ البوت لا يستطيع فحص الصور الآن (مفتاح الكاميرا غير مضبوط) — الخطأ ليس منك. أخبر المسؤول.");
+    if (r.err === "noqr")
+      return say(chat, "❌ لم أستطع قراءة رمز QR في الصورة.\n\n📎 أرسلها مرة أخرى «كملف» (مشبك ← ملف) بدل صورة، وتأكد أن الشريط السفلي ظاهر كاملاً.");
     if (r.err)
-      return say(chat, "❌ الصورة مرفوضة — ليست من كاميرا الأماني.\n\n📸 صوّر من زرّ الكاميرا داخل تطبيق الأماني، ثم أرسل الصورة هنا.");
+      return say(chat, "❌ الصورة مرفوضة — ليست من كاميرا الأماني (" + r.err + ").\n\n📸 صوّر من زرّ الكاميرا داخل تطبيق الأماني، ثم أرسل الصورة هنا.");
     if (!camDayOk(r.when!))
       return say(chat, "❌ الصورة مرفوضة.\n\n📸 صوّر صورة جديدة الآن من كاميرا الأماني وأرسلها.");
   }
@@ -430,6 +439,15 @@ async function camMac(text: string) {
   const key = await crypto.subtle.importKey("raw", raw, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   return new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(text)));
 }
+async function camPickKey() {
+  if (CAM_OK) return true;
+  for (const k of CAM_KEYS) {
+    CAM_KEY = k;
+    if ((await camSign("AMANI-KEY-CHECK")) === CAM_FP) { CAM_OK = true; return true; }
+  }
+  CAM_KEY = CAM_KEYS[0] || "";
+  return false;
+}
 async function camSign(text: string) {
   const mac = await camMac(text);
   let o = ""; for (let i = 0; i < 8; i++) o += CAM_ALPHA[mac[i] % 32];
@@ -461,7 +479,8 @@ async function whoOf(st: any, fromId: number) {
 /* قراءة صورة كاميرا الأماني: تنزيلها من تلجرام، وقراءة رمز QR من شريطها السفلي، والتحقق
    من رمزها السرّي. full=true يبحث في الصورة كلها إن لم يجده في الأسفل (أبطأ — للمسؤولين فقط) */
 async function readCam(fileId: string, full: boolean):
-  Promise<{ err?: "dl" | "jpg" | "noqr" | "notcam" | "forged"; id?: string; when?: string; uc?: string }> {
+  Promise<{ err?: "dl" | "jpg" | "noqr" | "notcam" | "forged" | "nokey"; id?: string; when?: string; uc?: string }> {
+  if (!(await camPickKey())) return { err: "nokey" };
   const f = await tg("getFile", { file_id: fileId });
   if (!f.ok) return { err: "dl" };
   const bin = new Uint8Array(await (await fetch(`https://api.telegram.org/file/bot${TOKEN}/${f.result.file_path}`,
@@ -473,7 +492,7 @@ async function readCam(fileId: string, full: boolean):
   /* الرمز في الربع السفلي: نبحث فيه أولاً (أسرع وأدق) */
   const top = Math.floor(img.height * 0.7);
   const qr: any = jsQR(rgba.subarray(top * img.width * 4), img.width, img.height - top) ||
-    (full ? jsQR(rgba, img.width, img.height) : null);
+    jsQR(rgba, img.width, img.height);   /* الشريط قد يكون أعلى من الربع السفلي (صورة مقصوصة أو مدوّرة) */
   if (!qr) return { err: "noqr" };
   const parts = String(qr.data).split("|");
   if (parts.length !== 5 || (parts[0] !== "AMANI1" && parts[0] !== "AM2")) return { err: "notcam" };
@@ -495,7 +514,7 @@ function camDayOk(when: string) {
   return now.getUTCHours() < CAM_GRACE_H && day === yest;
 }
 async function verifyCamPhoto(chat: number, fileId: string) {
-  if (!CAM_KEY) return say(chat, "⚠️ مفتاح الكاميرا CAM_KEY غير مضبوط في أسرار الدالة — أضفه من Edge Functions ← Secrets.");
+  if (!(await camPickKey())) return say(chat, "⚠️ مفتاح الكاميرا في البوت غير صحيح أو غير موجود — انشر ملف البوت المرسل في المحادثة (فيه المفتاح).");
   await tg("sendChatAction", { chat_id: chat, action: "typing" });
   const r = await readCam(fileId, true);
   if (r.err === "dl") return say(chat, "تعذّر تنزيل الصورة من تلجرام.");
@@ -626,7 +645,10 @@ async function onMessage(m: any) {
   if (m.chat.type !== "private") return;
   const text: string = m.text || "";
 
-  if (text.startsWith("/version")) return say(chat, `🤖 نسخة البوت: ${BOT_VERSION}`);
+  if (text.startsWith("/version")) {
+    const ok = await camPickKey();
+    return say(chat, `🤖 نسخة البوت: ${BOT_VERSION}\n🔑 مفتاح الكاميرا: ${ok ? "✅ صحيح" : CAM_KEYS.length ? "❌ خاطئ — الصور كلها ستُرفض" : "❌ غير موجود — الصور كلها ستُرفض"}`);
+  }
   if (text.startsWith("/start")) {
     const code = text.split(/\s+/)[1] || "";
     if (!code) return say(chat, "أهلاً 👋\nهذا البوت يُفتح من أزرار التصوير والتدقيق داخل تطبيق الأماني.");
